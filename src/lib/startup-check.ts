@@ -11,11 +11,11 @@ export async function checkStartupHealth(): Promise<void> {
     await prisma.$queryRaw`SELECT 1`;
     log("info", "✅ Database connected", {});
   } catch (err) {
-    log("error", "❌ Database connection failed", {
+    log("warn", "⚠️  Database connection failed (will retry)", {
       error: err instanceof Error ? err.message : String(err),
       hint: "Check DATABASE_URL environment variable and ensure PostgreSQL is running",
     });
-    throw new Error("Database connection failed");
+    // Don't throw - let server start with warning, so we can see health endpoint
   }
 
   // Check Redis
