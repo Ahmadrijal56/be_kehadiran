@@ -1,5 +1,6 @@
 import { AppError } from "../lib/errors.js";
 import { log } from "../lib/logger.js";
+import { env } from "../config/env.js";
 export function errorHandler(err, req, res, _next) {
     const requestId = req.requestId ?? "unknown";
     if (err instanceof AppError) {
@@ -15,15 +16,28 @@ export function errorHandler(err, req, res, _next) {
     }
     log("error", "Unhandled error", {
         requestId,
+        method: req.method,
+        path: req.path,
         error: err.message,
         stack: err.stack,
     });
-    res.status(500).json({
-        error: {
-            code: "INTERNAL_ERROR",
-            message: "Terjadi kesalahan pada server",
-            request_id: requestId,
-        },
-    });
+    // In development, expose error details. In production, send generic message.
+    const errorResponse = env.nodeEnv === "production"
+        ? {
+            error: {
+                code: "INTERNAL_ERROR",
+                message: "Terjadi kesalahan pada server",
+                request_id: requestId,
+            },
+        }
+        : {
+            error: {
+                code: "INTERNAL_ERROR",
+                message: err.message,
+                details: err.stack?.split("\n").slice(0, 3),
+                request_id: requestId,
+            },
+        };
+    res.status(500).json(errorResponse);
 }
 //# sourceMappingURL=errorHandler.js.map

@@ -1,5 +1,5 @@
 import cors from "cors";
-import express from "express";
+import express, { Router } from "express";
 import helmet from "helmet";
 import { env } from "./config/env.js";
 import { errorHandler } from "./middleware/errorHandler.js";
@@ -9,7 +9,13 @@ import { telegramWebhookRouter } from "./routes/webhooks/telegram.js";
 import { biofingerAdmsRouter, biofingerWebhookRouter, } from "./routes/webhooks/biofinger.js";
 import { v1Router } from "./routes/v1/index.js";
 import { globalApiRateLimit } from "./middleware/rateLimit.js";
+import { asyncHandler } from "./middleware/asyncHandler.js";
+import { getPublicDisplay } from "./services/publicDisplayService.js";
 export const app = express();
+// Trust proxy for behind reverse proxy (Railway, Vercel, etc)
+if (env.nodeEnv === "production") {
+    app.set("trust proxy", true);
+}
 app.use(helmet({
     contentSecurityPolicy: env.nodeEnv === "production",
     crossOriginResourcePolicy: { policy: "cross-origin" },
@@ -44,6 +50,24 @@ app.use("/api", healthRouter);
 app.use("/api/webhooks", telegramWebhookRouter);
 app.use("/api/webhooks", biofingerWebhookRouter);
 app.use("/iclock", biofingerAdmsRouter);
+// Legacy route alias for backward compatibility: /public/display -> /api/v1/public/display
+const legacyPublicRouter = Router();
+legacyPublicRouter.get("/display", asyncHandler(async (req, res) => {
+    const month = req.query.month;
+    // Validate month format if provided
+    if (month && !/^\d{4}-\d{2}$/.test(month)) {
+        res.status(400).json({
+            error: {
+                code: "INVALID_MONTH_FORMAT",
+                message: "Invalid month format. Use YYYY-MM format (e.g., 2026-05)",
+            },
+        });
+        return;
+    }
+    const data = await getPublicDisplay(month);
+    res.json({ data });
+}));
+app.use("/public", legacyPublicRouter);
 app.use("/api/v1", globalApiRateLimit, v1Router);
 app.get("/", (_req, res) => {
     res.json({
