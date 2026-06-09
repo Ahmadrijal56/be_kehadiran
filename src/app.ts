@@ -40,6 +40,11 @@ app.use(
         callback(null, true);
         return;
       }
+      // Allow any Vercel deployment of this project
+      if (/\.vercel\.app$/.test(origin)) {
+        callback(null, true);
+        return;
+      }
       callback(new Error(`CORS blocked: ${origin}`));
     },
     credentials: true,
