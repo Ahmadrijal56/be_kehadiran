@@ -1,0 +1,1 @@
+{"version":3,"file":"kpiScoringService.d.ts","sourceRoot":"","sources":["../../src/services/kpiScoringService.ts"],"names":[],"mappings":"AAMA,MAAM,MAAM,cAAc,GAAG;IAC3B,MAAM,EAAE,MAAM,CAAC;IACf,QAAQ,EAAE,MAAM,CAAC;IACjB,KAAK,EAAE,MAAM,CAAC;CACf,CAAC;AAEF;;;GAGG;AACH,wBAAgB,iBAAiB,CAAC,YAAY,EAAE,MAAM,GAAG,cAAc,CAiEtE"}

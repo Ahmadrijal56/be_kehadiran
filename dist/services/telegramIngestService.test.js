@@ -1,0 +1,135 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { beforeEach, describe, expect, it } from "vitest";
+import { prisma } from "../lib/prisma.js";
+import { extractTelegramWebhookMessage } from "../types/telegram.js";
+import { processTelegramMessageById, saveTelegramWebhookMessage, } from "./telegramIngestService.js";
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const fixturePath = join(__dirname, "../../tests/fixtures/telegram_message.json");
+const GROUP_ID = BigInt(-1001234567890);
+describe("telegram ingest (integration)", () => {
+    beforeEach(async () => {
+        await prisma.lateExcuse.deleteMany();
+        await prisma.attachment.deleteMany();
+        await prisma.breakSession.deleteMany();
+        await prisma.kpiDailyScore.deleteMany();
+        await prisma.attendanceRecord.deleteMany();
+        await prisma.telegramMessage.deleteMany();
+    });
+    it("TC-020: pesan valid baru → record tersimpan & diproses", async () => {
+        process.env.QUEUE_ENABLED = "false";
+        const fixture = JSON.parse(readFileSync(fixturePath, "utf-8"));
+        const extracted = extractTelegramWebhookMessage(fixture);
+        const { id, duplicate } = await saveTelegramWebhookMessage({
+            messageId: extracted.messageId,
+            groupId: extracted.groupId,
+            rawText: extracted.rawText,
+        });
+        expect(duplicate).toBe(false);
+        await processTelegramMessageById(id);
+        const row = await prisma.telegramMessage.findUnique({ where: { id } });
+        expect(row?.syncStatus).toBe("processed");
+        expect(row?.attendanceId).toBeTruthy();
+        const kpi = await prisma.kpiDailyScore.findFirst({
+            where: { employee: { nik: "100001" } },
+        });
+        expect(kpi?.lateMinutes).toBeGreaterThan(0);
+    });
+    it("TC-021: duplikat message_id → ignored", async () => {
+        const payload = {
+            messageId: BigInt(999888),
+            groupId: GROUP_ID,
+            rawText: `NIK: 100001\nTanggal: 03/06/2026\nMasuk: 09:00`,
+        };
+        const first = await saveTelegramWebhookMessage(payload);
+        const second = await saveTelegramWebhookMessage(payload);
+        expect(first.duplicate).toBe(false);
+        expect(second.duplicate).toBe(true);
+        const count = await prisma.telegramMessage.count({
+            where: { telegramMessageId: payload.messageId },
+        });
+        expect(count).toBe(1);
+    });
+    it("TC-022: NIK tidak dikenal → employee auto-created & processed", async () => {
+        const { id } = await saveTelegramWebhookMessage({
+            messageId: BigInt(111222),
+            groupId: GROUP_ID,
+            rawText: `NIK: 999999\nTanggal: 03/06/2026\nMasuk: 09:00`,
+        });
+        await processTelegramMessageById(id);
+        const row = await prisma.telegramMessage.findUnique({ where: { id } });
+        expect(row?.syncStatus).toBe("processed");
+        const employee = await prisma.employee.findUnique({ where: { nik: "999999" } });
+        expect(employee).toBeTruthy();
+    });
+    it("TC-022b: VT490 format → parsed & attendance tersimpan", async () => {
+        const { id } = await saveTelegramWebhookMessage({
+            messageId: BigInt(111224),
+            groupId: GROUP_ID,
+            rawText: `Perusahaan: APT MANJUR SEHAT TSI
+ID: 102
+Nama: DAFA
+Dept.: Ttk
+Mode Verifikasi: face
+Status: MASUK
+Waktu: 03/06/2026 08:21:50`,
+        });
+        await processTelegramMessageById(id);
+        const row = await prisma.telegramMessage.findUnique({ where: { id } });
+        expect(row?.syncStatus).toBe("processed");
+        const employee = await prisma.employee.findUnique({ where: { nik: "102" } });
+        expect(employee?.fullName).toBe("DAFA");
+    });
+    it("TC-022c: VT490 MASUK + PULANG terpisah → satu attendance record", async () => {
+        const masuk = await saveTelegramWebhookMessage({
+            messageId: BigInt(111225),
+            groupId: GROUP_ID,
+            rawText: `Perusahaan: APT MANJUR SEHAT TSI
+ID: 103
+Nama: RINA
+Dept.: Ttk
+Mode Verifikasi: face
+Status: MASUK
+Waktu: 04/06/2026 08:00:00`,
+        });
+        await processTelegramMessageById(masuk.id);
+        const pulang = await saveTelegramWebhookMessage({
+            messageId: BigInt(111226),
+            groupId: GROUP_ID,
+            rawText: `Perusahaan: APT MANJUR SEHAT TSI
+ID: 103
+Nama: RINA
+Dept.: Ttk
+Mode Verifikasi: face
+Status: PULANG
+Waktu: 04/06/2026 17:00:00`,
+        });
+        await processTelegramMessageById(pulang.id);
+        const pulangRow = await prisma.telegramMessage.findUnique({ where: { id: pulang.id } });
+        expect(pulangRow?.syncStatus).toBe("processed");
+        const employee = await prisma.employee.findUnique({ where: { nik: "103" } });
+        const attendance = await prisma.attendanceRecord.findUnique({
+            where: {
+                employeeId_workDate: {
+                    employeeId: employee.id,
+                    workDate: new Date("2026-06-04"),
+                },
+            },
+        });
+        expect(attendance?.checkInAt).toBeTruthy();
+        expect(attendance?.checkOutAt).toBeTruthy();
+        expect(attendance?.status).toBe("left");
+    });
+    it("TC-023: format rusak (tanpa NIK) → failed", async () => {
+        const { id } = await saveTelegramWebhookMessage({
+            messageId: BigInt(111223),
+            groupId: GROUP_ID,
+            rawText: "Halo tokoo",
+        });
+        await expect(processTelegramMessageById(id)).rejects.toThrow();
+        const row = await prisma.telegramMessage.findUnique({ where: { id } });
+        expect(row?.syncStatus).toBe("failed");
+    });
+});
+//# sourceMappingURL=telegramIngestService.test.js.map

@@ -1,0 +1,13 @@
+{
+  "update_id": 900001,
+  "message": {
+    "message_id": 42,
+    "chat": {
+      "id": -1001234567890,
+      "type": "supergroup",
+      "title": "Toko Demo Jakarta"
+    },
+    "date": 1749000000,
+    "text": "Nama: Budi Santoso\nNIK: 100001\nCabang: Toko Demo Jakarta\nTanggal: 03/06/2026\nMasuk: 09:52\nPulang: -\nMulai Istirahat: -\nSelesai Istirahat: -\nJenis: Face ID\nDevice: BF-001"
+  }
+}

@@ -1,0 +1,1 @@
+{"version":3,"file":"branchAccess.js","sourceRoot":"","sources":["../../src/services/branchAccess.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,SAAS,EAAE,MAAM,kBAAkB,CAAC;AAG7C,MAAM,UAAU,kBAAkB,CAAC,IAAc,EAAE,QAAgB;IACjE,IAAI,IAAI,CAAC,KAAK,CAAC,QAAQ,CAAC,OAAO,CAAC;QAAE,OAAO;IACzC,IAAI,IAAI,CAAC,QAAQ,KAAK,QAAQ;QAAE,MAAM,SAAS,CAAC,sBAAsB,CAAC,CAAC;AAC1E,CAAC"}

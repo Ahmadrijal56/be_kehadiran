@@ -1,0 +1,1 @@
+{"version":3,"file":"announcementService.d.ts","sourceRoot":"","sources":["../../src/services/announcementService.ts"],"names":[],"mappings":"AAEA,OAAO,KAAK,EAAE,QAAQ,EAAE,MAAM,kBAAkB,CAAC;AAGjD,wBAAsB,wBAAwB,CAC5C,IAAI,EAAE,QAAQ,EACd,QAAQ,EAAE,MAAM,EAChB,IAAI,EAAE;IAAE,KAAK,EAAE,MAAM,CAAC;IAAC,IAAI,EAAE,MAAM,CAAC;IAAC,UAAU,CAAC,EAAE,MAAM,CAAA;CAAE;;;;;;;GAuC3D"}
