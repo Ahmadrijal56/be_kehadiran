@@ -32,6 +32,18 @@ export type PublicBranchBoard = {
 
 export async function getPublicDisplay(yearMonth?: string) {
   const ym = yearMonth ?? currentYearMonthWib();
+  
+  // Validate yearMonth format: must be YYYY-MM
+  if (!/^\d{4}-\d{2}$/.test(ym)) {
+    throw new Error(`Invalid year-month format. Expected YYYY-MM, got: ${ym}`);
+  }
+  
+  // Verify it's a valid date
+  const testDate = new Date(`${ym}-01T00:00:00.000Z`);
+  if (Number.isNaN(testDate.getTime())) {
+    throw new Error(`Invalid year-month value: ${ym}`);
+  }
+  
   const cacheKey = `public:display:${ym}`;
   const cached = await cacheGet<{
     year_month: string;

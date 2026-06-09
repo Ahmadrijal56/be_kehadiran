@@ -27,6 +27,17 @@ publicRouter.get(
   publicDisplayRateLimit,
   asyncHandler(async (req, res) => {
     const month = req.query.month as string | undefined;
+    
+    // Validate month format if provided
+    if (month && !/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({
+        error: {
+          code: "INVALID_MONTH_FORMAT",
+          message: "Invalid month format. Use YYYY-MM format (e.g., 2026-05)",
+        },
+      });
+    }
+    
     const data = await getPublicDisplay(month);
     res.json({ data });
   })

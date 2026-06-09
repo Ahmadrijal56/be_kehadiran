@@ -20,7 +20,18 @@ export async function computeBranchLeaderboard(
   branchId: string,
   yearMonth: string
 ): Promise<LeaderboardEntry[]> {
+  // Validate yearMonth format: must be YYYY-MM
+  if (!/^\d{4}-\d{2}$/.test(yearMonth)) {
+    throw new Error(`Invalid year-month format. Expected YYYY-MM, got: ${yearMonth}`);
+  }
+  
   const start = new Date(`${yearMonth}-01T00:00:00.000Z`);
+  
+  // Verify it's a valid date
+  if (Number.isNaN(start.getTime())) {
+    throw new Error(`Invalid year-month value: ${yearMonth}`);
+  }
+  
   const end = new Date(start);
   end.setUTCMonth(end.getUTCMonth() + 1);
 
