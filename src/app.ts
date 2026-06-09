@@ -17,6 +17,11 @@ import { getPublicDisplay } from "./services/publicDisplayService.js";
 
 export const app = express();
 
+// Trust proxy for behind reverse proxy (Railway, Vercel, etc)
+if (env.nodeEnv === "production") {
+  app.set("trust proxy", true);
+}
+
 app.use(
   helmet({
     contentSecurityPolicy: env.nodeEnv === "production",
