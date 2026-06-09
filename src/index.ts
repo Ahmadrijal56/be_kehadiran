@@ -2,15 +2,21 @@ import { app } from "./app.js";
 import { startBackgroundServices } from "./bootstrap.js";
 import { env } from "./config/env.js";
 import { checkStartupHealth } from "./lib/startup-check.js";
+import { runMigrations } from "./lib/run-migrations.js";
 import { log } from "./lib/logger.js";
 
 async function main() {
   try {
     log("info", "🚀 Kehadiran API starting...", { env: env.nodeEnv });
-    
+
+    // Run database migrations first
+    if (env.nodeEnv === "production") {
+      await runMigrations();
+    }
+
     // Check database and Redis before starting server
     await checkStartupHealth();
-    
+
     app.listen(env.port, () => {
       log("info", "✅ Server listening", {
         port: env.port,
