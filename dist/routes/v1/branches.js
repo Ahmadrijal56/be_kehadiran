@@ -1,11 +1,22 @@
 import { Router } from "express";
+import multer from "multer";
 import { authenticate, requireOwner, requirePermission, } from "../../middleware/auth.js";
 import { asyncHandler } from "../../middleware/asyncHandler.js";
+import { validationError } from "../../lib/errors.js";
 import { assertBranchAccess } from "../../services/branchAccess.js";
 import { createBranch, deleteBranch, listAllBranches, updateBranch, } from "../../services/branchAdminService.js";
 import { getBranchStatsToday, listBranchAttendanceAbsent, listBranchAttendanceLate, listBranchAttendanceOnBreak, listBranchAttendanceToday, } from "../../services/branchAttendanceService.js";
-import { createBranchAnnouncement } from "../../services/announcementService.js";
+import { createBranchAnnouncement, listBranchAnnouncements, } from "../../services/announcementService.js";
 import { createBranchUser, listBranchUsers, } from "../../services/branchUserService.js";
+import { getBranchShiftSettings, saveBranchShiftSettings, } from "../../services/branchShiftConfigService.js";
+import { copyShiftScheduleFromPreviousMonth, getBranchShiftSchedule, listShiftOptions, saveBranchShiftSchedule, } from "../../services/employeeShiftScheduleService.js";
+import { buildShiftScheduleTemplateExcel, importShiftScheduleTemplateExcel, } from "../../services/shiftScheduleTemplateService.js";
+import { listBranchKpiEvaluations } from "../../services/kpiAdjustmentService.js";
+import { listBranchEmployeesWithType, updateEmployeeType, } from "../../services/organizationConfigService.js";
+const shiftUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+});
 export const branchesRouter = Router();
 branchesRouter.use(authenticate);
 function branchIdParam(req) {
@@ -74,7 +85,7 @@ branchesRouter.get("/:branchId/users", requirePermission("users.manage.branch"),
 branchesRouter.post("/:branchId/users", requirePermission("users.manage.branch"), asyncHandler(async (req, res) => {
     const branchId = branchIdParam(req);
     assertBranchAccess(req.user, branchId);
-    const { nik, full_name, email, password, employee_id, role } = req.body ?? {};
+    const { nik, full_name, email, password, employee_id, role, branch_ids } = req.body ?? {};
     const user = await createBranchUser(req.user, branchId, {
         nik,
         full_name,
@@ -82,6 +93,7 @@ branchesRouter.post("/:branchId/users", requirePermission("users.manage.branch")
         password,
         employee_id,
         role,
+        branch_ids,
     });
     res.status(201).json({ data: user });
 }));
@@ -95,5 +107,103 @@ branchesRouter.post("/:branchId/announcements", requirePermission("announcements
         expires_at,
     });
     res.status(201).json({ data });
+}));
+branchesRouter.get("/:branchId/announcements", requirePermission("announcements.create"), asyncHandler(async (req, res) => {
+    const branchId = branchIdParam(req);
+    const data = await listBranchAnnouncements(req.user, branchId);
+    res.json({ data });
+}));
+branchesRouter.get("/:branchId/kpi/evaluations", requirePermission("kpi.adjust"), asyncHandler(async (req, res) => {
+    const branchId = branchIdParam(req);
+    const employeeId = req.query.employee_id;
+    const data = await listBranchKpiEvaluations(req.user, branchId, {
+        employee_id: employeeId,
+    });
+    res.json({ data });
+}));
+branchesRouter.get("/:branchId/shifts", requirePermission("users.manage.branch"), asyncHandler(async (req, res) => {
+    const branchId = branchIdParam(req);
+    assertBranchAccess(req.user, branchId);
+    res.json({ data: await listShiftOptions(branchId) });
+}));
+branchesRouter.get("/:branchId/shift-settings", requirePermission("users.manage.branch"), asyncHandler(async (req, res) => {
+    const branchId = branchIdParam(req);
+    assertBranchAccess(req.user, branchId);
+    res.json({ data: await getBranchShiftSettings(branchId) });
+}));
+branchesRouter.put("/:branchId/shift-settings", requirePermission("users.manage.branch"), asyncHandler(async (req, res) => {
+    const branchId = branchIdParam(req);
+    assertBranchAccess(req.user, branchId);
+    const shifts = req.body?.shifts;
+    if (!Array.isArray(shifts)) {
+        throw validationError("shifts[] wajib");
+    }
+    const data = await saveBranchShiftSettings(req.user, branchId, shifts);
+    res.json({ data });
+}));
+branchesRouter.get("/:branchId/shift-schedule", requirePermission("users.manage.branch"), asyncHandler(async (req, res) => {
+    const branchId = branchIdParam(req);
+    assertBranchAccess(req.user, branchId);
+    const yearMonth = String(req.query.year_month ?? "");
+    if (!yearMonth) {
+        throw validationError("year_month wajib (YYYY-MM)");
+    }
+    res.json({ data: await getBranchShiftSchedule(branchId, yearMonth) });
+}));
+branchesRouter.put("/:branchId/shift-schedule", requirePermission("users.manage.branch"), asyncHandler(async (req, res) => {
+    const branchId = branchIdParam(req);
+    assertBranchAccess(req.user, branchId);
+    const { year_month, changes } = req.body ?? {};
+    if (!year_month || !Array.isArray(changes)) {
+        throw validationError("year_month dan changes[] wajib");
+    }
+    const data = await saveBranchShiftSchedule(req.user, branchId, String(year_month), changes);
+    res.json({ data });
+}));
+branchesRouter.post("/:branchId/shift-schedule/copy-previous", requirePermission("users.manage.branch"), asyncHandler(async (req, res) => {
+    const branchId = branchIdParam(req);
+    assertBranchAccess(req.user, branchId);
+    const { year_month } = req.body ?? {};
+    if (!year_month)
+        throw validationError("year_month wajib");
+    const data = await copyShiftScheduleFromPreviousMonth(req.user, branchId, String(year_month));
+    res.json({ data });
+}));
+branchesRouter.get("/:branchId/shift-schedule/template", requirePermission("users.manage.branch"), asyncHandler(async (req, res) => {
+    const branchId = branchIdParam(req);
+    assertBranchAccess(req.user, branchId);
+    const yearMonth = String(req.query.year_month ?? "");
+    if (!yearMonth)
+        throw validationError("year_month wajib (YYYY-MM)");
+    const { buffer, filename } = await buildShiftScheduleTemplateExcel(branchId, yearMonth);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(buffer);
+}));
+branchesRouter.post("/:branchId/shift-schedule/upload", requirePermission("users.manage.branch"), shiftUpload.single("file"), asyncHandler(async (req, res) => {
+    const branchId = branchIdParam(req);
+    assertBranchAccess(req.user, branchId);
+    const yearMonth = String(req.body?.year_month ?? req.query.year_month ?? "");
+    if (!yearMonth)
+        throw validationError("year_month wajib");
+    if (!req.file?.buffer) {
+        throw validationError("File Excel wajib (field: file)");
+    }
+    const data = await importShiftScheduleTemplateExcel(req.user, branchId, yearMonth, req.file.buffer);
+    res.json({ data });
+}));
+branchesRouter.get("/:branchId/employees", requirePermission("users.manage.branch"), asyncHandler(async (req, res) => {
+    const branchId = branchIdParam(req);
+    res.json({
+        data: await listBranchEmployeesWithType(req.user, branchId),
+    });
+}));
+branchesRouter.patch("/:branchId/employees/:employeeId/type", requirePermission("users.manage.branch"), asyncHandler(async (req, res) => {
+    const branchId = branchIdParam(req);
+    const employeeId = String(req.params.employeeId);
+    const { employee_type_code } = req.body ?? {};
+    res.json({
+        data: await updateEmployeeType(req.user, branchId, employeeId, employee_type_code ?? null),
+    });
 }));
 //# sourceMappingURL=branches.js.map

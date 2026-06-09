@@ -4,6 +4,7 @@ export type AuthUser = {
     fullName: string;
     email: string | null;
     branchId: string | null;
+    branchIds: string[];
     employeeId: string | null;
     roles: string[];
     permissions: string[];
@@ -13,12 +14,18 @@ export declare function login(identifier: string, password: string): Promise<{
     refresh_token: string;
     expires_in: number;
     user: {
+        branch: {
+            id: string;
+            code: string;
+            name: string;
+        } | null;
         id: string;
         nik: string;
         full_name: string;
         employee_id: string | null;
         roles: string[];
         branch_id: string | null;
+        branch_ids: string[];
         permissions: string[];
     };
 }>;
@@ -29,19 +36,41 @@ export declare function mapAuthUserResponse(user: AuthUser): {
     employee_id: string | null;
     roles: string[];
     branch_id: string | null;
+    branch_ids: string[];
     permissions: string[];
 };
+export declare function enrichAuthUserResponse(user: AuthUser): Promise<{
+    branch: {
+        id: string;
+        code: string;
+        name: string;
+    } | null;
+    id: string;
+    nik: string;
+    full_name: string;
+    employee_id: string | null;
+    roles: string[];
+    branch_id: string | null;
+    branch_ids: string[];
+    permissions: string[];
+}>;
 export declare function refreshAccessToken(refreshToken: string): Promise<{
     access_token: string;
     refresh_token: string;
     expires_in: number;
     user: {
+        branch: {
+            id: string;
+            code: string;
+            name: string;
+        } | null;
         id: string;
         nik: string;
         full_name: string;
         employee_id: string | null;
         roles: string[];
         branch_id: string | null;
+        branch_ids: string[];
         permissions: string[];
     };
 }>;

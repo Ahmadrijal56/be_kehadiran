@@ -3,7 +3,28 @@ import { prisma } from "../lib/prisma.js";
 import { businessError, forbidden, notFound, validationError, } from "../lib/errors.js";
 import { hasPermission } from "./authService.js";
 import { writeAuditLog } from "./auditService.js";
+import { actorSharesBranchWith } from "./branchAccess.js";
+import { assertBranchesExist, moveEmployeeBranch, setUserBranches, } from "./branchMembershipService.js";
+const userInclude = {
+    userRoles: { include: { role: true } },
+    branch: true,
+    userBranches: { include: { branch: true } },
+};
 function mapUser(u) {
+    const branchIds = u.userBranches && u.userBranches.length > 0
+        ? u.userBranches.map((ub) => ub.branchId)
+        : u.branchId
+            ? [u.branchId]
+            : [];
+    const branches = u.userBranches && u.userBranches.length > 0
+        ? u.userBranches.map((ub) => ({
+            id: ub.branch.id,
+            code: ub.branch.code,
+            name: ub.branch.name,
+        }))
+        : u.branch
+            ? [{ id: u.branchId, code: u.branch.code, name: u.branch.name }]
+            : [];
     return {
         id: u.id,
         nik: u.nik,
@@ -12,28 +33,34 @@ function mapUser(u) {
         is_active: u.isActive,
         employee_id: u.employeeId,
         branch_id: u.branchId,
-        branch_code: u.branch?.code ?? null,
-        branch_name: u.branch?.name ?? null,
+        branch_ids: branchIds,
+        branches,
+        branch_code: u.branch?.code ?? branches[0]?.code ?? null,
+        branch_name: u.branch?.name ?? branches[0]?.name ?? null,
         roles: u.userRoles.map((ur) => ur.role.code),
     };
 }
 export async function listBranchUsers(branchId) {
     const users = await prisma.user.findMany({
-        where: { branchId },
-        include: { userRoles: { include: { role: true } }, branch: true },
+        where: {
+            userBranches: { some: { branchId } },
+        },
+        include: userInclude,
         orderBy: { fullName: "asc" },
     });
     return users.map(mapUser);
 }
 export async function listAllUsers(branchId) {
     const users = await prisma.user.findMany({
-        where: branchId ? { branchId } : {},
-        include: { userRoles: { include: { role: true } }, branch: true },
+        where: branchId
+            ? { userBranches: { some: { branchId } } }
+            : {},
+        include: userInclude,
         orderBy: [{ branch: { name: "asc" } }, { fullName: "asc" }],
     });
     return users.map(mapUser);
 }
-async function ensureEmployeeRecord(branchId, nik, fullName, employeeId) {
+async function ensureEmployeeRecord(branchId, nik, fullName, employeeId, employeeTypeCode) {
     if (employeeId) {
         const emp = await prisma.employee.findFirst({
             where: { id: employeeId, branchId, isActive: true },
@@ -56,16 +83,36 @@ async function ensureEmployeeRecord(branchId, nik, fullName, employeeId) {
             throw businessError("Karyawan dengan NIK ini sudah memiliki akun");
         return existingEmp.id;
     }
-    const defaultShift = await prisma.shift.findFirst({ orderBy: { id: "asc" } });
+    let defaultShiftId = 1;
+    let typeCode = employeeTypeCode?.trim().toUpperCase() ?? null;
+    if (typeCode) {
+        const typeConfig = await prisma.employeeTypeConfig.findFirst({
+            where: { code: typeCode, isActive: true },
+        });
+        if (typeConfig) {
+            defaultShiftId = typeConfig.shiftIds[0] ?? 1;
+        }
+        else {
+            typeCode = null;
+        }
+    }
+    const defaultShift = await prisma.shift.findUnique({
+        where: { id: defaultShiftId },
+    });
     if (!defaultShift) {
-        throw businessError("Shift default belum ada. Jalankan seed database.");
+        const fallback = await prisma.shift.findFirst({ orderBy: { id: "asc" } });
+        if (!fallback) {
+            throw businessError("Shift default belum ada. Jalankan seed database.");
+        }
+        defaultShiftId = fallback.id;
     }
     const created = await prisma.employee.create({
         data: {
             nik,
             fullName,
             branchId,
-            defaultShiftId: defaultShift.id,
+            defaultShiftId,
+            employeeTypeCode: typeCode,
         },
     });
     return created.id;
@@ -93,6 +140,20 @@ export async function createBranchUser(actor, branchId, data) {
     });
     if (!branch)
         throw notFound("Cabang tidak ditemukan");
+    let branchIds;
+    if (role === "employee") {
+        branchIds = [branchId];
+    }
+    else {
+        const requested = data.branch_ids?.length
+            ? [...new Set(data.branch_ids)]
+            : [branchId];
+        if (!requested.includes(branchId)) {
+            requested.unshift(branchId);
+        }
+        branchIds = requested;
+        await assertBranchesExist(branchIds);
+    }
     const existing = await prisma.user.findFirst({
         where: { OR: [{ nik }, ...(email ? [{ email }] : [])] },
     });
@@ -100,7 +161,7 @@ export async function createBranchUser(actor, branchId, data) {
         throw businessError("NIK atau email sudah terdaftar");
     let employeeId = null;
     if (role === "employee") {
-        employeeId = await ensureEmployeeRecord(branchId, nik, fullName, data.employee_id);
+        employeeId = await ensureEmployeeRecord(branchId, nik, fullName, data.employee_id, data.employee_type_code);
     }
     const roleRecord = await prisma.role.findUnique({ where: { code: role } });
     if (!roleRecord)
@@ -116,34 +177,95 @@ export async function createBranchUser(actor, branchId, data) {
             employeeId,
             userRoles: { create: { roleId: roleRecord.id } },
         },
-        include: { userRoles: { include: { role: true } }, branch: true },
+        include: userInclude,
+    });
+    await setUserBranches(user.id, branchIds, {
+        role,
+        primaryBranchId: branchId,
+    });
+    const refreshed = await prisma.user.findUniqueOrThrow({
+        where: { id: user.id },
+        include: userInclude,
     });
     await writeAuditLog({
         userId: actor.id,
         action: "user.create",
         entityType: "user",
         entityId: user.id,
-        newValues: { nik, role, branchId },
+        newValues: { nik, role, branchIds },
     });
-    return mapUser(user);
+    return mapUser(refreshed);
 }
-export async function updateBranchUser(actor, userId, data) {
-    if (!hasPermission(actor, "users.manage.branch"))
-        throw forbidden();
+export async function updateUserBranches(actor, userId, branchIds) {
+    if (!actor.roles.includes("owner")) {
+        throw forbidden("Hanya owner yang dapat mengatur cabang pengguna");
+    }
     const user = await prisma.user.findUnique({
         where: { id: userId },
         include: { userRoles: { include: { role: true } } },
     });
     if (!user)
         throw notFound("User tidak ditemukan");
-    if (actor.branchId &&
-        user.branchId !== actor.branchId &&
-        !actor.roles.includes("owner")) {
+    const roles = user.userRoles.map((ur) => ur.role.code);
+    if (roles.includes("owner")) {
+        throw forbidden("Cabang owner dikelola otomatis (semua cabang aktif)");
+    }
+    const uniqueIds = [...new Set(branchIds.filter(Boolean))];
+    await assertBranchesExist(uniqueIds);
+    if (roles.includes("employee")) {
+        if (uniqueIds.length !== 1) {
+            throw validationError("Karyawan hanya boleh memiliki satu cabang");
+        }
+        if (!user.employeeId) {
+            throw businessError("Akun karyawan tidak terhubung ke data HR");
+        }
+        await moveEmployeeBranch(user.employeeId, userId, uniqueIds[0]);
+    }
+    else if (roles.includes("manager")) {
+        if (uniqueIds.length < 1) {
+            throw validationError("Manager wajib memiliki minimal satu cabang");
+        }
+        await setUserBranches(userId, uniqueIds, {
+            role: "manager",
+            primaryBranchId: uniqueIds[0],
+        });
+    }
+    else {
+        throw validationError("Role pengguna tidak didukung untuk pengaturan cabang");
+    }
+    const refreshed = await prisma.user.findUniqueOrThrow({
+        where: { id: userId },
+        include: userInclude,
+    });
+    await writeAuditLog({
+        userId: actor.id,
+        action: "user.branches.update",
+        entityType: "user",
+        entityId: userId,
+        newValues: { branch_ids: uniqueIds },
+    });
+    return mapUser(refreshed);
+}
+export async function updateBranchUser(actor, userId, data) {
+    if (!hasPermission(actor, "users.manage.branch"))
+        throw forbidden();
+    const user = await prisma.user.findUnique({
+        where: { id: userId },
+        include: userInclude,
+    });
+    if (!user)
+        throw notFound("User tidak ditemukan");
+    const targetBranchIds = user.userBranches.length > 0
+        ? user.userBranches.map((ub) => ub.branchId)
+        : user.branchId
+            ? [user.branchId]
+            : [];
+    if (!actorSharesBranchWith(actor, targetBranchIds)) {
         throw forbidden();
     }
-    const isOwner = user.userRoles.some((ur) => ur.role.code === "owner");
+    const isOwnerRole = user.userRoles.some((ur) => ur.role.code === "owner");
     const isManager = user.userRoles.some((ur) => ur.role.code === "manager");
-    if (isOwner || (isManager && actor.id !== user.id && !actor.roles.includes("owner"))) {
+    if (isOwnerRole || (isManager && actor.id !== user.id && !actor.roles.includes("owner"))) {
         throw forbidden("Tidak dapat mengubah akun owner/manager lain");
     }
     const update = {};
@@ -162,7 +284,7 @@ export async function updateBranchUser(actor, userId, data) {
     const updated = await prisma.user.update({
         where: { id: userId },
         data: update,
-        include: { userRoles: { include: { role: true } }, branch: true },
+        include: userInclude,
     });
     await writeAuditLog({
         userId: actor.id,
@@ -176,18 +298,21 @@ export async function updateBranchUser(actor, userId, data) {
 async function assertCanManageUser(actor, userId) {
     const user = await prisma.user.findUnique({
         where: { id: userId },
-        include: { userRoles: { include: { role: true } } },
+        include: userInclude,
     });
     if (!user)
         throw notFound("User tidak ditemukan");
-    if (actor.branchId &&
-        user.branchId !== actor.branchId &&
-        !actor.roles.includes("owner")) {
+    const targetBranchIds = user.userBranches.length > 0
+        ? user.userBranches.map((ub) => ub.branchId)
+        : user.branchId
+            ? [user.branchId]
+            : [];
+    if (!actorSharesBranchWith(actor, targetBranchIds)) {
         throw forbidden();
     }
-    const isOwner = user.userRoles.some((ur) => ur.role.code === "owner");
+    const isOwnerRole = user.userRoles.some((ur) => ur.role.code === "owner");
     const isManager = user.userRoles.some((ur) => ur.role.code === "manager");
-    if (isOwner || (isManager && actor.id !== user.id && !actor.roles.includes("owner"))) {
+    if (isOwnerRole || (isManager && actor.id !== user.id && !actor.roles.includes("owner"))) {
         throw forbidden("Tidak dapat mengubah akun owner/manager lain");
     }
     return user;
@@ -204,7 +329,7 @@ export async function resetUserPassword(actor, userId, password) {
     const updated = await prisma.user.update({
         where: { id: userId },
         data: { passwordHash },
-        include: { userRoles: { include: { role: true } }, branch: true },
+        include: userInclude,
     });
     await writeAuditLog({
         userId: actor.id,

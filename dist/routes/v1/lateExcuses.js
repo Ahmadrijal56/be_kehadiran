@@ -5,22 +5,27 @@ import { forbidden, notFound, validationError } from "../../lib/errors.js";
 import { prisma } from "../../lib/prisma.js";
 import { listBranchLateExcuses, mapLateExcuseResponse, reviewLateExcuse, lateExcuseAttachments, } from "../../services/lateExcuseService.js";
 import { formatWibIso } from "../../utils/format.js";
+import { assertBranchAccess } from "../../services/branchAccess.js";
+import { userHasBranchAccess } from "../../services/branchMembershipService.js";
 export const lateExcusesRouter = Router();
 lateExcusesRouter.use(authenticate);
 lateExcusesRouter.get("/branches/:branchId/late-excuses", requirePermission("late_excuse.review"), asyncHandler(async (req, res) => {
     const user = req.user;
     const branchId = String(req.params.branchId);
-    if (user.branchId !== branchId && !user.roles.includes("owner")) {
-        throw forbidden();
-    }
+    assertBranchAccess(user, branchId);
     const status = req.query.status;
     const items = await listBranchLateExcuses(branchId, status);
     const data = await Promise.all(items.map(async (e) => ({
         id: e.id,
         status: e.status,
         reason_text: e.reasonText,
+        manager_note: e.managerNote,
         created_at: formatWibIso(e.createdAt),
-        employee: e.employee,
+        reviewed_at: formatWibIso(e.reviewedAt),
+        employee: {
+            nik: e.employee.nik,
+            full_name: e.employee.fullName,
+        },
         attendance: {
             work_date: e.attendance.workDate.toISOString().slice(0, 10),
             late_minutes: e.attendance.lateMinutes,
@@ -38,9 +43,7 @@ lateExcusesRouter.get("/late-excuses/:id", requirePermission("late_excuse.review
     });
     if (!excuse)
         throw notFound("Pengajuan tidak ditemukan");
-    if (user.branchId &&
-        excuse.employee.branchId !== user.branchId &&
-        !user.roles.includes("owner")) {
+    if (!userHasBranchAccess(user.branchIds, user.roles, excuse.employee.branchId)) {
         throw forbidden();
     }
     res.json({ data: await mapLateExcuseResponse(excuseId) });

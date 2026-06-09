@@ -34,7 +34,7 @@ describe("API v1 — manager module", () => {
     managerToken = mgr.token;
     branchId = mgr.branchId;
 
-    const emp = await prisma.employee.findUnique({ where: { nik: "100001" } });
+    const emp = await prisma.employee.findFirst({ where: { nik: "100001" } });
     employeeId = emp!.id;
 
     const workDate = todayWorkDateWib();

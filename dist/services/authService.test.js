@@ -6,6 +6,7 @@ const employee = {
     fullName: "Test",
     email: null,
     branchId: "b1",
+    branchIds: ["b1"],
     employeeId: "e1",
     roles: ["employee"],
     permissions: ["attendance.read.self", "kpi.read.self"],

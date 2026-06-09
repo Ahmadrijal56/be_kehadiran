@@ -24,11 +24,12 @@ describe("API v1 — manager module", () => {
     let managerToken;
     let branchId;
     let employeeId;
+    let announcementId;
     beforeAll(async () => {
         const mgr = await loginManager();
         managerToken = mgr.token;
         branchId = mgr.branchId;
-        const emp = await prisma.employee.findUnique({ where: { nik: "100001" } });
+        const emp = await prisma.employee.findFirst({ where: { nik: "100001" } });
         employeeId = emp.id;
         const workDate = todayWorkDateWib();
         let att = await prisma.attendanceRecord.findUnique({
@@ -95,6 +96,17 @@ describe("API v1 — manager module", () => {
         expect(res.status).toBe(201);
         expect(res.body.data.total_points).toBeDefined();
     });
+    it("GET branch kpi evaluations history", async () => {
+        const res = await request(app)
+            .get(`/api/v1/branches/${branchId}/kpi/evaluations`)
+            .set("Authorization", `Bearer ${managerToken}`);
+        expect(res.status).toBe(200);
+        expect(Array.isArray(res.body.data)).toBe(true);
+        if (res.body.data.length > 0) {
+            expect(res.body.data[0].employee.full_name).toBeDefined();
+            expect(res.body.data[0].manager.full_name).toBeDefined();
+        }
+    });
     it("POST branch announcement", async () => {
         const res = await request(app)
             .post(`/api/v1/branches/${branchId}/announcements`)
@@ -105,6 +117,27 @@ describe("API v1 — manager module", () => {
         });
         expect(res.status).toBe(201);
         expect(res.body.data.scope).toBe("branch");
+        expect(res.body.data.created_by).toBeDefined();
+        announcementId = res.body.data.id;
+    });
+    it("GET branch announcements list", async () => {
+        const res = await request(app)
+            .get(`/api/v1/branches/${branchId}/announcements`)
+            .set("Authorization", `Bearer ${managerToken}`);
+        expect(res.status).toBe(200);
+        expect(res.body.data.length).toBeGreaterThan(0);
+        expect(res.body.data[0].created_by.full_name).toBeDefined();
+    });
+    it("PATCH branch announcement", async () => {
+        const res = await request(app)
+            .patch(`/api/v1/announcements/${announcementId}`)
+            .set("Authorization", `Bearer ${managerToken}`)
+            .send({
+            title: "Briefing Pagi (Updated)",
+            body: "Semua hadir 15 menit sebelum shift.",
+        });
+        expect(res.status).toBe(200);
+        expect(res.body.data.title).toBe("Briefing Pagi (Updated)");
     });
     it("GET branch users", async () => {
         const res = await request(app)

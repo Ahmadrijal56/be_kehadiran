@@ -5,7 +5,97 @@ import { toDateOnly } from "../utils/time.js";
 import { processCheckIn, resolveShiftId } from "./attendanceService.js";
 import { ensureUserAccountForEmployee } from "./employeeAccountService.js";
 import { downloadAndStoreTelegramPhoto } from "./telegramPhotoService.js";
-import { parseTelegramMessageText } from "./telegramMessageParser.js";
+import { correctBiofingerDateSkew } from "./telegramDateSkew.js";
+import { parseTelegramMessageText, } from "./telegramMessageParser.js";
+function scanSlotLabel(slot) {
+    switch (slot) {
+        case "check_in":
+            return "MASUK";
+        case "break_start":
+            return "ISTIRAHAT MULAI";
+        case "break_end":
+            return "ISTIRAHAT SELESAI";
+        case "check_out":
+            return "PULANG";
+    }
+}
+/** Satu timestamp tanpa field istirahat/pulang — tentukan absen ke-1/2/3/4 dari state harian. */
+function needsScanResolution(parsed) {
+    return (Boolean(parsed.jamMasuk) &&
+        !parsed.jamPulang &&
+        !parsed.istirahatMulai &&
+        !parsed.istirahatSelesai);
+}
+async function loadDailyAttendance(employeeId, workDate) {
+    return prisma.attendanceRecord.findUnique({
+        where: { employeeId_workDate: { employeeId, workDate } },
+        include: { breakSessions: { orderBy: { breakStartAt: "asc" } } },
+    });
+}
+async function findExistingScanSlot(employeeId, workDate, eventTime) {
+    const record = await loadDailyAttendance(employeeId, workDate);
+    if (!record)
+        return null;
+    if (record.checkInAt?.getTime() === eventTime.getTime())
+        return "check_in";
+    for (const brk of record.breakSessions) {
+        if (brk.breakStartAt.getTime() === eventTime.getTime())
+            return "break_start";
+        if (brk.breakEndAt?.getTime() === eventTime.getTime())
+            return "break_end";
+    }
+    if (record.checkOutAt?.getTime() === eventTime.getTime())
+        return "check_out";
+    return null;
+}
+async function resolveDailyScanSlot(employeeId, workDate) {
+    const record = await loadDailyAttendance(employeeId, workDate);
+    if (!record?.checkInAt)
+        return "check_in";
+    const { hasApprovedTwoScanMode } = await import("./attendanceApprovalService.js");
+    const twoScanApproved = await hasApprovedTwoScanMode(employeeId, workDate);
+    if (twoScanApproved && !record.checkOutAt && record.breakSessions.length === 0) {
+        return "check_out";
+    }
+    const openBreak = record.breakSessions.find((b) => !b.breakEndAt);
+    if (openBreak)
+        return "break_end";
+    const hasCompletedBreak = record.breakSessions.some((b) => b.breakEndAt);
+    if (!hasCompletedBreak)
+        return "break_start";
+    if (!record.checkOutAt)
+        return "check_out";
+    throw new Error("DUPLICATE_ATTENDANCE:all_slots_filled");
+}
+async function reconcileParsedScan(employeeId, workDate, parsed) {
+    if (!needsScanResolution(parsed) || !parsed.jamMasuk)
+        return parsed;
+    const eventTime = parsed.jamMasuk;
+    const existingSlot = await findExistingScanSlot(employeeId, workDate, eventTime);
+    if (existingSlot) {
+        return remapParsedByScanSlot(parsed, existingSlot, eventTime);
+    }
+    const slot = await resolveDailyScanSlot(employeeId, workDate);
+    return remapParsedByScanSlot(parsed, slot, eventTime);
+}
+function remapParsedByScanSlot(parsed, slot, eventTime) {
+    return {
+        ...parsed,
+        jamMasuk: slot === "check_in" ? eventTime : undefined,
+        jamPulang: slot === "check_out" ? eventTime : undefined,
+        istirahatMulai: slot === "break_start" ? eventTime : undefined,
+        istirahatSelesai: slot === "break_end" ? eventTime : undefined,
+    };
+}
+function eventLabelFromParsed(parsed) {
+    if (parsed.jamPulang)
+        return "PULANG";
+    if (parsed.istirahatSelesai)
+        return "ISTIRAHAT SELESAI";
+    if (parsed.istirahatMulai)
+        return "ISTIRAHAT MULAI";
+    return "MASUK";
+}
 const DEFAULT_SHIFT_ID = 2;
 export async function saveTelegramWebhookMessage(input) {
     if (env.telegramAllowedGroupIds.length > 0 &&
@@ -45,20 +135,20 @@ export async function saveTelegramWebhookMessage(input) {
     });
     return { id: record.id, duplicate: false };
 }
-export async function processTelegramMessageById(telegramMessageDbId) {
+export async function processTelegramMessageById(telegramMessageDbId, options) {
     const message = await prisma.telegramMessage.findUnique({
         where: { id: telegramMessageDbId },
     });
     if (!message) {
         throw new Error("TELEGRAM_MESSAGE_NOT_FOUND");
     }
-    if (message.syncStatus === "processed") {
+    if (message.syncStatus === "processed" && !options?.force) {
         log("info", "Message already processed", { telegramMessageDbId });
         return;
     }
     try {
-        const parsed = parseTelegramMessageText(message.rawText);
-        const attendanceId = await applyParsedAttendance(parsed, message.id, message.telegramGroupId, message.photoFileId);
+        const parsed = correctBiofingerDateSkew(parseTelegramMessageText(message.rawText), message.receivedAt);
+        const { attendanceId } = await applyParsedAttendance(parsed, message.id, message.telegramGroupId, message.photoFileId);
         const linkedByOther = await prisma.telegramMessage.findFirst({
             where: {
                 attendanceId,
@@ -111,6 +201,29 @@ export async function processTelegramMessageById(telegramMessageDbId) {
         throw err;
     }
 }
+async function resolveBranchFromCompanyHint(hint) {
+    const normalized = hint?.trim();
+    if (!normalized)
+        return null;
+    const branches = await prisma.branch.findMany({ where: { isActive: true } });
+    const lower = normalized.toLowerCase();
+    const exact = branches.find((b) => b.name.toLowerCase() === lower);
+    if (exact)
+        return exact;
+    const codeToken = normalized.split(/\s+/).pop()?.toUpperCase();
+    if (codeToken) {
+        const byCode = branches.find((b) => b.code.toUpperCase() === codeToken);
+        if (byCode)
+            return byCode;
+    }
+    return (branches.find((b) => b.name.toLowerCase().includes(lower) || lower.includes(b.name.toLowerCase())) ?? null);
+}
+async function resolveBranchForAttendance(telegramGroupId, parsed, employeeBranchId) {
+    const fromCompany = await resolveBranchFromCompanyHint(parsed.perusahaan ?? parsed.cabang);
+    if (fromCompany)
+        return fromCompany;
+    return resolveBranchForGroup(telegramGroupId, employeeBranchId);
+}
 async function resolveBranchForGroup(telegramGroupId, employeeBranchId) {
     const branchByGroup = await prisma.branch.findFirst({
         where: { telegramGroupId, isActive: true },
@@ -139,8 +252,8 @@ async function resolveBranchForGroup(telegramGroupId, employeeBranchId) {
     return fallback;
 }
 async function findOrCreateEmployee(parsed, branchId) {
-    const existing = await prisma.employee.findUnique({
-        where: { nik: parsed.nik },
+    const existing = await prisma.employee.findFirst({
+        where: { branchId, nik: parsed.nik },
     });
     if (existing) {
         await ensureUserAccountForEmployee(existing);
@@ -168,6 +281,38 @@ async function findOrCreateEmployee(parsed, branchId) {
     });
     return employee;
 }
+/** Lepas / pindahkan record lama bila source message diproses ulang ke tanggal kerja lain. */
+async function releaseSourceMessageIfWrongWorkDate(sourceMessageId, targetWorkDate) {
+    const linked = await prisma.attendanceRecord.findUnique({
+        where: { sourceMessageId },
+        select: { id: true, workDate: true, employeeId: true, checkInAt: true },
+    });
+    if (!linked)
+        return;
+    const target = toDateOnly(targetWorkDate);
+    if (toDateOnly(linked.workDate).getTime() === target.getTime())
+        return;
+    const existingToday = await prisma.attendanceRecord.findUnique({
+        where: {
+            employeeId_workDate: { employeeId: linked.employeeId, workDate: target },
+        },
+    });
+    if (existingToday) {
+        await prisma.attendanceRecord.update({
+            where: { id: linked.id },
+            data: { sourceMessageId: null },
+        });
+        return;
+    }
+    const oldDate = linked.workDate;
+    await prisma.kpiDailyScore.deleteMany({
+        where: { employeeId: linked.employeeId, workDate: oldDate },
+    });
+    await prisma.attendanceRecord.update({
+        where: { id: linked.id },
+        data: { workDate: target },
+    });
+}
 async function isDuplicateAttendanceEvent(employeeId, eventTime, event) {
     const workDate = toDateOnly(eventTime);
     const record = await prisma.attendanceRecord.findUnique({
@@ -186,38 +331,106 @@ async function isDuplicateAttendanceEvent(employeeId, eventTime, event) {
     }
     return false;
 }
-async function applyParsedAttendance(parsed, sourceMessageId, telegramGroupId, photoFileId) {
-    const branch = await resolveBranchForGroup(telegramGroupId);
-    const employee = await findOrCreateEmployee(parsed, branch.id);
-    const resolvedBranch = await resolveBranchForGroup(telegramGroupId, employee.branchId);
+export async function ingestManualAttendanceFromText(rawText) {
+    const parsed = correctBiofingerDateSkew(parseTelegramMessageText(rawText), new Date());
+    const telegramMessageId = BigInt(`9${Date.now()}${String(Math.floor(Math.random() * 1000)).padStart(3, "0")}`);
+    const telegramGroupId = BigInt(0);
+    const record = await prisma.telegramMessage.create({
+        data: {
+            telegramMessageId,
+            telegramGroupId,
+            rawText,
+            syncStatus: "pending",
+        },
+    });
+    try {
+        const { attendanceId, eventLabel } = await applyParsedAttendance(parsed, record.id, telegramGroupId, null);
+        const linkedByOther = await prisma.telegramMessage.findFirst({
+            where: {
+                attendanceId,
+                id: { not: record.id },
+            },
+            select: { id: true },
+        });
+        await prisma.telegramMessage.update({
+            where: { id: record.id },
+            data: {
+                syncStatus: "processed",
+                processedAt: new Date(),
+                attendanceId: linkedByOther ? null : attendanceId,
+                parsedJson: parsed,
+                errorMessage: null,
+            },
+        });
+        return {
+            attendance_id: attendanceId,
+            employee_nik: parsed.nik,
+            employee_name: parsed.nama ?? parsed.nik,
+            work_date: parsed.workDate.toISOString().slice(0, 10),
+            event_status: eventLabel,
+            telegram_message_id: record.id,
+        };
+    }
+    catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        await prisma.telegramMessage.update({
+            where: { id: record.id },
+            data: {
+                syncStatus: "failed",
+                processedAt: new Date(),
+                errorMessage,
+            },
+        });
+        throw err;
+    }
+}
+async function applyParsedAttendance(parsedInput, sourceMessageId, telegramGroupId, photoFileId) {
+    const branch = await resolveBranchForAttendance(telegramGroupId, parsedInput);
+    const employee = await findOrCreateEmployee(parsedInput, branch.id);
+    const resolvedBranch = branch;
     let photoUrl = null;
     if (photoFileId) {
-        photoUrl = await downloadAndStoreTelegramPhoto(photoFileId, `attendance/${employee.nik}/${parsed.workDate.toISOString().slice(0, 10)}`);
+        photoUrl = await downloadAndStoreTelegramPhoto(photoFileId, `attendance/${employee.nik}/${parsedInput.workDate.toISOString().slice(0, 10)}`);
     }
-    const workDate = toDateOnly(parsed.workDate);
+    const workDate = toDateOnly(parsedInput.workDate);
+    let parsed = await reconcileParsedScan(employee.id, workDate, parsedInput);
     const shiftId = await resolveShiftId(employee.id, workDate);
     let attendanceId;
     if (parsed.jamMasuk) {
+        await releaseSourceMessageIfWrongWorkDate(sourceMessageId, workDate);
         if (await isDuplicateAttendanceEvent(employee.id, parsed.jamMasuk, "check_in")) {
-            throw new Error(`DUPLICATE_ATTENDANCE:check_in:${parsed.nik}`);
+            attendanceId = (await prisma.attendanceRecord.findUniqueOrThrow({
+                where: {
+                    employeeId_workDate: { employeeId: employee.id, workDate },
+                },
+                select: { id: true },
+            })).id;
         }
-        const result = await processCheckIn({
-            employeeId: employee.id,
-            workDate,
-            checkInAt: parsed.jamMasuk,
-            attendanceType: parsed.attendanceType,
-            sourceMessageId,
-            photoUrl: photoUrl ?? undefined,
-            deviceId: parsed.deviceId,
-        });
-        attendanceId = result.attendanceId;
+        else {
+            try {
+                const result = await processCheckIn({
+                    employeeId: employee.id,
+                    workDate,
+                    checkInAt: parsed.jamMasuk,
+                    attendanceType: parsed.attendanceType,
+                    sourceMessageId,
+                    photoUrl: photoUrl ?? undefined,
+                    deviceId: parsed.deviceId,
+                });
+                attendanceId = result.attendanceId;
+            }
+            catch (err) {
+                if (err instanceof Error && err.message === "CHECK_IN_ALREADY_RECORDED") {
+                    parsed = await reconcileParsedScan(employee.id, workDate, parsedInput);
+                }
+                else {
+                    throw err;
+                }
+            }
+        }
     }
-    else {
-        const existing = await prisma.attendanceRecord.findUnique({
-            where: {
-                employeeId_workDate: { employeeId: employee.id, workDate },
-            },
-        });
+    if (!attendanceId) {
+        const existing = await loadDailyAttendance(employee.id, workDate);
         if (existing) {
             attendanceId = existing.id;
         }
@@ -237,12 +450,22 @@ async function applyParsedAttendance(parsed, sourceMessageId, telegramGroupId, p
             attendanceId = created.id;
         }
     }
-    if (parsed.jamPulang) {
-        if (await isDuplicateAttendanceEvent(employee.id, parsed.jamPulang, "check_out")) {
-            throw new Error(`DUPLICATE_ATTENDANCE:check_out:${parsed.nik}`);
-        }
+    const attendanceBeforeUpdate = await prisma.attendanceRecord.findUnique({
+        where: { id: attendanceId },
+        select: { checkOutAt: true },
+    });
+    if (parsed.jamPulang &&
+        attendanceBeforeUpdate?.checkOutAt &&
+        attendanceBeforeUpdate.checkOutAt.getTime() !== parsed.jamPulang.getTime()) {
+        throw new Error(`DUPLICATE_ATTENDANCE:check_out:${parsed.nik}`);
     }
-    if (parsed.jamPulang || parsed.istirahatMulai || parsed.istirahatSelesai || photoUrl) {
+    const duplicateCheckOut = parsed.jamPulang &&
+        (await isDuplicateAttendanceEvent(employee.id, parsed.jamPulang, "check_out"));
+    const shouldUpdateAttendance = (parsed.jamPulang && !duplicateCheckOut) ||
+        parsed.istirahatMulai ||
+        parsed.istirahatSelesai ||
+        photoUrl;
+    if (shouldUpdateAttendance) {
         await prisma.attendanceRecord.update({
             where: { id: attendanceId },
             data: {
@@ -250,7 +473,9 @@ async function applyParsedAttendance(parsed, sourceMessageId, telegramGroupId, p
                 shiftId,
                 deviceId: parsed.deviceId ?? undefined,
                 photoUrl: photoUrl ?? undefined,
-                checkOutAt: parsed.jamPulang ?? undefined,
+                ...(parsed.jamPulang && !duplicateCheckOut
+                    ? { checkOutAt: parsed.jamPulang }
+                    : {}),
                 status: parsed.jamPulang
                     ? "left"
                     : parsed.istirahatSelesai
@@ -262,9 +487,32 @@ async function applyParsedAttendance(parsed, sourceMessageId, telegramGroupId, p
         });
     }
     if (parsed.istirahatMulai) {
-        await upsertBreakSession(attendanceId, parsed.istirahatMulai, parsed.istirahatSelesai);
+        const duplicateBreakStart = (await loadDailyAttendance(employee.id, workDate))?.breakSessions.some((b) => b.breakStartAt.getTime() === parsed.istirahatMulai.getTime());
+        if (!duplicateBreakStart) {
+            await upsertBreakSession(attendanceId, parsed.istirahatMulai, parsed.istirahatSelesai);
+        }
     }
-    return attendanceId;
+    else if (parsed.istirahatSelesai) {
+        const duplicateBreakEnd = (await loadDailyAttendance(employee.id, workDate))?.breakSessions.some((b) => b.breakEndAt?.getTime() === parsed.istirahatSelesai.getTime());
+        if (!duplicateBreakEnd) {
+            await closeOpenBreakSession(attendanceId, parsed.istirahatSelesai);
+        }
+    }
+    return { attendanceId, eventLabel: eventLabelFromParsed(parsed) };
+}
+async function closeOpenBreakSession(attendanceId, breakEndAt) {
+    const openBreak = await prisma.breakSession.findFirst({
+        where: { attendanceId, breakEndAt: null },
+        orderBy: { breakStartAt: "desc" },
+    });
+    if (!openBreak) {
+        throw new Error("BREAK_SESSION_NOT_OPEN");
+    }
+    const durationMinutes = Math.round((breakEndAt.getTime() - openBreak.breakStartAt.getTime()) / 60_000);
+    await prisma.breakSession.update({
+        where: { id: openBreak.id },
+        data: { breakEndAt, durationMinutes },
+    });
 }
 async function upsertBreakSession(attendanceId, breakStartAt, breakEndAt) {
     const openBreak = await prisma.breakSession.findFirst({
@@ -292,4 +540,5 @@ async function upsertBreakSession(attendanceId, breakStartAt, breakEndAt) {
         });
     }
 }
+export { needsScanResolution, resolveDailyScanSlot, remapParsedByScanSlot, scanSlotLabel, };
 //# sourceMappingURL=telegramIngestService.js.map

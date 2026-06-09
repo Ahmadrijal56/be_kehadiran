@@ -50,6 +50,8 @@ export async function isTokenBlacklisted(jti) {
     return hit === "1";
 }
 export async function isLoginLocked(identifier) {
+    if (env.nodeEnv !== "production")
+        return false;
     const redis = await redisReady();
     if (!redis)
         return false;
@@ -57,6 +59,8 @@ export async function isLoginLocked(identifier) {
     return (await redis.get(`login:lock:${key}`)) === "1";
 }
 export async function recordLoginFailure(identifier) {
+    if (env.nodeEnv !== "production")
+        return;
     const redis = await redisReady();
     if (!redis)
         return;
@@ -92,6 +96,16 @@ export async function clearLoginFailures(identifier) {
         return;
     const key = identifier.trim().toLowerCase();
     await redis.del(`login:fail:${key}`, `login:lock:${key}`);
+}
+/** Hapus semua lock login (dev/support). */
+export async function clearAllLoginLocks() {
+    const redis = await redisReady();
+    if (!redis)
+        return 0;
+    const keys = await redis.keys("login:*");
+    if (keys.length === 0)
+        return 0;
+    return redis.del(...keys);
 }
 export async function revokeAccessToken(token) {
     try {

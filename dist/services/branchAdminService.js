@@ -1,6 +1,7 @@
 import { prisma } from "../lib/prisma.js";
 import { businessError, notFound, validationError, } from "../lib/errors.js";
 import { writeAuditLog } from "./auditService.js";
+import { assignOwnerToBranch } from "./branchMembershipService.js";
 function mapBranch(b) {
     return {
         id: b.id,
@@ -46,6 +47,9 @@ export async function createBranch(actorId, data) {
         entityId: branch.id,
         newValues: mapBranch(branch),
     });
+    await assignOwnerToBranch(actorId, branch.id);
+    const { seedBranchShiftsForNewBranch } = await import("./branchShiftConfigService.js");
+    await seedBranchShiftsForNewBranch(branch.id);
     return mapBranch(branch);
 }
 export async function updateBranch(actorId, branchId, data) {

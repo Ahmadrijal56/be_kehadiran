@@ -3,7 +3,7 @@ import { env } from "../config/env.js";
 const isTest = env.nodeEnv === "test" || process.env.VITEST === "true";
 export const globalApiRateLimit = rateLimit({
     windowMs: 60 * 1000,
-    max: isTest ? 10_000 : 100,
+    max: isTest ? 10_000 : 300,
     standardHeaders: true,
     legacyHeaders: false,
     message: {

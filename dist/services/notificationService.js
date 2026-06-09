@@ -1,4 +1,5 @@
 import { prisma } from "../lib/prisma.js";
+import { approvalTypeLabel } from "../constants/approvalTypes.js";
 const ACHIEVEMENT_LABELS = {
     top_1: "Juara 1",
     top_2: "Juara 2",
@@ -34,6 +35,104 @@ export async function notifyLateExcuseReviewed(userId, status, lateExcuseId) {
             title,
             body,
             dataJson: { late_excuse_id: lateExcuseId, status },
+        },
+    });
+}
+export async function notifyApprovalReviewed(userId, approvalType, status, requestId, managerNote) {
+    const label = approvalTypeLabel(approvalType);
+    const title = status === "approved"
+        ? `Persetujuan disetujui — ${label}`
+        : `Persetujuan ditolak — ${label}`;
+    const noteText = managerNote?.trim()
+        ? ` Catatan manager: ${managerNote.trim()}`
+        : "";
+    const body = status === "approved"
+        ? `Permintaan ${label} Anda telah disetujui.${noteText}`
+        : `Permintaan ${label} Anda ditolak.${noteText || " Lihat detail di aplikasi."}`;
+    await prisma.notification.create({
+        data: {
+            userId,
+            type: "approval_reviewed",
+            title,
+            body,
+            dataJson: {
+                approval_id: requestId,
+                approval_type: approvalType,
+                status,
+                manager_note: managerNote ?? null,
+            },
+        },
+    });
+}
+export async function notifyManagersNewApprovalRequest(branchId, request) {
+    const label = approvalTypeLabel(request.type);
+    const workDate = request.workDate.toISOString().slice(0, 10);
+    const managers = await prisma.user.findMany({
+        where: {
+            isActive: true,
+            userBranches: { some: { branchId } },
+            userRoles: { some: { role: { code: "manager" } } },
+        },
+        select: { id: true },
+    });
+    const owners = await prisma.user.findMany({
+        where: {
+            isActive: true,
+            userRoles: { some: { role: { code: "owner" } } },
+        },
+        select: { id: true },
+    });
+    const recipientIds = new Set([
+        ...managers.map((m) => m.id),
+        ...owners.map((o) => o.id),
+    ]);
+    for (const userId of recipientIds) {
+        await prisma.notification.create({
+            data: {
+                userId,
+                type: "approval_submitted",
+                title: `Permintaan persetujuan baru — ${label}`,
+                body: `${request.employee.fullName} mengajukan ${label} untuk tanggal ${workDate}.`,
+                dataJson: {
+                    approval_id: request.id,
+                    approval_type: request.type,
+                    work_date: workDate,
+                    branch_id: branchId,
+                },
+            },
+        });
+    }
+}
+export async function notifyForgotCheckout(userId, workDate) {
+    await prisma.notification.create({
+        data: {
+            userId,
+            type: "forgot_checkout",
+            title: "Lupa absen pulang",
+            body: `Absen pulang otomatis dicatat 23:59 untuk tanggal ${workDate}. Anda dapat mengajukan persetujuan ke manager.`,
+            dataJson: { work_date: workDate },
+        },
+    });
+}
+export async function notifyAttendanceMissing(userId, workDate) {
+    await prisma.notification.create({
+        data: {
+            userId,
+            type: "attendance_missing",
+            title: "Belum absen masuk",
+            body: `Anda belum melakukan absen masuk hari ini (${workDate}). Segera scan Face ID.`,
+            dataJson: { work_date: workDate },
+        },
+    });
+}
+export async function notifyAttendanceLate(userId, workDate, lateMinutes) {
+    await prisma.notification.create({
+        data: {
+            userId,
+            type: "attendance_late",
+            title: "Anda terlambat hari ini",
+            body: `Absen masuk tercatat terlambat${lateMinutes > 0 ? ` ${lateMinutes} menit` : ""} (${workDate}).`,
+            dataJson: { work_date: workDate, late_minutes: lateMinutes },
         },
     });
 }

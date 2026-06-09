@@ -1,5 +1,5 @@
 import type { AttendanceType } from "@prisma/client";
-import { calculateKpiScore } from "./kpiScoringService.js";
+import { type KpiScoreResult } from "./kpiScoringService.js";
 export type ProcessCheckInInput = {
     employeeId: string;
     workDate: Date;
@@ -12,7 +12,7 @@ export type ProcessCheckInInput = {
 export type ProcessCheckInResult = {
     attendanceId: string;
     deltaMinutes: number;
-    kpi: ReturnType<typeof calculateKpiScore>;
+    kpi: KpiScoreResult;
 };
 export declare function resolveShiftId(employeeId: string, workDate: Date): Promise<number>;
 export declare function processCheckIn(input: ProcessCheckInInput): Promise<ProcessCheckInResult>;

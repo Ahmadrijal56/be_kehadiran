@@ -3,6 +3,7 @@ import rateLimit from "express-rate-limit";
 import { asyncHandler } from "../../middleware/asyncHandler.js";
 import { env } from "../../config/env.js";
 import { getPublicDisplay } from "../../services/publicDisplayService.js";
+import { getPublicRules } from "../../services/organizationConfigService.js";
 const isTest = env.nodeEnv === "test" || process.env.VITEST === "true";
 export const publicDisplayRateLimit = rateLimit({
     windowMs: 60 * 1000,
@@ -21,5 +22,8 @@ publicRouter.get("/display", publicDisplayRateLimit, asyncHandler(async (req, re
     const month = req.query.month;
     const data = await getPublicDisplay(month);
     res.json({ data });
+}));
+publicRouter.get("/rules", publicDisplayRateLimit, asyncHandler(async (_req, res) => {
+    res.json({ data: await getPublicRules() });
 }));
 //# sourceMappingURL=public.js.map

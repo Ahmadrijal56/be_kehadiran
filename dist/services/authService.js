@@ -6,6 +6,7 @@ import { prisma } from "../lib/prisma.js";
 import { writeAuditLog } from "./auditService.js";
 import { blacklistToken, clearLoginFailures, clearRefreshSession, isLoginLocked, isRefreshSessionValid, isTokenBlacklisted, newTokenId, recordLoginFailure, registerRefreshSession, revokeAccessToken, } from "./tokenSecurityService.js";
 import { linkUserToEmployeeByNik } from "./employeeAccountService.js";
+import { getBranchIdsForUser, } from "./branchMembershipService.js";
 const ACCESS_TTL_SEC = 900;
 const REFRESH_TTL_SEC = 7 * 24 * 3600;
 export async function login(identifier, password) {
@@ -24,6 +25,7 @@ export async function login(identifier, password) {
     if (!user) {
         await recordLoginFailure(identifier);
         await writeAuditLog({
+            userId: "anonymous",
             action: "auth.login.failed",
             entityType: "user",
             newValues: { identifier: identifier.trim(), reason: "user_not_found" },
@@ -43,17 +45,21 @@ export async function login(identifier, password) {
         throw unauthorized("NIK/email atau password salah");
     }
     await clearLoginFailures(identifier);
-    const linkedEmployeeId = user.employeeId ?? (await linkUserToEmployeeByNik(user.id));
-    if (linkedEmployeeId && !user.employeeId) {
-        user.employeeId = linkedEmployeeId;
+    const roles = user.userRoles.map((ur) => ur.role.code);
+    let linkedEmployeeId = user.employeeId;
+    if (!linkedEmployeeId && roles.includes("employee")) {
+        linkedEmployeeId = await linkUserToEmployeeByNik(user.id);
+        if (linkedEmployeeId) {
+            user.employeeId = linkedEmployeeId;
+        }
     }
     const roleIds = user.userRoles.map((ur) => ur.roleId);
     const permissions = await prisma.rolePermission.findMany({
         where: { roleId: { in: roleIds } },
         include: { permission: true },
     });
-    const roles = user.userRoles.map((ur) => ur.role.code);
     const permissionCodes = [...new Set(permissions.map((p) => p.permission.code))];
+    const branchIds = await getBranchIdsForUser(user.id, roles);
     await prisma.user.update({
         where: { id: user.id },
         data: { lastLoginAt: new Date() },
@@ -63,7 +69,8 @@ export async function login(identifier, password) {
         nik: user.nik,
         fullName: user.fullName,
         email: user.email,
-        branchId: user.branchId,
+        branchId: user.branchId ?? branchIds[0] ?? null,
+        branchIds,
         employeeId: user.employeeId,
         roles,
         permissions: permissionCodes,
@@ -80,7 +87,7 @@ export async function login(identifier, password) {
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
         expires_in: ACCESS_TTL_SEC,
-        user: mapAuthUserResponse(authUser),
+        user: await enrichAuthUserResponse(authUser),
     };
 }
 export function mapAuthUserResponse(user) {
@@ -91,7 +98,24 @@ export function mapAuthUserResponse(user) {
         employee_id: user.employeeId,
         roles: user.roles,
         branch_id: user.branchId,
+        branch_ids: user.branchIds,
         permissions: user.permissions,
+    };
+}
+export async function enrichAuthUserResponse(user) {
+    const base = mapAuthUserResponse(user);
+    if (!user.branchId) {
+        return { ...base, branch: null };
+    }
+    const branch = await prisma.branch.findUnique({
+        where: { id: user.branchId },
+        select: { id: true, code: true, name: true },
+    });
+    return {
+        ...base,
+        branch: branch
+            ? { id: branch.id, code: branch.code, name: branch.name }
+            : null,
     };
 }
 function signToken(userId, type) {
@@ -141,7 +165,7 @@ export async function refreshAccessToken(refreshToken) {
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
         expires_in: ACCESS_TTL_SEC,
-        user: mapAuthUserResponse(authUser),
+        user: await enrichAuthUserResponse(authUser),
     };
 }
 export async function logout(accessToken) {
@@ -168,18 +192,21 @@ export async function resolveAuthUser(userId) {
     if (!user || !user.isActive)
         throw unauthorized();
     const roleIds = user.userRoles.map((ur) => ur.roleId);
+    const roles = user.userRoles.map((ur) => ur.role.code);
     const permissions = await prisma.rolePermission.findMany({
         where: { roleId: { in: roleIds } },
         include: { permission: true },
     });
+    const branchIds = await getBranchIdsForUser(user.id, roles);
     return {
         id: user.id,
         nik: user.nik,
         fullName: user.fullName,
         email: user.email,
-        branchId: user.branchId,
+        branchId: user.branchId ?? branchIds[0] ?? null,
+        branchIds,
         employeeId: user.employeeId,
-        roles: user.userRoles.map((ur) => ur.role.code),
+        roles,
         permissions: [...new Set(permissions.map((p) => p.permission.code))],
     };
 }

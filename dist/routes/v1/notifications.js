@@ -4,14 +4,24 @@ import { asyncHandler } from "../../middleware/asyncHandler.js";
 import { notFound } from "../../lib/errors.js";
 import { prisma } from "../../lib/prisma.js";
 import { formatWibIso } from "../../utils/format.js";
+import { syncAttendanceRemindersForUser } from "../../services/attendanceReminderService.js";
 export const notificationsRouter = Router();
 notificationsRouter.use(authenticate);
 notificationsRouter.get("/notifications", asyncHandler(async (req, res) => {
-    const items = await prisma.notification.findMany({
-        where: { userId: req.user.id },
-        orderBy: { createdAt: "desc" },
-        take: 50,
-    });
+    if (req.user?.employeeId) {
+        await syncAttendanceRemindersForUser(req.user.id, req.user.employeeId).catch(() => { });
+    }
+    const userId = req.user.id;
+    const [items, unreadCount] = await Promise.all([
+        prisma.notification.findMany({
+            where: { userId },
+            orderBy: { createdAt: "desc" },
+            take: 50,
+        }),
+        prisma.notification.count({
+            where: { userId, readAt: null },
+        }),
+    ]);
     res.json({
         data: items.map((n) => ({
             id: n.id,
@@ -22,7 +32,7 @@ notificationsRouter.get("/notifications", asyncHandler(async (req, res) => {
             read_at: formatWibIso(n.readAt),
             created_at: formatWibIso(n.createdAt),
         })),
-        unread_count: items.filter((n) => !n.readAt).length,
+        unread_count: unreadCount,
     });
 }));
 notificationsRouter.patch("/notifications/:id/read", asyncHandler(async (req, res) => {

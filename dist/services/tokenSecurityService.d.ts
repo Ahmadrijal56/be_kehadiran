@@ -7,5 +7,7 @@ export declare function registerRefreshSession(userId: string, jti: string, ttlS
 export declare function isRefreshSessionValid(userId: string, jti: string): Promise<boolean>;
 export declare function clearRefreshSession(userId: string): Promise<void>;
 export declare function clearLoginFailures(identifier: string): Promise<void>;
+/** Hapus semua lock login (dev/support). */
+export declare function clearAllLoginLocks(): Promise<number>;
 export declare function revokeAccessToken(token: string): Promise<void>;
 //# sourceMappingURL=tokenSecurityService.d.ts.map

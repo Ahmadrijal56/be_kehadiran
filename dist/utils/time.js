@@ -30,6 +30,29 @@ export function computeDeltaMinutes(checkInAt, shiftStartTime, workDate) {
     const checkInWib = new Date(`${workDateStr}T${String(checkHour).padStart(2, "0")}:${String(checkMinute).padStart(2, "0")}:00+07:00`);
     return Math.round((checkInWib.getTime() - shiftStart.getTime()) / 60_000);
 }
+/**
+ * Selisih detik check-in terhadap shift start (WIB).
+ * Positif = terlambat, negatif = lebih awal.
+ */
+export function computeDeltaSeconds(checkInAt, shiftStartTime, workDate) {
+    const shift = timeFromDbTime(shiftStartTime);
+    const formatter = new Intl.DateTimeFormat("en-CA", {
+        timeZone: TIMEZONE,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+    });
+    const parts = formatter.formatToParts(checkInAt);
+    const get = (type) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+    const workDateStr = workDate.toISOString().slice(0, 10);
+    const shiftStart = new Date(`${workDateStr}T${String(shift.hours).padStart(2, "0")}:${String(shift.minutes).padStart(2, "0")}:00+07:00`);
+    const checkInWib = new Date(`${workDateStr}T${String(get("hour")).padStart(2, "0")}:${String(get("minute")).padStart(2, "0")}:${String(get("second")).padStart(2, "0")}+07:00`);
+    return Math.round((checkInWib.getTime() - shiftStart.getTime()) / 1000);
+}
 export function toDateOnly(value) {
     return new Date(value.toISOString().slice(0, 10));
 }

@@ -29,7 +29,7 @@ describe("API v1 — employee & late excuse", () => {
   beforeAll(async () => {
     process.env.QUEUE_ENABLED = "false";
     const workDate = todayWorkDateWib();
-    const emp = await prisma.employee.findUnique({ where: { nik: "100001" } });
+    const emp = await prisma.employee.findFirst({ where: { nik: "100001" } });
     if (!emp) throw new Error("seed employee 100001 missing");
 
     const att = await prisma.attendanceRecord.upsert({

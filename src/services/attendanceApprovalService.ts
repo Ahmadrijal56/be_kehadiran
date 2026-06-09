@@ -230,7 +230,7 @@ export async function createApprovalRequest(
       attendanceId: attendance.id,
       requestedShiftId: data.requested_shift_id ?? null,
     },
-    include: { employee: { select: { fullName: true, nik: true } } },
+    include: { employee: { select: { id: true, fullName: true, nik: true } } },
   });
 
   await notifyManagersNewApprovalRequest(employee.branchId, request);

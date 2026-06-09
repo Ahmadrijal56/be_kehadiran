@@ -224,7 +224,7 @@ export function parseTelegramMessageText(rawText: string): ParsedTelegramAttenda
 
   const isVt490 =
     Boolean(fields.waktu && !isEmptyValue(fields.waktu)) &&
-    /\d{1,2}\/\d{1,2}\/\d{4}\s+\d/.test(fields.waktu) &&
+    /\d{1,2}\/\d{1,2}\/\d{4}\s+\d/.test(fields.waktu ?? "") &&
     !fields.tanggal;
 
   if (isVt490) {

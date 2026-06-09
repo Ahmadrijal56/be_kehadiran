@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { authenticate, requirePermission } from "../../middleware/auth.js";
 import { asyncHandler } from "../../middleware/asyncHandler.js";
-import { deactivateUser, resetUserPassword, updateBranchUser, } from "../../services/branchUserService.js";
+import { deactivateUser, resetUserPassword, updateBranchUser, updateUserBranches, } from "../../services/branchUserService.js";
 import { validationError } from "../../lib/errors.js";
 export const usersRouter = Router();
 usersRouter.use(authenticate);
@@ -27,6 +27,15 @@ usersRouter.post("/:userId/reset-password", requirePermission("users.manage.bran
 usersRouter.patch("/:userId/deactivate", requirePermission("users.manage.branch"), asyncHandler(async (req, res) => {
     const userId = String(req.params.userId);
     const data = await deactivateUser(req.user, userId);
+    res.json({ data });
+}));
+usersRouter.put("/:userId/branches", asyncHandler(async (req, res) => {
+    const userId = String(req.params.userId);
+    const { branch_ids } = req.body ?? {};
+    if (!Array.isArray(branch_ids)) {
+        throw validationError("branch_ids wajib berupa array");
+    }
+    const data = await updateUserBranches(req.user, userId, branch_ids.map(String));
     res.json({ data });
 }));
 //# sourceMappingURL=users.js.map

@@ -11,6 +11,7 @@ export type BranchEmployeeAttendance = {
     check_out_at: string | null;
     late_minutes: number;
     break_start_at: string | null;
+    scheduled_off?: boolean;
 };
 export declare function listBranchAttendanceToday(branchId: string): Promise<{
     work_date: string;
@@ -36,5 +37,6 @@ export declare function getBranchStatsToday(branchId: string): Promise<{
     absent: number;
     on_break: number;
     left: number;
+    off: number;
 }>;
 //# sourceMappingURL=branchAttendanceService.d.ts.map

@@ -55,6 +55,8 @@ export const env = {
     admsPort: Number(process.env.ADMS_PORT ?? 7792),
     /** Token lisensi untuk registrasi owner pertama via halaman login. */
     ownerLicenseToken: process.env.OWNER_LICENSE_TOKEN ?? "",
+    /** Token untuk POST /dev/attendance/ingest (bypass manual, development). */
+    manualIngestToken: process.env.MANUAL_INGEST_TOKEN ?? "",
 };
 if (env.nodeEnv === "production" && env.jwtSecret === "dev-only-change-in-production") {
     required("JWT_SECRET");

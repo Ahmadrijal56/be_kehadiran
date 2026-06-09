@@ -82,7 +82,7 @@ async function pollUpdates(offset) {
     }
     let nextOffset = offset;
     for (const update of body.result ?? []) {
-        nextOffset = update.update_id + 1;
+        nextOffset = (update.update_id ?? 0) + 1;
         await handleUpdate(update);
     }
     return nextOffset;

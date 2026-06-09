@@ -63,6 +63,7 @@ export async function login(identifier: string, password: string) {
   if (!user) {
     await recordLoginFailure(identifier);
     await writeAuditLog({
+      userId: "anonymous",
       action: "auth.login.failed",
       entityType: "user",
       newValues: { identifier: identifier.trim(), reason: "user_not_found" },

@@ -3,6 +3,7 @@ export const REWARD_AMOUNTS_IDR = {
     top_2: 50_000,
     top_3: 25_000,
 };
+/** @deprecated Use rewardAmountFromSettings from organizationConfigService */
 export function rewardAmountForType(type) {
     if (type === "top_1")
         return REWARD_AMOUNTS_IDR.top_1;

@@ -1,7 +1,9 @@
 import { prisma } from "../lib/prisma.js";
 import { businessError, forbidden, notFound, validationError } from "../lib/errors.js";
 import { hasPermission } from "./authService.js";
-import { todayWorkDateWib } from "../utils/format.js";
+import { userHasBranchAccess } from "./branchMembershipService.js";
+import { assertBranchAccess } from "./branchAccess.js";
+import { todayWorkDateWib, formatWibIso } from "../utils/format.js";
 export async function adjustEmployeeKpi(manager, employeeId, data) {
     if (!hasPermission(manager, "kpi.adjust")) {
         throw forbidden();
@@ -19,9 +21,7 @@ export async function adjustEmployeeKpi(manager, employeeId, data) {
     });
     if (!employee || !employee.isActive)
         throw notFound("Karyawan tidak ditemukan");
-    if (manager.branchId &&
-        manager.branchId !== employee.branchId &&
-        !manager.roles.includes("owner")) {
+    if (!userHasBranchAccess(manager.branchIds, manager.roles, employee.branchId)) {
         throw forbidden();
     }
     const workDate = todayWorkDateWib();
@@ -55,5 +55,42 @@ export async function adjustEmployeeKpi(manager, employeeId, data) {
         total_points: updated.totalPoints,
         bonus_applied: bonus,
     };
+}
+export async function listBranchKpiEvaluations(user, branchId, options) {
+    if (!hasPermission(user, "kpi.adjust")) {
+        throw forbidden();
+    }
+    assertBranchAccess(user, branchId);
+    const limit = Math.min(Math.max(options?.limit ?? 50, 1), 100);
+    const items = await prisma.managerEvaluation.findMany({
+        where: {
+            employee: {
+                branchId,
+                ...(options?.employee_id ? { id: options.employee_id } : {}),
+            },
+        },
+        include: {
+            employee: { select: { id: true, nik: true, fullName: true } },
+            manager: { select: { id: true, nik: true, fullName: true } },
+        },
+        orderBy: { createdAt: "desc" },
+        take: limit,
+    });
+    return items.map((e) => ({
+        id: e.id,
+        bonus_points: e.bonusPoints,
+        note: e.note,
+        created_at: formatWibIso(e.createdAt),
+        employee: {
+            id: e.employee.id,
+            nik: e.employee.nik,
+            full_name: e.employee.fullName,
+        },
+        manager: {
+            id: e.manager.id,
+            nik: e.manager.nik,
+            full_name: e.manager.fullName,
+        },
+    }));
 }
 //# sourceMappingURL=kpiAdjustmentService.js.map

@@ -8,6 +8,11 @@ export declare function timeFromDbTime(value: Date): {
  * Positif = terlambat, negatif = lebih awal.
  */
 export declare function computeDeltaMinutes(checkInAt: Date, shiftStartTime: Date, workDate: Date): number;
+/**
+ * Selisih detik check-in terhadap shift start (WIB).
+ * Positif = terlambat, negatif = lebih awal.
+ */
+export declare function computeDeltaSeconds(checkInAt: Date, shiftStartTime: Date, workDate: Date): number;
 export declare function toDateOnly(value: Date): Date;
 /** Gabung tanggal (Date/ISO) + jam HH:mm ke Date UTC yang merepresentasikan WIB. */
 export declare function combineDateAndTimeWib(workDate: Date, hhmm: string): Date;

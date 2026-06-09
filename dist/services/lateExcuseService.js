@@ -1,5 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { businessError, forbidden, notFound } from "../lib/errors.js";
+import { userHasBranchAccess } from "./branchMembershipService.js";
 import { getAttendanceForLateExcuse } from "./attendanceQueryService.js";
 import { notifyLateExcuseReviewed } from "./notificationService.js";
 import { getSignedFileUrl, uploadPrivateFile } from "./storageService.js";
@@ -7,10 +8,17 @@ import { formatWibIso } from "../utils/format.js";
 export async function createLateExcuse(user, employeeId, data, file) {
     const attendance = await getAttendanceForLateExcuse(employeeId, data.attendance_id);
     const existing = await prisma.lateExcuse.findFirst({
-        where: { attendanceId: attendance.id, status: "pending" },
+        where: {
+            attendanceId: attendance.id,
+            status: { in: ["pending", "approved"] },
+        },
     });
     if (existing) {
         throw businessError("Sudah ada pengajuan keterlambatan yang menunggu review");
+    }
+    let uploaded = null;
+    if (file) {
+        uploaded = await uploadPrivateFile(file, `late-excuses/${employeeId}`);
     }
     const excuse = await prisma.lateExcuse.create({
         data: {
@@ -20,8 +28,7 @@ export async function createLateExcuse(user, employeeId, data, file) {
             status: "pending",
         },
     });
-    if (file) {
-        const uploaded = await uploadPrivateFile(file, `late-excuses/${employeeId}`);
+    if (uploaded) {
         await prisma.attachment.create({
             data: {
                 entityType: "late_excuse",
@@ -58,9 +65,8 @@ export async function reviewLateExcuse(reviewer, excuseId, data) {
     if (excuse.status !== "pending") {
         throw businessError("Pengajuan sudah direview");
     }
-    if (reviewer.branchId && reviewer.branchId !== excuse.employee.branchId) {
-        if (!reviewer.roles.includes("owner"))
-            throw forbidden();
+    if (!userHasBranchAccess(reviewer.branchIds, reviewer.roles, excuse.employee.branchId)) {
+        throw forbidden();
     }
     const updated = await prisma.lateExcuse.update({
         where: { id: excuseId },

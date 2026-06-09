@@ -2,13 +2,22 @@ import bcrypt from "bcrypt";
 import { env } from "../config/env.js";
 import { log } from "../lib/logger.js";
 import { prisma } from "../lib/prisma.js";
+/** NIK unik per cabang — cari employee dengan scope branch user bila ada. */
+export async function findEmployeeByNik(nik, branchId) {
+    if (branchId) {
+        return prisma.employee.findFirst({
+            where: { branchId, nik, isActive: true },
+        });
+    }
+    return prisma.employee.findFirst({
+        where: { nik, isActive: true },
+    });
+}
 export async function linkUserToEmployeeByNik(userId) {
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user || user.employeeId)
         return user?.employeeId ?? null;
-    const employee = await prisma.employee.findUnique({
-        where: { nik: user.nik },
-    });
+    const employee = await findEmployeeByNik(user.nik, user.branchId);
     if (!employee?.isActive)
         return null;
     const alreadyLinked = await prisma.user.findFirst({

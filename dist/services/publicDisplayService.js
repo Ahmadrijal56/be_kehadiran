@@ -18,16 +18,14 @@ export async function getPublicDisplay(yearMonth) {
     });
     const workDate = todayWorkDateWib();
     const workDateStr = workDate.toISOString().slice(0, 10);
-    const shiftDefs = await prisma.shift.findMany({
-        orderBy: { id: "asc" },
-        select: { id: true, code: true, name: true, startTime: true, endTime: true },
-    });
     const todayScores = await prisma.kpiDailyScore.findMany({
         where: { workDate },
         select: { employeeId: true, totalPoints: true },
     });
     const todayPointsByEmployee = new Map(todayScores.map((s) => [s.employeeId, s.totalPoints]));
     const branchBoards = await Promise.all(branches.map(async (b) => {
+        const { listBranchShiftDefs } = await import("./branchShiftConfigService.js");
+        const shiftDefs = await listBranchShiftDefs(b.id);
         const [stats, attendance, rankings] = await Promise.all([
             getBranchStatsToday(b.id),
             listBranchAttendanceToday(b.id),

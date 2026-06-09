@@ -179,7 +179,7 @@ export async function importShiftScheduleTemplateExcel(
   const byName = new Map(employees.map((e) => [normalizeName(e.full_name), e]));
 
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(fileBuffer);
+  await workbook.xlsx.load(fileBuffer as any);
   const sheet = workbook.getWorksheet("Jadwal Shift") ?? workbook.worksheets[0];
   if (!sheet) throw validationError("File Excel tidak berisi sheet");
 

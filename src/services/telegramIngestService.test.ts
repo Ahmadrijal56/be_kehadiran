@@ -75,7 +75,7 @@ describe("telegram ingest (integration)", () => {
     const row = await prisma.telegramMessage.findUnique({ where: { id } });
     expect(row?.syncStatus).toBe("processed");
 
-    const employee = await prisma.employee.findUnique({ where: { nik: "999999" } });
+    const employee = await prisma.employee.findFirst({ where: { nik: "999999" } });
     expect(employee).toBeTruthy();
   });
 
@@ -96,7 +96,7 @@ Waktu: 03/06/2026 08:21:50`,
     const row = await prisma.telegramMessage.findUnique({ where: { id } });
     expect(row?.syncStatus).toBe("processed");
 
-    const employee = await prisma.employee.findUnique({ where: { nik: "102" } });
+    const employee = await prisma.employee.findFirst({ where: { nik: "102" } });
     expect(employee?.fullName).toBe("DAFA");
   });
 
@@ -130,7 +130,7 @@ Waktu: 04/06/2026 17:00:00`,
     const pulangRow = await prisma.telegramMessage.findUnique({ where: { id: pulang.id } });
     expect(pulangRow?.syncStatus).toBe("processed");
 
-    const employee = await prisma.employee.findUnique({ where: { nik: "103" } });
+    const employee = await prisma.employee.findFirst({ where: { nik: "103" } });
     const attendance = await prisma.attendanceRecord.findUnique({
       where: {
         employeeId_workDate: {
@@ -169,7 +169,7 @@ Waktu: ${waktu}`;
       await processTelegramMessageById(id);
     }
 
-    const employee = await prisma.employee.findUnique({ where: { nik: "104" } });
+    const employee = await prisma.employee.findFirst({ where: { nik: "104" } });
     const attendance = await prisma.attendanceRecord.findUnique({
       where: {
         employeeId_workDate: {
@@ -211,7 +211,7 @@ Waktu: ${waktu}`;
     });
     await processTelegramMessageById(istirahat.id);
 
-    const employee = await prisma.employee.findUnique({ where: { nik: "105" } });
+    const employee = await prisma.employee.findFirst({ where: { nik: "105" } });
     const attendance = await prisma.attendanceRecord.findUnique({
       where: {
         employeeId_workDate: {

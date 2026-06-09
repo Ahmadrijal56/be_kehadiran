@@ -56,8 +56,9 @@ export async function getBranchLeaderboard(branchId, user, yearMonth) {
     if (!branch)
         throw notFound("Cabang tidak ditemukan");
     const canViewAll = hasPermission(user, "attendance.read.all");
-    const canViewBranch = hasPermission(user, "attendance.read.branch") && user.branchId === branchId;
-    const canViewSelf = hasPermission(user, "attendance.read.self") && user.branchId === branchId;
+    const canViewBranch = hasPermission(user, "attendance.read.branch") &&
+        user.branchIds.includes(branchId);
+    const canViewSelf = hasPermission(user, "attendance.read.self") && user.branchIds.includes(branchId);
     if (!canViewAll && !canViewBranch && !canViewSelf) {
         throw forbidden();
     }

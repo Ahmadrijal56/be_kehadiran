@@ -60,7 +60,7 @@ describe("telegram ingest (integration)", () => {
         await processTelegramMessageById(id);
         const row = await prisma.telegramMessage.findUnique({ where: { id } });
         expect(row?.syncStatus).toBe("processed");
-        const employee = await prisma.employee.findUnique({ where: { nik: "999999" } });
+        const employee = await prisma.employee.findFirst({ where: { nik: "999999" } });
         expect(employee).toBeTruthy();
     });
     it("TC-022b: VT490 format → parsed & attendance tersimpan", async () => {
@@ -78,7 +78,7 @@ Waktu: 03/06/2026 08:21:50`,
         await processTelegramMessageById(id);
         const row = await prisma.telegramMessage.findUnique({ where: { id } });
         expect(row?.syncStatus).toBe("processed");
-        const employee = await prisma.employee.findUnique({ where: { nik: "102" } });
+        const employee = await prisma.employee.findFirst({ where: { nik: "102" } });
         expect(employee?.fullName).toBe("DAFA");
     });
     it("TC-022c: VT490 MASUK + PULANG terpisah → satu attendance record", async () => {
@@ -108,7 +108,7 @@ Waktu: 04/06/2026 17:00:00`,
         await processTelegramMessageById(pulang.id);
         const pulangRow = await prisma.telegramMessage.findUnique({ where: { id: pulang.id } });
         expect(pulangRow?.syncStatus).toBe("processed");
-        const employee = await prisma.employee.findUnique({ where: { nik: "103" } });
+        const employee = await prisma.employee.findFirst({ where: { nik: "103" } });
         const attendance = await prisma.attendanceRecord.findUnique({
             where: {
                 employeeId_workDate: {
@@ -120,6 +120,79 @@ Waktu: 04/06/2026 17:00:00`,
         expect(attendance?.checkInAt).toBeTruthy();
         expect(attendance?.checkOutAt).toBeTruthy();
         expect(attendance?.status).toBe("left");
+    });
+    it("TC-022d: VT490 empat absen MASUK berurutan → masuk, istirahat, pulang", async () => {
+        const vt490 = (waktu) => `Perusahaan: APT MANJUR SEHAT TSI
+ID: 104
+Nama: BUDI
+Dept.: Ttk
+Mode Verifikasi: face
+Status: MASUK
+Waktu: ${waktu}`;
+        const scans = [
+            { waktu: "05/06/2026 08:00:00", label: "check_in" },
+            { waktu: "05/06/2026 12:00:00", label: "break_start" },
+            { waktu: "05/06/2026 12:30:00", label: "break_end" },
+            { waktu: "05/06/2026 17:00:00", label: "check_out" },
+        ];
+        for (let i = 0; i < scans.length; i++) {
+            const { id } = await saveTelegramWebhookMessage({
+                messageId: BigInt(111300 + i),
+                groupId: GROUP_ID,
+                rawText: vt490(scans[i].waktu),
+            });
+            await processTelegramMessageById(id);
+        }
+        const employee = await prisma.employee.findFirst({ where: { nik: "104" } });
+        const attendance = await prisma.attendanceRecord.findUnique({
+            where: {
+                employeeId_workDate: {
+                    employeeId: employee.id,
+                    workDate: new Date("2026-06-05"),
+                },
+            },
+            include: { breakSessions: true },
+        });
+        expect(attendance?.checkInAt).toBeTruthy();
+        expect(attendance?.checkOutAt).toBeTruthy();
+        expect(attendance?.breakSessions).toHaveLength(1);
+        expect(attendance?.breakSessions[0]?.breakStartAt).toBeTruthy();
+        expect(attendance?.breakSessions[0]?.breakEndAt).toBeTruthy();
+        expect(attendance?.status).toBe("left");
+    });
+    it("TC-022e: VT490 MASUK jam berbeda tidak menimpa jam masuk", async () => {
+        const vt490 = (waktu) => `Perusahaan: APT MANJUR SEHAT TSI
+ID: 105
+Nama: CICI
+Dept.: Ttk
+Mode Verifikasi: face
+Status: MASUK
+Waktu: ${waktu}`;
+        const masuk = await saveTelegramWebhookMessage({
+            messageId: BigInt(111310),
+            groupId: GROUP_ID,
+            rawText: vt490("09/06/2026 08:00:00"),
+        });
+        await processTelegramMessageById(masuk.id);
+        const istirahat = await saveTelegramWebhookMessage({
+            messageId: BigInt(111311),
+            groupId: GROUP_ID,
+            rawText: vt490("09/06/2026 12:00:00"),
+        });
+        await processTelegramMessageById(istirahat.id);
+        const employee = await prisma.employee.findFirst({ where: { nik: "105" } });
+        const attendance = await prisma.attendanceRecord.findUnique({
+            where: {
+                employeeId_workDate: {
+                    employeeId: employee.id,
+                    workDate: new Date("2026-06-09"),
+                },
+            },
+            include: { breakSessions: true },
+        });
+        expect(attendance?.checkInAt?.toISOString()).toContain("T01:00:00");
+        expect(attendance?.breakSessions).toHaveLength(1);
+        expect(attendance?.breakSessions[0]?.breakStartAt?.toISOString()).toContain("T05:00:00");
     });
     it("TC-023: format rusak (tanpa NIK) → failed", async () => {
         const { id } = await saveTelegramWebhookMessage({

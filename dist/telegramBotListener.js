@@ -7,7 +7,8 @@
  * BioFinger kirim pesan pakai bot token → chat pribadi admin.
  * Bot MTProto bisa baca riwayat pesan yang bot kirim sendiri (outgoing).
  */
-import "dotenv/config";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions";
 import { NewMessage } from "telegram/events";
@@ -77,7 +78,7 @@ async function catchUpRecent(client) {
         });
     }
 }
-async function main() {
+export async function startBiofingerBotListener() {
     const apiId = Number(env.telegramApiId);
     const apiHash = env.telegramApiHash;
     const botToken = env.telegramBotToken;
@@ -109,11 +110,15 @@ async function main() {
     log("info", "Menunggu absensi baru dari BioFinger…");
     await new Promise(() => { });
 }
-main().catch((err) => {
-    log("error", "MTProto bot listener crashed", {
-        error: err instanceof Error ? err.message : String(err),
+const isDirectRun = !!process.argv[1] &&
+    fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+if (isDirectRun) {
+    startBiofingerBotListener().catch((err) => {
+        log("error", "MTProto bot listener crashed", {
+            error: err instanceof Error ? err.message : String(err),
+        });
+        process.exit(1);
     });
-    process.exit(1);
-});
-process.on("SIGTERM", () => process.exit(0));
+    process.on("SIGTERM", () => process.exit(0));
+}
 //# sourceMappingURL=telegramBotListener.js.map

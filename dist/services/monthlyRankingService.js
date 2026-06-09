@@ -1,6 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { validationError } from "../lib/errors.js";
-import { rewardAmountForType } from "../constants/rewards.js";
+import { rewardAmountFromSettings } from "./organizationConfigService.js";
 import { notifyAchievementEarned } from "./notificationService.js";
 function monthRange(yearMonth) {
     if (!/^\d{4}-\d{2}$/.test(yearMonth)) {
@@ -113,7 +113,7 @@ async function createAchievementWithReward(employeeId, type, scope, yearMonth, p
             pointsSnapshot,
         },
     });
-    const amount = rewardAmountForType(type);
+    const amount = await rewardAmountFromSettings(type);
     if (amount) {
         await prisma.reward.create({
             data: {

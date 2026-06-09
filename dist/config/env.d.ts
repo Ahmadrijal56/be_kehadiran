@@ -34,5 +34,7 @@ export declare const env: {
     readonly admsPort: number;
     /** Token lisensi untuk registrasi owner pertama via halaman login. */
     readonly ownerLicenseToken: string;
+    /** Token untuk POST /dev/attendance/ingest (bypass manual, development). */
+    readonly manualIngestToken: string;
 };
 //# sourceMappingURL=env.d.ts.map
