@@ -9,13 +9,37 @@ async function main() {
   try {
     log("info", "🚀 Kehadiran API starting...", { env: env.nodeEnv });
 
-    // Run database migrations first
+    // Validate DATABASE_URL is set in production
     if (env.nodeEnv === "production") {
-      await runMigrations();
+      if (!process.env.DATABASE_URL || process.env.DATABASE_URL === "") {
+        throw new Error(
+          "DATABASE_URL environment variable is not set in production"
+        );
+      }
+      log("info", "✅ DATABASE_URL configured", {
+        host: process.env.DATABASE_URL?.split("@")[1]?.split("/")[0] || "unknown",
+      });
+    }
+
+    // Run database migrations first (don't crash if fails)
+    if (env.nodeEnv === "production") {
+      try {
+        await runMigrations();
+      } catch (migErr) {
+        log("warn", "Migration process error (continuing startup)", {
+          error: migErr instanceof Error ? migErr.message : String(migErr),
+        });
+      }
     }
 
     // Check database and Redis before starting server
-    await checkStartupHealth();
+    try {
+      await checkStartupHealth();
+    } catch (healthErr) {
+      log("warn", "Health check warning (continuing)", {
+        error: healthErr instanceof Error ? healthErr.message : String(healthErr),
+      });
+    }
 
     app.listen(env.port, () => {
       log("info", "✅ Server listening", {
