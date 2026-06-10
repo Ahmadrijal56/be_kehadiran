@@ -3,6 +3,7 @@ import { startBackgroundServices } from "./bootstrap.js";
 import { env } from "./config/env.js";
 import { checkStartupHealth } from "./lib/startup-check.js";
 import { runMigrations } from "./lib/run-migrations.js";
+import { runSeed } from "./lib/run-seed.js";
 import { log } from "./lib/logger.js";
 
 async function main() {
@@ -25,8 +26,10 @@ async function main() {
     if (env.nodeEnv === "production") {
       try {
         await runMigrations();
+        // Run seed after migrations
+        await runSeed();
       } catch (migErr) {
-        log("warn", "Migration process error (continuing startup)", {
+        log("warn", "Migration/seed process error (continuing startup)", {
           error: migErr instanceof Error ? migErr.message : String(migErr),
         });
       }
