@@ -41,7 +41,7 @@ settingsRouter.get(
   asyncHandler(async (_req, res) => {
     const [settings, kpi_rules] = await Promise.all([
       getGamificationSettings(),
-      listKpiPointRules(),
+      listKpiPointRules({ activeOnly: false }),
     ]);
     res.json({ data: { settings, kpi_rules } });
   })

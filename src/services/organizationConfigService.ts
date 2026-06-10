@@ -4,6 +4,7 @@ import {
   DEFAULT_GAMIFICATION_SETTINGS,
   DEFAULT_KPI_POINT_RULES,
 } from "../constants/defaultKpiRules.js";
+import { formatOffsetRange } from "../lib/kpiOffsetTime.js";
 import { WORK_SHIFT_IDS } from "../constants/shifts.js";
 import { forbidden, validationError } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
@@ -23,8 +24,8 @@ export type EmployeeTypeRow = {
 export type KpiPointRuleRow = {
   id: string;
   points: number;
-  min_minutes: number;
-  max_minutes: number | null;
+  min_seconds: number;
+  max_seconds: number | null;
   label: string;
   sort_order: number;
   is_active: boolean;
@@ -71,19 +72,6 @@ function formatIdr(amount: number): string {
   return `Rp ${amount.toLocaleString("id-ID")}`;
 }
 
-function formatMinuteRange(min: number, max: number | null): string {
-  const fmt = (m: number) => {
-    const sign = m > 0 ? "+" : m < 0 ? "−" : "";
-    const abs = Math.abs(m);
-    return `${sign}${abs} menit`;
-  };
-  if (min === 0 && max === 0) return "+0 menit (tepat jam mulai shift)";
-  if (max === null) return `> ${fmt(min)} setelah mulai shift`;
-  if (min < 0 && max < 0) return `${fmt(min)} s/d ${fmt(max)} sebelum mulai shift`;
-  if (min <= 0 && max > 0) return `${fmt(min)} s/d ${fmt(max)} setelah mulai shift`;
-  return `${fmt(min)} s/d ${fmt(max ?? min)}`;
-}
-
 function assertCanManageEmployeeTypes(actor: AuthUser) {
   if (
     !actor.roles.includes("owner") &&
@@ -118,8 +106,8 @@ export async function ensureOrganizationDefaults(): Promise<void> {
       await prisma.kpiPointRule.create({
         data: {
           points: r.points,
-          minMinutes: r.min_minutes,
-          maxMinutes: r.max_minutes,
+          minOffsetSeconds: r.min_seconds,
+          maxOffsetSeconds: r.max_seconds,
           label: r.label,
           sortOrder: r.sort_order,
         },
@@ -237,17 +225,20 @@ export async function getGamificationSettings(): Promise<GamificationSettingsRow
   };
 }
 
-export async function listKpiPointRules(): Promise<KpiPointRuleRow[]> {
+export async function listKpiPointRules(options?: {
+  activeOnly?: boolean;
+}): Promise<KpiPointRuleRow[]> {
   await ensureOrganizationDefaults();
+  const activeOnly = options?.activeOnly ?? true;
   const rows = await prisma.kpiPointRule.findMany({
-    where: { isActive: true },
+    where: activeOnly ? { isActive: true } : undefined,
     orderBy: { sortOrder: "asc" },
   });
   return rows.map((r) => ({
     id: r.id,
     points: r.points,
-    min_minutes: r.minMinutes,
-    max_minutes: r.maxMinutes,
+    min_seconds: r.minOffsetSeconds,
+    max_seconds: r.maxOffsetSeconds,
     label: r.label,
     sort_order: r.sortOrder,
     is_active: r.isActive,
@@ -290,8 +281,8 @@ export async function saveGamificationConfig(
     kpi_rules?: Array<{
       id?: string;
       points: number;
-      min_minutes: number;
-      max_minutes: number | null;
+      min_seconds: number;
+      max_seconds: number | null;
       label: string;
       sort_order: number;
       is_active?: boolean;
@@ -318,8 +309,11 @@ export async function saveGamificationConfig(
       throw validationError("Minimal 3 aturan poin diperlukan");
     }
     for (const rule of data.kpi_rules) {
-      if (rule.max_minutes !== null && rule.max_minutes < rule.min_minutes) {
+      if (rule.max_seconds !== null && rule.max_seconds < rule.min_seconds) {
         throw validationError(`Range tidak valid: ${rule.label}`);
+      }
+      if (rule.points < -99 || rule.points > 99) {
+        throw validationError(`Nilai poin tidak valid: ${rule.label}`);
       }
     }
   }
@@ -351,8 +345,8 @@ export async function saveGamificationConfig(
       ...data.kpi_rules.map((rule) => {
         const payload = {
           points: rule.points,
-          minMinutes: rule.min_minutes,
-          maxMinutes: rule.max_minutes,
+          minOffsetSeconds: rule.min_seconds,
+          maxOffsetSeconds: rule.max_seconds,
           label: rule.label.trim(),
           sortOrder: rule.sort_order,
           isActive: rule.is_active ?? true,
@@ -376,12 +370,12 @@ export async function saveGamificationConfig(
     action: "gamification_settings.update",
     entityType: "gamification_settings",
     entityId: "default",
-    newValues: { fields: Object.keys(data) },
+    newValues: { settings_id: "default", fields: Object.keys(data) },
   });
 
   return {
     settings: await getGamificationSettings(),
-    kpi_rules: await listKpiPointRules(),
+    kpi_rules: await listKpiPointRules({ activeOnly: false }),
   };
 }
 
@@ -421,7 +415,7 @@ export async function getPublicRules(): Promise<PublicRulesPayload> {
     late_rule: `Karyawan dianggap telat bila scan Face ID lebih dari +${settings.late_threshold_seconds} detik setelah jam mulai shift.`,
     point_rules: rules.map((r) => ({
       point: r.points,
-      range: formatMinuteRange(r.min_minutes, r.max_minutes),
+      range: formatOffsetRange(r.min_seconds, r.max_seconds),
       detail: r.label,
     })),
     monthly_rewards: {

@@ -105,18 +105,19 @@ export function calculateKpiScoreFromRules(
   lateThresholdSeconds: number,
   rules: KpiPointRuleRow[]
 ): KpiScoreResult {
-  const { onTime, scoringMinutes } = resolveScoringMinutes(
-    deltaSeconds,
-    lateThresholdSeconds
-  );
+  const onTime =
+    deltaSeconds <= lateThresholdSeconds &&
+    deltaSeconds >= -lateThresholdSeconds;
 
-  const sorted = [...rules].sort((a, b) => a.sort_order - b.sort_order);
+  const sorted = [...rules]
+    .filter((r) => r.is_active)
+    .sort((a, b) => a.sort_order - b.sort_order);
 
   for (const rule of sorted) {
     if (
       rule.points === 0 &&
-      rule.min_minutes === 0 &&
-      rule.max_minutes === 0
+      rule.min_seconds === 0 &&
+      rule.max_seconds === 0
     ) {
       if (onTime) {
         return {
@@ -128,11 +129,11 @@ export function calculateKpiScoreFromRules(
       continue;
     }
 
-    const max = rule.max_minutes;
+    const max = rule.max_seconds;
     const matches =
       max === null
-        ? scoringMinutes >= rule.min_minutes
-        : scoringMinutes >= rule.min_minutes && scoringMinutes <= max;
+        ? deltaSeconds >= rule.min_seconds
+        : deltaSeconds >= rule.min_seconds && deltaSeconds <= max;
 
     if (matches) {
       return {
@@ -143,5 +144,9 @@ export function calculateKpiScoreFromRules(
     }
   }
 
+  const { scoringMinutes } = resolveScoringMinutes(
+    deltaSeconds,
+    lateThresholdSeconds
+  );
   return calculateKpiScore(scoringMinutes);
 }
