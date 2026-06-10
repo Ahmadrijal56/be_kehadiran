@@ -9,7 +9,7 @@ export async function runSeed(): Promise<void> {
 
     try {
       const result = execSync(
-        "cd /app && npm run seed 2>&1",
+        "cd /app && npm run db:seed 2>&1",
         {
           encoding: "utf-8",
           stdio: "pipe",
