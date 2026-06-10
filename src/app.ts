@@ -17,9 +17,10 @@ import { getPublicDisplay } from "./services/publicDisplayService.js";
 
 export const app = express();
 
-// Trust proxy for behind reverse proxy (Railway, Vercel, etc)
+// Railway (dan PaaS lain) mem-proxy request lewat satu hop.
+// `true` ditolak express-rate-limit v8; `1` = percaya hop pertama saja.
 if (env.nodeEnv === "production") {
-  app.set("trust proxy", true);
+  app.set("trust proxy", 1);
 }
 
 app.use(
