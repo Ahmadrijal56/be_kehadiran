@@ -71,7 +71,7 @@ export async function registerOwner(data: {
     where: { OR: [{ nik }, ...(email ? [{ email }] : [])] },
   });
   if (existing) {
-    throw businessError("NIK atau email sudah terdaftar");
+    throw businessError("ID atau email sudah terdaftar");
   }
 
   const passwordHash = await bcrypt.hash(password, 10);

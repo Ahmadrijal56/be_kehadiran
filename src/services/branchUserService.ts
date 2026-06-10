@@ -119,7 +119,7 @@ async function ensureEmployeeRecord(
     const linked = await prisma.user.findFirst({
       where: { employeeId: existingEmp.id },
     });
-    if (linked) throw businessError("Karyawan dengan NIK ini sudah memiliki akun");
+    if (linked) throw businessError("Karyawan dengan ID ini sudah memiliki akun");
     return existingEmp.id;
   }
 
@@ -217,7 +217,7 @@ export async function createBranchUser(
   const existing = await prisma.user.findFirst({
     where: { OR: [{ nik }, ...(email ? [{ email }] : [])] },
   });
-  if (existing) throw businessError("NIK atau email sudah terdaftar");
+  if (existing) throw businessError("ID atau email sudah terdaftar");
 
   let employeeId: string | null = null;
   if (role === "employee") {

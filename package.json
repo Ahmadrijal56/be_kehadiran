@@ -29,7 +29,9 @@
     "telegram:get-chat-id": "tsx scripts/telegram-get-chat-id.ts",
     "telegram:user-login": "tsx scripts/telegram-user-login.ts",
     "telegram:bot-listen": "tsx src/telegramBotListener.ts",
+    "telegram:biofinger": "tsx src/telegramBotListener.ts",
     "telegram:poll": "tsx src/telegramListener.ts",
+    "telegram:listen": "tsx src/telegramListener.ts",
     "telegram:user-listen": "tsx src/telegramUserListener.ts"
   },
   "prisma": {

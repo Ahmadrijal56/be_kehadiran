@@ -2,7 +2,7 @@ import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { asyncHandler } from "../../middleware/asyncHandler.js";
 import { env } from "../../config/env.js";
-import { getPublicDisplay } from "../../services/publicDisplayService.js";
+import { getPublicDisplay, getPublicDisplayBranch, getPublicDisplayBranches } from "../../services/publicDisplayService.js";
 import { getPublicRules } from "../../services/organizationConfigService.js";
 
 const isTest = env.nodeEnv === "test" || process.env.VITEST === "true";
@@ -23,22 +23,33 @@ export const publicDisplayRateLimit = rateLimit({
 export const publicRouter = Router();
 
 publicRouter.get(
+  "/display/branches",
+  publicDisplayRateLimit,
+  asyncHandler(async (_req, res) => {
+    const data = await getPublicDisplayBranches();
+    res.json({ data });
+  })
+);
+
+publicRouter.get(
   "/display",
   publicDisplayRateLimit,
   asyncHandler(async (req, res) => {
     const month = req.query.month as string | undefined;
-    
-    // Validate month format if provided
-    if (month && !/^\d{4}-\d{2}$/.test(month)) {
-      res.status(400).json({
-        error: {
-          code: "INVALID_MONTH_FORMAT",
-          message: "Invalid month format. Use YYYY-MM format (e.g., 2026-05)",
-        },
-      });
+    const branchId = req.query.branch_id as string | undefined;
+
+    if (branchId) {
+      const data = await getPublicDisplayBranch(branchId, month);
+      if (!data) {
+        res.status(404).json({
+          error: { code: "BRANCH_NOT_FOUND", message: "Cabang tidak ditemukan" },
+        });
+        return;
+      }
+      res.json({ data });
       return;
     }
-    
+
     const data = await getPublicDisplay(month);
     res.json({ data });
   })

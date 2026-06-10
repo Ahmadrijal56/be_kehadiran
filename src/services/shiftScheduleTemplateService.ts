@@ -74,11 +74,11 @@ export async function buildShiftScheduleTemplateExcel(
   sheet.getCell(2, 3).value = "branch_id";
   sheet.getCell(2, 4).value = branchId;
   sheet.getCell(2, 5).value =
-    "Petunjuk: isi 1–5 (shift) atau L (libur). Jangan ubah employee_id / NIK.";
+    "Petunjuk: isi 1–5 (shift) atau L (libur). Jangan ubah employee_id / ID.";
 
   const headers = [
     "employee_id",
-    "nik",
+    "id",
     "nama_lengkap",
     "shift_default",
     ...schedule.days,

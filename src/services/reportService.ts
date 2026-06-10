@@ -117,7 +117,7 @@ export async function buildReportExcel(params: {
     const report = await getDailyReport(params.from, params.to);
     sheet.columns = [
       { header: "Tanggal", key: "work_date", width: 12 },
-      { header: "NIK", key: "nik", width: 12 },
+      { header: "ID", key: "nik", width: 12 },
       { header: "Nama", key: "full_name", width: 24 },
       { header: "Cabang", key: "branch_code", width: 10 },
       { header: "Shift", key: "shift_code", width: 8 },
@@ -130,7 +130,7 @@ export async function buildReportExcel(params: {
   } else if (params.type === "monthly") {
     const report = await getMonthlyReport(params.year_month);
     sheet.columns = [
-      { header: "NIK", key: "nik", width: 12 },
+      { header: "ID", key: "nik", width: 12 },
       { header: "Nama", key: "full_name", width: 24 },
       { header: "Cabang", key: "branch_code", width: 10 },
       { header: "Total Poin", key: "total_points", width: 12 },
@@ -144,7 +144,7 @@ export async function buildReportExcel(params: {
     const report = await getLateReport(params.from, params.to);
     sheet.columns = [
       { header: "Tanggal", key: "work_date", width: 12 },
-      { header: "NIK", key: "nik", width: 12 },
+      { header: "ID", key: "nik", width: 12 },
       { header: "Nama", key: "full_name", width: 24 },
       { header: "Cabang", key: "branch_code", width: 10 },
       { header: "Telat (mnt)", key: "late_minutes", width: 12 },

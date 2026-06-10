@@ -30,6 +30,143 @@ export type PublicBranchBoard = {
   schedule_today: PublicBranchSchedule;
 };
 
+export type PublicBranchSummary = {
+  branch_id: string;
+  code: string;
+  name: string;
+  summary_today: PublicBranchBoard["summary_today"];
+};
+
+async function loadTodayPointsByEmployee(workDate: Date) {
+  const todayScores = await prisma.kpiDailyScore.findMany({
+    where: { workDate },
+    select: { employeeId: true, totalPoints: true },
+  });
+  return new Map(todayScores.map((s) => [s.employeeId, s.totalPoints]));
+}
+
+async function buildBranchBoard(
+  b: { id: string; code: string; name: string },
+  ym: string,
+  workDate: Date,
+  todayPointsByEmployee: Map<string, number>
+): Promise<PublicBranchBoard> {
+  const { listBranchShiftDefs } = await import("./branchShiftConfigService.js");
+  const shiftDefs = await listBranchShiftDefs(b.id);
+  const [stats, attendance, rankings] = await Promise.all([
+    getBranchStatsToday(b.id),
+    listBranchAttendanceToday(b.id),
+    computeBranchLeaderboard(b.id, ym),
+  ]);
+  const attByNik = new Map(attendance.items.map((a) => [a.nik, a]));
+
+  return {
+    branch_id: b.id,
+    code: b.code,
+    name: b.name,
+    summary_today: stats,
+    rankings: rankings.map((r) => {
+      const att = attByNik.get(r.nik);
+      const checkIn = att?.check_in_at;
+      const status = att?.status ?? "absent";
+      const today_points =
+        status === "absent"
+          ? null
+          : (todayPointsByEmployee.get(r.employee_id) ?? null);
+      return {
+        rank: r.rank,
+        nik: r.nik,
+        full_name: r.full_name,
+        total_points: r.total_points,
+        total_late_count: r.total_late_count,
+        today_status: status,
+        today_check_in: checkIn ? checkIn.slice(11, 16) : null,
+        today_points,
+      };
+    }),
+    schedule_today: buildBranchScheduleToday(attendance.items, shiftDefs),
+  };
+}
+
+/** Ringan — hanya daftar cabang + ringkasan hari ini (untuk picker). */
+export async function getPublicDisplayBranches() {
+  const ym = currentYearMonthWib();
+  const cacheKey = `public:display:branches:${ym}`;
+  const cached = await cacheGet<{
+    year_month: string;
+    work_date: string;
+    generated_at: string;
+    branches: PublicBranchSummary[];
+  }>(cacheKey);
+  if (cached) return { ...cached, cached: true as const };
+
+  const branches = await prisma.branch.findMany({
+    where: { isActive: true },
+    orderBy: { name: "asc" },
+    select: { id: true, code: true, name: true },
+  });
+
+  const workDate = todayWorkDateWib();
+  const workDateStr = workDate.toISOString().slice(0, 10);
+
+  const summaries = await Promise.all(
+    branches.map((b) => getBranchStatsToday(b.id))
+  );
+
+  const payload = {
+    year_month: ym,
+    work_date: workDateStr,
+    generated_at: new Date().toISOString(),
+    branches: branches.map((b, i) => ({
+      branch_id: b.id,
+      code: b.code,
+      name: b.name,
+      summary_today: summaries[i]!,
+    })),
+    cached: false as const,
+  };
+
+  await cacheSet(cacheKey, payload, CACHE_TTL);
+  return payload;
+}
+
+/** Satu cabang lengkap — ranking + jadwal (saat user pilih cabang). */
+export async function getPublicDisplayBranch(branchId: string, yearMonth?: string) {
+  const ym = yearMonth ?? currentYearMonthWib();
+  const cacheKey = `public:display:branch:${branchId}:${ym}`;
+  const cached = await cacheGet<{
+    year_month: string;
+    work_date: string;
+    generated_at: string;
+    branch: PublicBranchBoard;
+  }>(cacheKey);
+  if (cached) return { ...cached, cached: true as const };
+
+  const branch = await prisma.branch.findFirst({
+    where: { id: branchId, isActive: true },
+    select: { id: true, code: true, name: true },
+  });
+  if (!branch) {
+    return null;
+  }
+
+  const workDate = todayWorkDateWib();
+  const workDateStr = workDate.toISOString().slice(0, 10);
+  const todayPointsByEmployee = await loadTodayPointsByEmployee(workDate);
+  const board = await buildBranchBoard(branch, ym, workDate, todayPointsByEmployee);
+
+  const payload = {
+    year_month: ym,
+    work_date: workDateStr,
+    generated_at: new Date().toISOString(),
+    branch: board,
+    cached: false as const,
+  };
+
+  await cacheSet(cacheKey, payload, CACHE_TTL);
+  return payload;
+}
+
 export async function getPublicDisplay(yearMonth?: string) {
   const ym = yearMonth ?? currentYearMonthWib();
   const cacheKey = `public:display:${ym}`;
@@ -49,53 +186,10 @@ export async function getPublicDisplay(yearMonth?: string) {
 
   const workDate = todayWorkDateWib();
   const workDateStr = workDate.toISOString().slice(0, 10);
-
-  const todayScores = await prisma.kpiDailyScore.findMany({
-    where: { workDate },
-    select: { employeeId: true, totalPoints: true },
-  });
-  const todayPointsByEmployee = new Map(
-    todayScores.map((s) => [s.employeeId, s.totalPoints])
-  );
+  const todayPointsByEmployee = await loadTodayPointsByEmployee(workDate);
 
   const branchBoards: PublicBranchBoard[] = await Promise.all(
-    branches.map(async (b) => {
-      const { listBranchShiftDefs } = await import("./branchShiftConfigService.js");
-      const shiftDefs = await listBranchShiftDefs(b.id);
-      const [stats, attendance, rankings] = await Promise.all([
-        getBranchStatsToday(b.id),
-        listBranchAttendanceToday(b.id),
-        computeBranchLeaderboard(b.id, ym),
-      ]);
-      const attByNik = new Map(attendance.items.map((a) => [a.nik, a]));
-
-      return {
-        branch_id: b.id,
-        code: b.code,
-        name: b.name,
-        summary_today: stats,
-        rankings: rankings.map((r) => {
-          const att = attByNik.get(r.nik);
-          const checkIn = att?.check_in_at;
-          const status = att?.status ?? "absent";
-          const today_points =
-            status === "absent"
-              ? null
-              : (todayPointsByEmployee.get(r.employee_id) ?? null);
-          return {
-            rank: r.rank,
-            nik: r.nik,
-            full_name: r.full_name,
-            total_points: r.total_points,
-            total_late_count: r.total_late_count,
-            today_status: status,
-            today_check_in: checkIn ? checkIn.slice(11, 16) : null,
-            today_points,
-          };
-        }),
-        schedule_today: buildBranchScheduleToday(attendance.items, shiftDefs),
-      };
-    })
+    branches.map((b) => buildBranchBoard(b, ym, workDate, todayPointsByEmployee))
   );
 
   const payload = {

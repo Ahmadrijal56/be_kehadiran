@@ -68,7 +68,7 @@ export async function login(identifier: string, password: string) {
       entityType: "user",
       newValues: { identifier: identifier.trim(), reason: "user_not_found" },
     });
-    throw unauthorized("NIK/email atau password salah");
+    throw unauthorized("ID/email atau password salah");
   }
 
   const valid = await bcrypt.compare(password, user.passwordHash);
@@ -81,61 +81,75 @@ export async function login(identifier: string, password: string) {
       entityId: user.id,
       newValues: { identifier: identifier.trim(), reason: "invalid_password" },
     });
-    throw unauthorized("NIK/email atau password salah");
+    throw unauthorized("ID/email atau password salah");
   }
 
   await clearLoginFailures(identifier);
 
   const roles = user.userRoles.map((ur) => ur.role.code);
+  const roleIds = user.userRoles.map((ur) => ur.roleId);
 
-  let linkedEmployeeId = user.employeeId;
-  if (!linkedEmployeeId && roles.includes("employee")) {
-    linkedEmployeeId = await linkUserToEmployeeByNik(user.id);
-    if (linkedEmployeeId) {
-      user.employeeId = linkedEmployeeId;
-    }
+  if (!user.employeeId && roles.includes("employee")) {
+    const linked = await linkUserToEmployeeByNik(user.id);
+    if (linked) user.employeeId = linked;
   }
 
-  const roleIds = user.userRoles.map((ur) => ur.roleId);
-  const permissions = await prisma.rolePermission.findMany({
-    where: { roleId: { in: roleIds } },
-    include: { permission: true },
-  });
-  const permissionCodes = [...new Set(permissions.map((p) => p.permission.code))];
-  const branchIds = await getBranchIdsForUser(user.id, roles);
+  const [permissions, branchIds, tokens] = await Promise.all([
+    prisma.rolePermission.findMany({
+      where: { roleId: { in: roleIds } },
+      include: { permission: true },
+    }),
+    getBranchIdsForUser(user.id, roles),
+    issueTokenPair(user.id),
+  ]);
 
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { lastLoginAt: new Date() },
-  });
+  const branchId = user.branchId ?? branchIds[0] ?? null;
+  const permissionCodes = [...new Set(permissions.map((p) => p.permission.code))];
 
   const authUser: AuthUser = {
     id: user.id,
     nik: user.nik,
     fullName: user.fullName,
     email: user.email,
-    branchId: user.branchId ?? branchIds[0] ?? null,
+    branchId,
     branchIds,
     employeeId: user.employeeId,
     roles,
     permissions: permissionCodes,
   };
 
-  const tokens = await issueTokenPair(user.id);
+  const branchPromise = branchId
+    ? prisma.branch.findUnique({
+        where: { id: branchId },
+        select: { id: true, code: true, name: true },
+      })
+    : Promise.resolve(null);
 
-  await writeAuditLog({
-    userId: user.id,
-    action: "auth.login.success",
-    entityType: "user",
-    entityId: user.id,
-    newValues: { identifier: identifier.trim(), roles },
-  });
+  const [, branch] = await Promise.all([
+    prisma.user.update({
+      where: { id: user.id },
+      data: { lastLoginAt: new Date() },
+    }),
+    branchPromise,
+    writeAuditLog({
+      userId: user.id,
+      action: "auth.login.success",
+      entityType: "user",
+      entityId: user.id,
+      newValues: { identifier: identifier.trim(), roles },
+    }),
+  ]);
 
   return {
     access_token: tokens.access_token,
     refresh_token: tokens.refresh_token,
     expires_in: ACCESS_TTL_SEC,
-    user: await enrichAuthUserResponse(authUser),
+    user: {
+      ...mapAuthUserResponse(authUser),
+      branch: branch
+        ? { id: branch.id, code: branch.code, name: branch.name }
+        : null,
+    },
   };
 }
 
