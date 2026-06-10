@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Build output (Railway/Nixpacks rebuilds from source)
+dist/
+
+# Environment secrets — NEVER commit
+.env
+.env.local
+.env.*.local
+
+# Telegram MTProto session file
+.telegram-session
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test coverage
+coverage/
+
+# Temporary
+*.tmp
+*.swp
+
+# Database backups
+*_backup.*
+
+# User uploads
+storage/

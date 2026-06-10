@@ -26,13 +26,11 @@
     "create:manager-account": "tsx src/cli/createManagerAccount.ts",
     "create:employee-account": "tsx src/cli/createEmployeeAccount.ts",
     "telegram:set-webhook": "tsx scripts/set-telegram-webhook.ts",
-    "telegram:listen": "tsx src/telegramListener.ts",
-    "telegram:poll": "tsx src/telegramListener.ts",
     "telegram:get-chat-id": "tsx scripts/telegram-get-chat-id.ts",
     "telegram:user-login": "tsx scripts/telegram-user-login.ts",
-    "telegram:user-listen": "tsx src/telegramUserListener.ts",
     "telegram:bot-listen": "tsx src/telegramBotListener.ts",
-    "telegram:biofinger": "tsx src/telegramBotListener.ts"
+    "telegram:poll": "tsx src/telegramListener.ts",
+    "telegram:user-listen": "tsx src/telegramUserListener.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

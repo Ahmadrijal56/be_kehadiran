@@ -47,6 +47,17 @@ export const env = {
   telegramAdminUserId: process.env.TELEGRAM_ADMIN_USER_ID?.trim()
     ? BigInt(process.env.TELEGRAM_ADMIN_USER_ID.trim())
     : null,
+  /**
+   * Listener mode: 'auto' | 'bot' | 'polling' | 'user' | 'none'.
+   * auto = detect from available credentials (default).
+   */
+  telegramListenerMode: (process.env.TELEGRAM_LISTENER_MODE ?? "auto") as
+    | "auto"
+    | "bot"
+    | "polling"
+    | "user"
+    | "none",
+  telegramMonitorBotUsername: process.env.TELEGRAM_MONITOR_BOT_USERNAME?.replace(/^@/, "") ?? "",
   telegramUserSession: process.env.TELEGRAM_USER_SESSION ?? "",
 
   awsAccessKeyId: process.env.AWS_ACCESS_KEY_ID ?? "",

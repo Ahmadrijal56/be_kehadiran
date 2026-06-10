@@ -1,1 +1,0 @@
-{"version":3,"file":"branchAccess.d.ts","sourceRoot":"","sources":["../../src/services/branchAccess.ts"],"names":[],"mappings":"AACA,OAAO,KAAK,EAAE,QAAQ,EAAE,MAAM,kBAAkB,CAAC;AAGjD,wBAAgB,kBAAkB,CAAC,IAAI,EAAE,QAAQ,EAAE,QAAQ,EAAE,MAAM,GAAG,IAAI,CAIzE;AAED,wBAAgB,qBAAqB,CACnC,KAAK,EAAE,QAAQ,EACf,eAAe,EAAE,MAAM,EAAE,GACxB,OAAO,CAGT"}

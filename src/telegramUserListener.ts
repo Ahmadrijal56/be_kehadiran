@@ -1,16 +1,23 @@
 /**
- * Listener MTProto — baca pesan absensi BioFinger dari chat pribadi bot.
+ * MTProto user-client listener.
  *
- * BioFinger cuma punya Bot Token → kirim ke chat pribadi admin.
- * Bot API tidak bisa baca pesan yang dikirim bot sendiri.
- * Solusi: login akun Telegram ANDA (api_id + api_hash) → baca pesan dari @manjursehatkehadiran_bot
+ * Logs in as a Telegram user account (your phone) via MTProto to read
+ * messages that the BioFinger bot sends to your private chat.
  *
- * TIDAK perlu chat_id di mesin. TIDAK perlu grup. TIDAK perlu ADMS.
+ * Use this when the Bot API cannot see the messages (bot-to-bot private
+ * chat messages are invisible to Bot API `getUpdates`).
+ *
+ * Requires:
+ *   - TELEGRAM_API_ID + TELEGRAM_API_HASH  (from my.telegram.org)
+ *   - A session string: either TELEGRAM_USER_SESSION env var, or a
+ *     `.telegram-session` file created by `npm run telegram:user-login`.
+ *
+ * Exported as `startUserMtprotoListener()` so it can be launched from
+ * `bootstrap.ts`, OR run standalone via `npm run telegram:user-listen`.
  */
-import "dotenv/config";
-import { readFileSync, existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readFileSync, existsSync } from "node:fs";
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions";
 import { NewMessage } from "telegram/events";
@@ -20,12 +27,12 @@ import { enqueueProcessTelegramMessage } from "./lib/queue.js";
 import { log } from "./lib/logger.js";
 import { saveTelegramWebhookMessage } from "./services/telegramIngestService.js";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const SESSION_FILE = join(__dirname, "../.telegram-session");
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const SESSION_FILE = path.join(__dirname, "../.telegram-session");
 
-const BOT_USERNAME =
-  process.env.TELEGRAM_MONITOR_BOT_USERNAME?.replace(/^@/, "") ??
-  "manjursehatkehadiran_bot";
+function getBotUsername(): string {
+  return env.telegramMonitorBotUsername || "manjursehatkehadiran_bot";
+}
 
 function isAttendanceText(text: string): boolean {
   const t = text.trim();
@@ -66,7 +73,27 @@ async function ingestMessage(
   }
 }
 
-async function main(): Promise<void> {
+/**
+ * Resolve the MTProto session string.
+ * Priority: TELEGRAM_USER_SESSION env var > .telegram-session file.
+ */
+function resolveSession(): string | null {
+  if (env.telegramUserSession) {
+    log("info", "Using MTProto session from TELEGRAM_USER_SESSION env var");
+    return env.telegramUserSession;
+  }
+  if (existsSync(SESSION_FILE)) {
+    log("info", "Using MTProto session from .telegram-session file");
+    return readFileSync(SESSION_FILE, "utf-8").trim();
+  }
+  return null;
+}
+
+/**
+ * Start MTProto user-client listener.
+ * Safe to call from bootstrap — runs forever (never resolves).
+ */
+export async function startUserMtprotoListener(): Promise<void> {
   const apiId = Number(env.telegramApiId);
   const apiHash = env.telegramApiHash;
 
@@ -74,13 +101,16 @@ async function main(): Promise<void> {
     throw new Error("TELEGRAM_API_ID dan TELEGRAM_API_HASH wajib di backend/.env");
   }
 
-  if (!existsSync(SESSION_FILE)) {
-    console.error("\n❌ Belum login MTProto.");
-    console.error("Jalankan dulu:  npm run telegram:user-login\n");
-    process.exit(1);
+  const sessionString = resolveSession();
+  if (!sessionString) {
+    throw new Error(
+      "MTProto session not found. Set TELEGRAM_USER_SESSION env var or run `npm run telegram:user-login` first."
+    );
   }
 
-  const session = new StringSession(readFileSync(SESSION_FILE, "utf-8").trim());
+  const BOT_USERNAME = getBotUsername();
+
+  const session = new StringSession(sessionString);
   const client = new TelegramClient(session, apiId, apiHash, {
     connectionRetries: 10,
   });
@@ -91,14 +121,14 @@ async function main(): Promise<void> {
   const bot = await client.getEntity(BOT_USERNAME);
   const botId = bot.id.toString();
 
-  log("info", "MTProto listener aktif — chat pribadi bot", {
+  log("info", "MTProto user listener aktif — chat pribadi bot", {
     akun: me.username ? `@${me.username}` : me.id?.toString(),
     bot: `@${BOT_USERNAME}`,
     botId,
     hint: "Pastikan absensi BioFinger masuk ke chat pribadi bot di akun Telegram yang sama",
   });
 
-  // Catch-up: proses pesan terakhir saat listener sempat mati
+  // Catch-up: process recent messages in case listener was down
   try {
     const recent = await client.getMessages(bot, { limit: 30 });
     for (const msg of recent.reverse()) {
@@ -110,9 +140,9 @@ async function main(): Promise<void> {
       const chatId = BigInt(apiMsg.chatId?.toString() ?? me.id!.toString());
       await ingestMessage(apiMsg, chatId, "catchup");
     }
-    log("info", "Catch-up selesai — menunggu absensi baru…");
+    log("info", "User listener catch-up selesai — menunggu absensi baru…");
   } catch (err) {
-    log("warn", "Catch-up gagal (listener tetap jalan)", {
+    log("warn", "User listener catch-up gagal (listener tetap jalan)", {
       error: err instanceof Error ? err.message : String(err),
     });
   }
@@ -131,15 +161,22 @@ async function main(): Promise<void> {
     new NewMessage({ incoming: true })
   );
 
-  // Biarkan proses hidup
+  // Keep process alive
   await new Promise(() => {});
 }
 
-main().catch((err) => {
-  log("error", "Telegram user listener crashed", {
-    error: err instanceof Error ? err.message : String(err),
-  });
-  process.exit(1);
-});
+// Allow standalone execution: `tsx src/telegramUserListener.ts`
+const isDirectRun =
+  !!process.argv[1] &&
+  fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 
-process.on("SIGTERM", () => process.exit(0));
+if (isDirectRun) {
+  startUserMtprotoListener().catch((err) => {
+    log("error", "Telegram user listener crashed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    process.exit(1);
+  });
+
+  process.on("SIGTERM", () => process.exit(0));
+}

@@ -1,4 +1,15 @@
-import "dotenv/config";
+/**
+ * Bot API long-polling listener.
+ *
+ * Uses the standard Telegram Bot API (`getUpdates`) to receive messages.
+ * Suitable when MTProto credentials are not available.
+ *
+ * Exported as `startLongPollingListener()` so it can be launched from
+ * `bootstrap.ts` inside the unified backend process, OR run standalone
+ * via `npm run telegram:poll`.
+ */
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { env } from "./config/env.js";
 import { enqueueProcessTelegramMessage } from "./lib/queue.js";
 import { log } from "./lib/logger.js";
@@ -68,7 +79,7 @@ async function verifyBotIdentity(): Promise<void> {
     name: body.result.first_name,
   });
 
-  const expected = process.env.TELEGRAM_MONITOR_BOT_USERNAME?.replace(/^@/, "");
+  const expected = env.telegramMonitorBotUsername;
   if (expected && body.result.username && body.result.username !== expected) {
     log("warn", "Bot username tidak cocok dengan TELEGRAM_MONITOR_BOT_USERNAME", {
       connected: `@${body.result.username}`,
@@ -161,9 +172,13 @@ async function handleUpdate(update: TelegramUpdate): Promise<void> {
   }
 }
 
-async function main(): Promise<void> {
+/**
+ * Start Bot API long-polling listener.
+ * Safe to call from bootstrap — runs forever (never resolves).
+ */
+export async function startLongPollingListener(): Promise<void> {
   if (!env.telegramBotToken) {
-    throw new Error("TELEGRAM_BOT_TOKEN is required for telegram listener");
+    throw new Error("TELEGRAM_BOT_TOKEN is required for telegram polling listener");
   }
 
   log("info", "Starting Telegram attendance listener (long polling)", {
@@ -189,10 +204,8 @@ async function main(): Promise<void> {
 
   await withNetworkRetry("deleteWebhook", () => deleteWebhook());
 
-  log("info", "Memulai polling pesan absensi…", {
+  log("info", "Long-polling aktif — menunggu pesan absensi…", {
     mode: "bot-api",
-    hint:
-      "BioFinger kirim via bot ke chat pribadi → gunakan npm run telegram:user-listen (bukan listen ini)",
   });
 
   let offset = 0;
@@ -209,14 +222,21 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  log("error", "Telegram listener fatal error", {
-    error: err instanceof Error ? err.message : String(err),
-  });
-  process.exit(1);
-});
+// Allow standalone execution: `tsx src/telegramListener.ts`
+const isDirectRun =
+  !!process.argv[1] &&
+  fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 
-process.on("SIGTERM", () => {
-  log("info", "Telegram listener shutting down");
-  process.exit(0);
-});
+if (isDirectRun) {
+  startLongPollingListener().catch((err) => {
+    log("error", "Telegram polling listener fatal error", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    process.exit(1);
+  });
+
+  process.on("SIGTERM", () => {
+    log("info", "Telegram polling listener shutting down");
+    process.exit(0);
+  });
+}

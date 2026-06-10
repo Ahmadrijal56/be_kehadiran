@@ -1,1 +1,0 @@
-{"version":3,"file":"approvalTypes.js","sourceRoot":"","sources":["../../src/constants/approvalTypes.ts"],"names":[],"mappings":"AAEA,MAAM,CAAC,MAAM,oBAAoB,GAA2C;IAC1E,WAAW,EAAE,qBAAqB;IAClC,QAAQ,EAAE,iBAAiB;IAC3B,UAAU,EAAE,aAAa;IACzB,eAAe,EAAE,mBAAmB;CACrC,CAAC;AAEF,MAAM,UAAU,iBAAiB,CAAC,IAA4B;IAC5D,OAAO,oBAAoB,CAAC,IAAI,CAAC,CAAC;AACpC,CAAC"}
