@@ -44,7 +44,23 @@ export async function checkStartupHealth(): Promise<void> {
         hint: "Run: npx prisma migrate deploy",
       });
     } else {
-      log("info", `✅ Database seeded with ${tables.length} tables`, {});
+      log("info", `✅ Database seeded with ${tables.length} tables`, {
+        tables: tables.map(t => t.tablename).slice(0, 5).join(", "),
+      });
+    }
+
+    // Check if owner role exists
+    try {
+      const ownerRole = await prisma.role.findUnique({ where: { code: "owner" } });
+      if (ownerRole) {
+        log("info", "✅ Owner role found in database", { roleId: ownerRole.id });
+      } else {
+        log("warn", "⚠️  Owner role NOT found - database may not be seeded", {});
+      }
+    } catch (roleErr) {
+      log("warn", "Could not query owner role", {
+        error: roleErr instanceof Error ? roleErr.message : String(roleErr),
+      });
     }
   } catch (err) {
     log("warn", "Could not check database tables", {

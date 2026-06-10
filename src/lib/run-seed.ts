@@ -9,7 +9,7 @@ export async function runSeed(): Promise<void> {
 
     try {
       const result = execSync(
-        "cd /app && npx tsx prisma/seed.ts 2>&1",
+        "cd /app && npm run seed 2>&1",
         {
           encoding: "utf-8",
           stdio: "pipe",
@@ -18,58 +18,41 @@ export async function runSeed(): Promise<void> {
         }
       );
 
-      // Check output
-      if (result.includes("Seed selesai") || result.includes("✓")) {
-        log("info", "✅ Seed completed successfully", {
-          output: result.split("\n").filter(l => l.includes("✓") || l.includes("Seed")).join(" | "),
-        });
-        return;
-      }
+      log("info", "✅ Seed command completed", {
+        output: result.split("\n").slice(0, 5).join(" | "),
+      });
+    } catch (execErr: any) {
+      const stdout = execErr.stdout ? execErr.stdout.toString() : "";
+      const stderr = execErr.stderr ? execErr.stderr.toString() : "";
+      const errorMsg = execErr.message || String(execErr);
+      const exitCode = execErr.status;
 
-      log("info", "✅ Seed command executed", { output: result });
-    } catch (execErr) {
-      const errorMsg =
-        execErr instanceof Error ? execErr.message : String(execErr);
+      log("info", "Seed output details", {
+        exitCode,
+        stdoutLines: stdout.split("\n").slice(0, 3).join(" | "),
+        stderrLines: stderr.split("\n").slice(0, 3).join(" | "),
+      });
 
-      // Check if it's a success message
+      // Check if it's a success message despite exit code (many things return non-zero)
       if (
-        errorMsg.includes("Seed selesai") ||
-        errorMsg.includes("✓")
+        stdout.includes("Seed selesai") ||
+        stdout.includes("✓") ||
+        stderr.includes("Seed selesai")
       ) {
-        log("info", "✅ Seed completed", {});
+        log("info", "✅ Seed completed successfully", {});
         return;
       }
 
-      // Log actual errors
-      if (
-        errorMsg.includes("ENOENT") ||
-        errorMsg.includes("npx: not found")
-      ) {
-        log("warn", "⚠️  npx not available, trying alternative method", {
-          error: errorMsg.split("\n")[0],
-        });
-        // Try alternative: direct node command
-        try {
-          execSync(
-            "node /app/node_modules/.bin/tsx prisma/seed.ts",
-            {
-              encoding: "utf-8",
-              stdio: "pipe",
-              timeout: 120000,
-              env: process.env,
-            }
-          );
-          log("info", "✅ Seed completed (via node)", {});
-        } catch (altErr) {
-          log("warn", "⚠️  Seed warning (but continuing)", {
-            error: altErr instanceof Error ? altErr.message : String(altErr),
-          });
-        }
+      // Check exit code - 0 means success
+      if (exitCode === 0) {
+        log("info", "✅ Seed completed (exit code 0)", {});
         return;
       }
 
-      log("warn", "⚠️  Seed warning (but continuing)", {
-        error: errorMsg.split("\n").slice(0, 2).join(" "),
+      // For any other case, log warning and continue
+      log("warn", "⚠️  Seed completed with status (but continuing)", {
+        exitCode,
+        error: errorMsg.split("\n")[0],
       });
     }
   } catch (err) {

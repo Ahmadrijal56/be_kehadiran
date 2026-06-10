@@ -14,82 +14,43 @@ export async function runMigrations(): Promise<void> {
           encoding: "utf-8",
           stdio: "pipe",
           timeout: 120000, // 2 minute timeout
-          env: process.env, // Explicitly pass environment variables
+          env: process.env, // Explicitly pass environment variables including DATABASE_URL
         }
       );
 
-      // Check output
-      if (result.includes("No pending migrations")) {
-        log("info", "✅ Database already up to date (no pending migrations)", {});
-        return;
-      }
+      log("info", "✅ Migrations completed", {
+        output: result.split("\n").slice(0, 3).join(" | "),
+      });
+    } catch (execErr: any) {
+      const stdout = execErr.stdout ? execErr.stdout.toString() : "";
+      const stderr = execErr.stderr ? execErr.stderr.toString() : "";
+      const errorMsg = execErr.message || String(execErr);
+      const exitCode = execErr.status;
 
+      log("info", "Migration output details", {
+        exitCode,
+        stdoutLines: stdout.split("\n").slice(0, 3).join(" | "),
+        stderrLines: stderr.split("\n").slice(0, 3).join(" | "),
+      });
+
+      // Check for success conditions
       if (
-        result.includes("migrations") ||
-        result.includes("All migrations have been successfully applied")
+        stdout.includes("No pending migrations") ||
+        stdout.includes("All migrations have been successfully applied") ||
+        exitCode === 0
       ) {
-        log("info", "✅ Migrations completed successfully", {
-          summary: result
-            .split("\n")
-            .filter(
-              (l) =>
-                l.includes("migration") ||
-                l.includes("created") ||
-                l.includes("applied")
-            )
-            .slice(0, 3)
-            .join(" | "),
-        });
+        log("info", "✅ Migrations applied or already up to date", {});
         return;
       }
 
-      log("info", "✅ Migration command executed", { output: result });
-    } catch (execErr) {
-      const errorMsg =
-        execErr instanceof Error ? execErr.message : String(execErr);
-
-      // Check if it's just "no pending" (success case)
-      if (
-        errorMsg.includes("No pending migrations") ||
-        errorMsg.includes("All migrations")
-      ) {
-        log("info", "✅ No migrations to apply", {});
-        return;
-      }
-
-      // Log actual errors
-      if (
-        errorMsg.includes("ENOENT") ||
-        errorMsg.includes("npx: not found")
-      ) {
-        log("warn", "⚠️  npx not available, trying alternative method", {
-          error: errorMsg.split("\n")[0],
-        });
-        // Try alternative: direct node command
-        try {
-          execSync(
-            "node /app/node_modules/.bin/prisma migrate deploy --skip-generate",
-            {
-              encoding: "utf-8",
-              stdio: "pipe",
-              timeout: 120000,
-            }
-          );
-          log("info", "✅ Migrations completed (via node)", {});
-        } catch (altErr) {
-          log("error", "❌ Migration failed via alternative method", {
-            error: altErr instanceof Error ? altErr.message : String(altErr),
-          });
-        }
-        return;
-      }
-
-      log("warn", "⚠️  Migration warning (but continuing)", {
-        error: errorMsg.split("\n").slice(0, 2).join(" "),
+      // Log warning and continue
+      log("warn", "⚠️  Migration completed with status (but continuing)", {
+        exitCode,
+        error: errorMsg.split("\n")[0],
       });
     }
   } catch (err) {
-    log("error", "❌ Failed to run migrations", {
+    log("warn", "⚠️  Failed to run migrations", {
       error: err instanceof Error ? err.message : String(err),
     });
     // Don't throw - let server start anyway

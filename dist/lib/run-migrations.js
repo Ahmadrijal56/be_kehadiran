@@ -9,6 +9,7 @@ export async function runMigrations() {
                 encoding: "utf-8",
                 stdio: "pipe",
                 timeout: 120000, // 2 minute timeout
+                env: process.env, // Explicitly pass environment variables
             });
             // Check output
             if (result.includes("No pending migrations")) {
