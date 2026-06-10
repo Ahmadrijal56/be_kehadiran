@@ -10,8 +10,8 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TelegramClient } from "telegram";
-import { StringSession } from "telegram/sessions";
-import { NewMessage } from "telegram/events";
+import { StringSession } from "telegram/sessions/index.js";
+import { NewMessage } from "telegram/events/index.js";
 import type { Api } from "telegram";
 import { env } from "./config/env.js";
 import { enqueueProcessTelegramMessage } from "./lib/queue.js";

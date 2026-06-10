@@ -11,7 +11,7 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TelegramClient } from "telegram";
-import { StringSession } from "telegram/sessions";
+import { StringSession } from "telegram/sessions/index.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SESSION_FILE = join(__dirname, "../.telegram-session");
