@@ -14,6 +14,7 @@ export async function runMigrations(): Promise<void> {
           encoding: "utf-8",
           stdio: "pipe",
           timeout: 120000, // 2 minute timeout
+          env: process.env, // Explicitly pass environment variables
         }
       );
 
