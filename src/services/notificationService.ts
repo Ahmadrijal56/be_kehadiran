@@ -179,6 +179,42 @@ export async function notifyAttendanceMissing(
   });
 }
 
+export async function notifyNewBranchAnnouncement(
+  branchId: string,
+  announcement: { id: string; title: string }
+): Promise<void> {
+  const employees = await prisma.user.findMany({
+    where: {
+      isActive: true,
+      userRoles: { some: { role: { code: "employee" } } },
+      OR: [
+        { branchId },
+        { userBranches: { some: { branchId } } },
+        { employee: { branchId } },
+      ],
+    },
+    select: { id: true },
+  });
+
+  const title = "Pengumuman baru";
+  const body = announcement.title;
+
+  for (const { id: userId } of employees) {
+    await prisma.notification.create({
+      data: {
+        userId,
+        type: "announcement_published",
+        title,
+        body,
+        dataJson: {
+          announcement_id: announcement.id,
+          branch_id: branchId,
+        },
+      },
+    });
+  }
+}
+
 export async function notifyAttendanceLate(
   userId: string,
   workDate: string,

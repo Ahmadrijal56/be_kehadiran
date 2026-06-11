@@ -1,64 +1,186 @@
 import { prisma } from "../lib/prisma.js";
-import { cacheGet, cacheSet } from "../lib/redis.js";
+import { cacheDeleteByPrefix, cacheGet, cacheSet } from "../lib/redis.js";
 import { forbidden, notFound } from "../lib/errors.js";
 import type { AuthUser } from "./authService.js";
 import { hasPermission } from "./authService.js";
 import { currentYearMonthWib } from "../utils/format.js";
+import { sumDedupedMonthlyPoints } from "./kpiQueryService.js";
+import { ACTIVE_EMPLOYEE_USER_WHERE } from "./activeEmployeeFilter.js";
 
 const CACHE_TTL = 60;
+const CACHE_VERSION = "v6";
+
+/** Hapus cache leaderboard & display publik (setelah hapus/nonaktifkan akun). */
+export async function invalidateLeaderboardCaches(): Promise<void> {
+  await Promise.all([
+    cacheDeleteByPrefix("leaderboard:"),
+    cacheDeleteByPrefix("public:display:"),
+  ]);
+}
 
 type LeaderboardEntry = {
   rank: number;
   employee_id: string;
   nik: string;
   full_name: string;
+  branch_id: string;
+  branch_code: string;
+  branch_name: string;
   total_points: number;
   total_late_count: number;
 };
 
-export async function computeBranchLeaderboard(
-  branchId: string,
+type EmployeeRow = {
+  id: string;
+  nik: string;
+  fullName: string;
+  accountCode: string | null;
+  branchId: string;
+  branch: { code: string; name: string };
+};
+
+function accountGroupKey(row: EmployeeRow): string {
+  return row.accountCode ?? row.id;
+}
+
+async function resolveAccountEmployeeIds(
+  accountCode: string | null,
+  currentEmployeeId: string
+): Promise<string[]> {
+  if (!accountCode) return [currentEmployeeId];
+  const linked = await prisma.employee.findMany({
+    where: { accountCode, isActive: true },
+    select: { id: true },
+  });
+  const ids = linked.map((row) => row.id);
+  return ids.length > 0 ? ids : [currentEmployeeId];
+}
+
+/**
+ * Peserta leaderboard mengikuti cabang aktif akun (user.branch / user_branches),
+ * bukan cabang lama di record employee historis.
+ */
+async function loadParticipantsForBranch(
+  branchId: string
+): Promise<EmployeeRow[]> {
+  const branch = await prisma.branch.findFirst({
+    where: { id: branchId, isActive: true },
+    select: { id: true, code: true, name: true },
+  });
+  if (!branch) return [];
+
+  const users = await prisma.user.findMany({
+    where: {
+      ...ACTIVE_EMPLOYEE_USER_WHERE,
+      OR: [{ branchId }, { userBranches: { some: { branchId } } }],
+    },
+    select: {
+      nik: true,
+      fullName: true,
+      accountCode: true,
+      employeeId: true,
+      employee: {
+        select: { id: true, accountCode: true },
+      },
+    },
+  });
+
+  return users
+    .filter((user) => user.employee)
+    .map((user) => ({
+      id: user.employee!.id,
+      nik: user.nik,
+      fullName: user.fullName,
+      accountCode: user.accountCode ?? user.employee!.accountCode,
+      branchId: branch.id,
+      branch: { code: branch.code, name: branch.name },
+    }));
+}
+
+async function loadParticipantsGlobal(): Promise<EmployeeRow[]> {
+  const users = await prisma.user.findMany({
+    where: ACTIVE_EMPLOYEE_USER_WHERE,
+    select: {
+      nik: true,
+      fullName: true,
+      accountCode: true,
+      branchId: true,
+      branch: { select: { id: true, code: true, name: true } },
+      userBranches: {
+        take: 1,
+        orderBy: { createdAt: "asc" },
+        select: {
+          branch: { select: { id: true, code: true, name: true } },
+        },
+      },
+      employee: {
+        select: { id: true, accountCode: true },
+      },
+    },
+  });
+
+  return users
+    .filter((user) => user.employee)
+    .map((user) => {
+      const displayBranch =
+        user.branch ??
+        user.userBranches[0]?.branch ??
+        null;
+      if (!displayBranch) return null;
+
+      return {
+        id: user.employee!.id,
+        nik: user.nik,
+        fullName: user.fullName,
+        accountCode: user.accountCode ?? user.employee!.accountCode,
+        branchId: displayBranch.id,
+        branch: { code: displayBranch.code, name: displayBranch.name },
+      };
+    })
+    .filter((row): row is EmployeeRow => row !== null);
+}
+
+async function buildLeaderboardEntries(
+  employees: EmployeeRow[],
   yearMonth: string
 ): Promise<LeaderboardEntry[]> {
-  const start = new Date(`${yearMonth}-01T00:00:00.000Z`);
-  const end = new Date(start);
-  end.setUTCMonth(end.getUTCMonth() + 1);
+  const groups = new Map<string, EmployeeRow>();
+  for (const employee of employees) {
+    const key = accountGroupKey(employee);
+    if (!groups.has(key)) groups.set(key, employee);
+  }
 
-  const employees = await prisma.employee.findMany({
-    where: { branchId, isActive: true },
-    select: { id: true, nik: true, fullName: true },
-  });
+  const pointsCache = new Map<
+    string,
+    { total_points: number; total_late_count: number }
+  >();
 
-  const scores = await prisma.kpiDailyScore.groupBy({
-    by: ["employeeId"],
-    where: {
-      employeeId: { in: employees.map((e) => e.id) },
-      workDate: { gte: start, lt: end },
-    },
-    _sum: { totalPoints: true },
-  });
+  for (const [key, representative] of groups) {
+    const ids = await resolveAccountEmployeeIds(
+      representative.accountCode,
+      representative.id
+    );
+    const summary = await sumDedupedMonthlyPoints(ids, yearMonth);
+    pointsCache.set(key, {
+      total_points: summary.total_points,
+      total_late_count: summary.total_late_count,
+    });
+  }
 
-  const lateCounts = await prisma.kpiDailyScore.groupBy({
-    by: ["employeeId"],
-    where: {
-      employeeId: { in: employees.map((e) => e.id) },
-      workDate: { gte: start, lt: end },
-      lateMinutes: { gt: 0 },
-    },
-    _count: { _all: true },
-  });
-
-  const pointsMap = new Map(scores.map((s) => [s.employeeId, s._sum.totalPoints ?? 0]));
-  const lateMap = new Map(lateCounts.map((l) => [l.employeeId, l._count._all]));
-
-  const ranked = employees
-    .map((e) => ({
-      employee_id: e.id,
-      nik: e.nik,
-      full_name: e.fullName,
-      total_points: pointsMap.get(e.id) ?? 0,
-      total_late_count: lateMap.get(e.id) ?? 0,
-    }))
+  const ranked = [...groups.entries()]
+    .map(([key, representative]) => {
+      const stats = pointsCache.get(key)!;
+      return {
+        employee_id: representative.id,
+        nik: representative.nik,
+        full_name: representative.fullName,
+        branch_id: representative.branchId,
+        branch_code: representative.branch.code,
+        branch_name: representative.branch.name,
+        total_points: stats.total_points,
+        total_late_count: stats.total_late_count,
+      };
+    })
     .sort((a, b) => {
       if (b.total_points !== a.total_points) return b.total_points - a.total_points;
       if (a.total_late_count !== b.total_late_count) {
@@ -69,6 +191,14 @@ export async function computeBranchLeaderboard(
     .map((row, i) => ({ ...row, rank: i + 1 }));
 
   return ranked;
+}
+
+export async function computeBranchLeaderboard(
+  branchId: string,
+  yearMonth: string
+): Promise<LeaderboardEntry[]> {
+  const participants = await loadParticipantsForBranch(branchId);
+  return buildLeaderboardEntries(participants, yearMonth);
 }
 
 export async function getBranchLeaderboard(
@@ -91,7 +221,7 @@ export async function getBranchLeaderboard(
     throw forbidden();
   }
 
-  const cacheKey = `leaderboard:branch:${branchId}:${ym}`;
+  const cacheKey = `leaderboard:branch:${branchId}:${ym}:${CACHE_VERSION}`;
   const cached = await cacheGet<LeaderboardEntry[]>(cacheKey);
   if (cached) {
     return { year_month: ym, branch_id: branchId, items: cached, cached: true };
@@ -104,50 +234,14 @@ export async function getBranchLeaderboard(
 
 export async function getGlobalLeaderboard(yearMonth?: string) {
   const ym = yearMonth ?? currentYearMonthWib();
-  const cacheKey = `leaderboard:global:${ym}`;
+  const cacheKey = `leaderboard:global:${ym}:${CACHE_VERSION}`;
   const cached = await cacheGet<LeaderboardEntry[]>(cacheKey);
   if (cached) {
     return { year_month: ym, items: cached, cached: true };
   }
 
-  const employees = await prisma.employee.findMany({
-    where: { isActive: true },
-    select: { id: true, nik: true, fullName: true, branchId: true },
-  });
-
-  const start = new Date(`${ym}-01T00:00:00.000Z`);
-  const end = new Date(start);
-  end.setUTCMonth(end.getUTCMonth() + 1);
-
-  const scores = await prisma.kpiDailyScore.groupBy({
-    by: ["employeeId"],
-    where: { workDate: { gte: start, lt: end } },
-    _sum: { totalPoints: true },
-  });
-
-  const lateCounts = await prisma.kpiDailyScore.groupBy({
-    by: ["employeeId"],
-    where: { workDate: { gte: start, lt: end }, lateMinutes: { gt: 0 } },
-    _count: { _all: true },
-  });
-
-  const pointsMap = new Map(scores.map((s) => [s.employeeId, s._sum.totalPoints ?? 0]));
-  const lateMap = new Map(lateCounts.map((l) => [l.employeeId, l._count._all]));
-
-  const items = employees
-    .map((e) => ({
-      employee_id: e.id,
-      nik: e.nik,
-      full_name: e.fullName,
-      total_points: pointsMap.get(e.id) ?? 0,
-      total_late_count: lateMap.get(e.id) ?? 0,
-    }))
-    .sort((a, b) => {
-      if (b.total_points !== a.total_points) return b.total_points - a.total_points;
-      return a.total_late_count - b.total_late_count;
-    })
-    .map((row, i) => ({ ...row, rank: i + 1 }));
-
+  const participants = await loadParticipantsGlobal();
+  const items = await buildLeaderboardEntries(participants, ym);
   await cacheSet(cacheKey, items, CACHE_TTL);
   return { year_month: ym, items, cached: false };
 }

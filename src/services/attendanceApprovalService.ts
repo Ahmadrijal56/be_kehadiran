@@ -5,7 +5,7 @@ import type {
 import { prisma } from "../lib/prisma.js";
 import { businessError, forbidden, notFound, validationError } from "../lib/errors.js";
 import type { AuthUser } from "./authService.js";
-import { requireEmployeeProfile } from "./authService.js";
+import { requireEmployeeAccountScope, requireEmployeeProfile } from "./authService.js";
 import { userHasBranchAccess } from "./branchMembershipService.js";
 import { assertBranchAccess } from "./branchAccess.js";
 import { writeAuditLog } from "./auditService.js";
@@ -15,8 +15,53 @@ import {
   notifyApprovalReviewed,
   notifyManagersNewApprovalRequest,
 } from "./notificationService.js";
-import { resolveEffectiveShiftId } from "./employeeShiftScheduleService.js";
+import { findUserIdForEmployee } from "./employeeAccountService.js";
+import {
+  listShiftOptions,
+  resolveEffectiveShiftId,
+} from "./employeeShiftScheduleService.js";
 import { approvalTypeLabel } from "../constants/approvalTypes.js";
+
+type ShiftSummary = {
+  id: number;
+  code: string;
+  name: string;
+  time_range: string | null;
+  label: string;
+};
+
+async function resolveShiftSummary(
+  branchId: string,
+  shiftId: number | null
+): Promise<ShiftSummary | null> {
+  if (!shiftId) return null;
+  const options = await listShiftOptions(branchId);
+  const s = options.find((o) => o.id === shiftId);
+  if (!s) return null;
+  const label = s.time_range
+    ? `${s.code} · ${s.name} · ${s.time_range}`
+    : `${s.code} · ${s.name}`;
+  return {
+    id: s.id,
+    code: s.code,
+    name: s.name,
+    time_range: s.time_range,
+    label,
+  };
+}
+
+async function resolveCurrentShiftForApproval(row: {
+  branchId: string;
+  employeeId: string;
+  workDate: Date;
+  attendance?: { shiftId: number } | null;
+}): Promise<ShiftSummary | null> {
+  if (row.attendance?.shiftId) {
+    return resolveShiftSummary(row.branchId, row.attendance.shiftId);
+  }
+  const effectiveId = await resolveEffectiveShiftId(row.employeeId, row.workDate);
+  return resolveShiftSummary(row.branchId, effectiveId);
+}
 
 const LOOKBACK_DAYS = 14;
 
@@ -80,13 +125,18 @@ export async function hasApprovedTwoScanMode(
 }
 
 export async function listMyApprovalRequests(user: AuthUser) {
-  const employeeId = requireEmployeeProfile(user);
+  const { historyEmployeeIds } = await requireEmployeeAccountScope(user);
   const rows = await prisma.attendanceApprovalRequest.findMany({
-    where: { employeeId },
+    where: {
+      employeeId:
+        historyEmployeeIds.length === 1
+          ? historyEmployeeIds[0]!
+          : { in: historyEmployeeIds },
+    },
     orderBy: { createdAt: "desc" },
     take: 50,
   });
-  return rows.map(mapApprovalRow);
+  return Promise.all(rows.map((row) => mapApprovalRow(row)));
 }
 
 export async function listEligibleApprovalDates(user: AuthUser) {
@@ -220,6 +270,15 @@ export async function createApprovalRequest(
     throw validationError("requested_shift_id wajib untuk tukar shift");
   }
 
+  if (type === "shift_swap" && data.requested_shift_id) {
+    const allowed = (await listShiftOptions(employee.branchId))
+      .filter((s) => !s.is_off)
+      .map((s) => s.id);
+    if (!allowed.includes(data.requested_shift_id)) {
+      throw validationError("Shift yang diminta tidak tersedia di cabang ini");
+    }
+  }
+
   const request = await prisma.attendanceApprovalRequest.create({
     data: {
       employeeId,
@@ -273,7 +332,7 @@ export async function listBranchApprovalRequests(
   return Promise.all(items.map((item) => mapApprovalRow(item)));
 }
 
-function mapApprovalRow(
+async function mapApprovalRow(
   row: {
     id: string;
     employeeId: string;
@@ -298,6 +357,13 @@ function mapApprovalRow(
     } | null;
   }
 ) {
+  const [requested_shift, current_shift] = await Promise.all([
+    resolveShiftSummary(row.branchId, row.requestedShiftId),
+    row.type === "shift_swap"
+      ? resolveCurrentShiftForApproval(row)
+      : Promise.resolve(null),
+  ]);
+
   return {
     id: row.id,
     employee_id: row.employeeId,
@@ -311,6 +377,8 @@ function mapApprovalRow(
     reviewed_at: formatWibIso(row.reviewedAt),
     attendance_id: row.attendanceId,
     requested_shift_id: row.requestedShiftId,
+    requested_shift,
+    current_shift,
     shift_confirmed_at: formatWibIso(row.shiftConfirmedAt),
     created_at: formatWibIso(row.createdAt),
     employee: row.employee
@@ -377,12 +445,10 @@ export async function reviewApprovalRequest(
     }
   }
 
-  const employeeUser = await prisma.user.findFirst({
-    where: { employeeId: request.employeeId },
-  });
-  if (employeeUser) {
+  const employeeUserId = await findUserIdForEmployee(request.employee);
+  if (employeeUserId) {
     await notifyApprovalReviewed(
-      employeeUser.id,
+      employeeUserId,
       request.type,
       data.status,
       requestId,
@@ -398,7 +464,11 @@ export async function reviewApprovalRequest(
     newValues: { status: data.status },
   });
 
-  return mapApprovalRow({ ...updated, employee: request.employee, attendance: request.attendance });
+  return mapApprovalRow({
+    ...updated,
+    employee: request.employee,
+    attendance: request.attendance,
+  });
 }
 
 export async function confirmShiftSwapApproval(
@@ -464,12 +534,10 @@ export async function confirmShiftSwapApproval(
     });
   }
 
-  const employeeUser = await prisma.user.findFirst({
-    where: { employeeId: request.employeeId },
-  });
-  if (employeeUser) {
+  const employeeUserId = await findUserIdForEmployee(request.employee);
+  if (employeeUserId) {
     await notifyApprovalReviewed(
-      employeeUser.id,
+      employeeUserId,
       "shift_swap",
       "approved",
       requestId,
@@ -477,7 +545,11 @@ export async function confirmShiftSwapApproval(
     );
   }
 
-  return mapApprovalRow({ ...updated, employee: request.employee, attendance: request.attendance });
+  return mapApprovalRow({
+    ...updated,
+    employee: request.employee,
+    attendance: request.attendance,
+  });
 }
 
 export async function rejectApprovalRequest(

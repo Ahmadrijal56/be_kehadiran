@@ -8,6 +8,7 @@ import type { AuthUser } from "./authService.js";
 import { hasPermission } from "./authService.js";
 import { assertBranchAccess } from "./branchAccess.js";
 import { formatWibIso } from "../utils/format.js";
+import { notifyNewBranchAnnouncement } from "./notificationService.js";
 
 function mapAnnouncement(a: {
   id: string;
@@ -75,6 +76,11 @@ export async function createBranchAnnouncement(
       createdBy: { select: { id: true, fullName: true, nik: true } },
     },
   });
+
+  void notifyNewBranchAnnouncement(branchId, {
+    id: announcement.id,
+    title: announcement.title,
+  }).catch(() => {});
 
   return mapAnnouncement(announcement);
 }

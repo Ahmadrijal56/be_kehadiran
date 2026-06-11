@@ -78,7 +78,7 @@ model Branch {
   code             String   @unique @db.VarChar(20)
   name             String   @db.VarChar(150)
   address          String?  @db.Text
-  telegramGroupId  BigInt?  @unique @map("telegram_group_id")
+  telegramGroupId  BigInt?  @map("telegram_group_id")
   timezone         String   @default("Asia/Jakarta") @db.VarChar(50)
   isActive         Boolean  @default(true) @map("is_active")
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
@@ -173,6 +173,7 @@ model EmployeeTypeConfig {
 
 model Employee {
   id               String    @id @default(uuid()) @db.Uuid
+  accountCode      String?   @map("account_code") @db.VarChar(20)
   nik              String    @db.VarChar(32)
   fullName         String    @map("full_name") @db.VarChar(150)
   branchId         String    @map("branch_id") @db.Uuid
@@ -197,11 +198,13 @@ model Employee {
   @@unique([branchId, nik], map: "employees_branch_nik_key")
   @@index([branchId], map: "idx_employees_branch")
   @@index([nik], map: "idx_employees_nik")
+  @@index([accountCode], map: "idx_employees_account_code")
   @@map("employees")
 }
 
 model User {
   id           String    @id @default(uuid()) @db.Uuid
+  accountCode  String?   @unique @map("account_code") @db.VarChar(20)
   email        String?   @unique @db.VarChar(255)
   nik          String    @unique @db.VarChar(32)
   passwordHash String    @map("password_hash") @db.VarChar(255)

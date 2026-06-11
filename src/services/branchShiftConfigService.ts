@@ -57,11 +57,8 @@ export type BranchShiftSettingsPayload = {
   shifts: BranchShiftSettingRow[];
 };
 
-async function normalizeBranchWorkShifts(branchId: string): Promise<void> {
-  await prisma.branchShift.updateMany({
-    where: { branchId, shiftId: { in: [...WORK_SHIFT_IDS] } },
-    data: { isActive: true },
-  });
+/** Shift libur (OFF) selalu aktif di setiap cabang. */
+async function ensureOffShiftActive(branchId: string): Promise<void> {
   await prisma.branchShift.updateMany({
     where: { branchId, shiftId: OFF_SHIFT_ID },
     data: { isActive: true },
@@ -94,7 +91,7 @@ export async function ensureBranchShiftsSeeded(branchId: string): Promise<void> 
     });
   }
 
-  await normalizeBranchWorkShifts(branchId);
+  await ensureOffShiftActive(branchId);
 }
 
 /** Pastikan semua cabang punya S1–S5 aktif + OFF. */
@@ -145,7 +142,7 @@ export async function getBranchShiftSettings(
       shift_id: master.id,
       code: master.code,
       name: master.name,
-      is_active: isWork || isOff ? true : (row?.isActive ?? true),
+      is_active: isOff ? true : (row?.isActive ?? true),
       start_time: timeToHHmm(startTime),
       end_time: timeToHHmm(endTime),
       time_range: isOff ? null : formatTimeRange(startTime, endTime),
@@ -195,16 +192,12 @@ export async function saveBranchShiftSettings(
     }
     const isOff = item.shift_id === OFF_SHIFT_ID;
     const isWork = WORK_SHIFT_IDS.includes(item.shift_id as (typeof WORK_SHIFT_IDS)[number]);
-    if ((isOff || isWork) && !item.is_active) {
-      throw validationError(
-        isOff
-          ? "Shift libur (OFF) harus tetap aktif"
-          : `Shift S${item.shift_id} wajib aktif (maks. 5 shift kerja per cabang)`
-      );
+    if (isOff && !item.is_active) {
+      throw validationError("Shift libur (OFF) harus tetap aktif");
     }
     const start = parseHHmm(item.start_time);
     const end = parseHHmm(item.end_time);
-    if (isWork) {
+    if (isWork && item.is_active) {
       activeWorkShifts += 1;
       const s = timeFromDbTime(start);
       const e = timeFromDbTime(end);
@@ -218,15 +211,13 @@ export async function saveBranchShiftSettings(
     }
   }
 
-  if (activeWorkShifts < WORK_SHIFT_IDS.length) {
-    throw validationError("Kelima shift kerja (S1–S5) wajib dikonfigurasi");
+  if (activeWorkShifts < 1) {
+    throw validationError("Minimal satu shift kerja (S1–S5) harus aktif di cabang ini");
   }
 
   await prisma.$transaction(
     items.map((item) => {
-      const forceActive =
-        WORK_SHIFT_IDS.includes(item.shift_id as (typeof WORK_SHIFT_IDS)[number]) ||
-        item.shift_id === OFF_SHIFT_ID;
+      const isOff = item.shift_id === OFF_SHIFT_ID;
       return prisma.branchShift.upsert({
         where: {
           branchId_shiftId: { branchId, shiftId: item.shift_id },
@@ -234,12 +225,12 @@ export async function saveBranchShiftSettings(
         create: {
           branchId,
           shiftId: item.shift_id,
-          isActive: forceActive ? true : item.is_active,
+          isActive: isOff ? true : item.is_active,
           startTime: parseHHmm(item.start_time),
           endTime: parseHHmm(item.end_time),
         },
         update: {
-          isActive: forceActive ? true : item.is_active,
+          isActive: isOff ? true : item.is_active,
           startTime: parseHHmm(item.start_time),
           endTime: parseHHmm(item.end_time),
         },
@@ -310,6 +301,7 @@ export async function listBranchShiftDefs(branchId: string) {
   return shifts
     .filter(
       (s) =>
+        s.is_active &&
         !s.is_off &&
         WORK_SHIFT_IDS.includes(s.shift_id as (typeof WORK_SHIFT_IDS)[number])
     )

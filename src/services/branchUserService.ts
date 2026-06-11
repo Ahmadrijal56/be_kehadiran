@@ -12,11 +12,22 @@ import { writeAuditLog } from "./auditService.js";
 import { actorSharesBranchWith } from "./branchAccess.js";
 import {
   assertBranchesExist,
+  getBranchIdsForUser,
   moveEmployeeBranch,
   setUserBranches,
 } from "./branchMembershipService.js";
+import {
+  attachEmployeeToUserAccount,
+  ensureUserAccountCode,
+} from "./accountIdentityService.js";
+import { invalidateLeaderboardCaches } from "./leaderboardService.js";
 
 export type BranchUserRole = "employee" | "manager";
+
+function trimStr(value: unknown): string {
+  if (value == null) return "";
+  return String(value).trim();
+}
 
 const userInclude = {
   userRoles: { include: { role: true } },
@@ -24,11 +35,21 @@ const userInclude = {
   userBranches: { include: { branch: true } },
 } as const;
 
+function roleAccessLabel(roles: string[]): string {
+  const labels: Record<string, string> = {
+    employee: "Karyawan",
+    manager: "Manager",
+    owner: "Owner",
+  };
+  return roles.map((r) => labels[r] ?? r).join(", ");
+}
+
 function mapUser(u: {
   id: string;
   nik: string;
   email: string | null;
   fullName: string;
+  accountCode: string | null;
   isActive: boolean;
   employeeId: string | null;
   branchId: string | null;
@@ -57,19 +78,31 @@ function mapUser(u: {
         ? [{ id: u.branchId!, code: u.branch.code, name: u.branch.name }]
         : [];
 
+  const roles = u.userRoles.map((ur) => ur.role.code);
+  const branchNames = branches.map((b) => b.name);
+  const branchCodes = branches.map((b) => b.code);
+
   return {
     id: u.id,
     nik: u.nik,
     email: u.email,
     full_name: u.fullName,
+    account_code: u.accountCode,
+    alias_name: u.accountCode,
     is_active: u.isActive,
     employee_id: u.employeeId,
     branch_id: u.branchId,
     branch_ids: branchIds,
     branches,
-    branch_code: u.branch?.code ?? branches[0]?.code ?? null,
-    branch_name: u.branch?.name ?? branches[0]?.name ?? null,
-    roles: u.userRoles.map((ur) => ur.role.code),
+    branch_code: branchCodes.length
+      ? branchCodes.join(", ")
+      : (u.branch?.code ?? null),
+    branch_name: branchNames.length
+      ? branchNames.join(", ")
+      : (u.branch?.name ?? null),
+    roles,
+    access: roles,
+    access_label: roleAccessLabel(roles),
   };
 }
 
@@ -77,6 +110,7 @@ export async function listBranchUsers(branchId: string) {
   const users = await prisma.user.findMany({
     where: {
       userBranches: { some: { branchId } },
+      userRoles: { none: { role: { code: "owner" } } },
     },
     include: userInclude,
     orderBy: { fullName: "asc" },
@@ -251,6 +285,11 @@ export async function createBranchUser(
     role,
     primaryBranchId: branchId,
   });
+  if (employeeId) {
+    await attachEmployeeToUserAccount(user.id, employeeId);
+  } else {
+    await ensureUserAccountCode(user.id);
+  }
 
   const refreshed = await prisma.user.findUniqueOrThrow({
     where: { id: user.id },
@@ -273,13 +312,14 @@ export async function updateUserBranches(
   userId: string,
   branchIds: string[]
 ) {
-  if (!actor.roles.includes("owner")) {
-    throw forbidden("Hanya owner yang dapat mengatur cabang pengguna");
+  const isOwner = actor.roles.includes("owner");
+  if (!isOwner && !hasPermission(actor, "users.manage.branch")) {
+    throw forbidden("Tidak memiliki izin mengatur cabang pengguna");
   }
 
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    include: { userRoles: { include: { role: true } } },
+    include: { userRoles: { include: { role: true } }, userBranches: true },
   });
   if (!user) throw notFound("User tidak ditemukan");
 
@@ -291,6 +331,13 @@ export async function updateUserBranches(
   const uniqueIds = [...new Set(branchIds.filter(Boolean))];
   await assertBranchesExist(uniqueIds);
 
+  const targetBranchIds =
+    user.userBranches.length > 0
+      ? user.userBranches.map((ub) => ub.branchId)
+      : user.branchId
+        ? [user.branchId]
+        : [];
+
   if (roles.includes("employee")) {
     if (uniqueIds.length !== 1) {
       throw validationError("Karyawan hanya boleh memiliki satu cabang");
@@ -298,8 +345,31 @@ export async function updateUserBranches(
     if (!user.employeeId) {
       throw businessError("Akun karyawan tidak terhubung ke data HR");
     }
+
+    if (!isOwner) {
+      if (roles.includes("manager")) {
+        throw forbidden("Manager hanya dapat memindahkan cabang karyawan");
+      }
+      if (!actorSharesBranchWith(actor, targetBranchIds)) {
+        throw forbidden();
+      }
+      const managerBranchIds = new Set(
+        await getBranchIdsForUser(actor.id, actor.roles)
+      );
+      for (const bid of uniqueIds) {
+        if (!managerBranchIds.has(bid)) {
+          throw forbidden(
+            "Cabang tujuan tidak termasuk cabang yang Anda kelola"
+          );
+        }
+      }
+    }
+
     await moveEmployeeBranch(user.employeeId, userId, uniqueIds[0]!);
   } else if (roles.includes("manager")) {
+    if (!isOwner) {
+      throw forbidden("Hanya owner yang dapat mengatur cabang manager");
+    }
     if (uniqueIds.length < 1) {
       throw validationError("Manager wajib memiliki minimal satu cabang");
     }
@@ -324,6 +394,8 @@ export async function updateUserBranches(
     newValues: { branch_ids: uniqueIds },
   });
 
+  await invalidateLeaderboardCaches();
+
   return mapUser(refreshed);
 }
 
@@ -331,6 +403,7 @@ export async function updateBranchUser(
   actor: AuthUser,
   userId: string,
   data: {
+    nik?: string;
     full_name?: string;
     email?: string;
     password?: string;
@@ -363,14 +436,51 @@ export async function updateBranchUser(
   }
 
   const update: {
+    nik?: string;
     fullName?: string;
     email?: string | null;
     passwordHash?: string;
     isActive?: boolean;
   } = {};
 
-  if (data.full_name !== undefined) update.fullName = data.full_name.trim();
-  if (data.email !== undefined) update.email = data.email.trim() || null;
+  let employeeNikUpdate: { employeeId: string; nik: string } | null = null;
+
+  if (data.nik !== undefined) {
+    const nik = trimStr(data.nik);
+    if (!nik) throw validationError("nik wajib");
+    if (nik !== user.nik) {
+      const takenUser = await prisma.user.findFirst({
+        where: { nik, id: { not: userId } },
+      });
+      if (takenUser) throw businessError("ID sudah digunakan akun lain");
+
+      if (user.employeeId) {
+        const employee = await prisma.employee.findUnique({
+          where: { id: user.employeeId },
+          select: { id: true, branchId: true, nik: true },
+        });
+        if (employee) {
+          const takenEmployee = await prisma.employee.findFirst({
+            where: {
+              branchId: employee.branchId,
+              nik,
+              isActive: true,
+              id: { not: employee.id },
+            },
+          });
+          if (takenEmployee) {
+            throw businessError("ID sudah dipakai karyawan lain di cabang ini");
+          }
+          employeeNikUpdate = { employeeId: employee.id, nik };
+        }
+      }
+
+      update.nik = nik;
+    }
+  }
+
+  if (data.full_name !== undefined) update.fullName = trimStr(data.full_name);
+  if (data.email !== undefined) update.email = trimStr(data.email) || null;
   if (data.is_active !== undefined) update.isActive = data.is_active;
   if (data.password) {
     if (data.password.length < 8) {
@@ -379,10 +489,24 @@ export async function updateBranchUser(
     update.passwordHash = await bcrypt.hash(data.password, 10);
   }
 
-  const updated = await prisma.user.update({
-    where: { id: userId },
-    data: update,
-    include: userInclude,
+  const updated = await prisma.$transaction(async (tx) => {
+    if (employeeNikUpdate) {
+      await tx.employee.update({
+        where: { id: employeeNikUpdate.employeeId },
+        data: { nik: employeeNikUpdate.nik },
+      });
+    }
+    if (data.is_active !== undefined && user.employeeId) {
+      await tx.employee.update({
+        where: { id: user.employeeId },
+        data: { isActive: data.is_active },
+      });
+    }
+    return tx.user.update({
+      where: { id: userId },
+      data: update,
+      include: userInclude,
+    });
   });
 
   await writeAuditLog({
@@ -390,8 +514,19 @@ export async function updateBranchUser(
     action: "user.update",
     entityType: "user",
     entityId: userId,
-    newValues: { fields: Object.keys(data) },
+    oldValues:
+      data.nik !== undefined && trimStr(data.nik) !== user.nik
+        ? { nik: user.nik }
+        : undefined,
+    newValues: {
+      fields: Object.keys(data),
+      ...(update.nik ? { nik: update.nik } : {}),
+    },
   });
+
+  if (data.is_active !== undefined) {
+    await invalidateLeaderboardCaches();
+  }
 
   return mapUser(updated);
 }
@@ -456,5 +591,70 @@ export async function resetUserPassword(
 }
 
 export async function deactivateUser(actor: AuthUser, userId: string) {
-  return updateBranchUser(actor, userId, { is_active: false });
+  const result = await updateBranchUser(actor, userId, { is_active: false });
+  await writeAuditLog({
+    userId: actor.id,
+    action: "user.deactivate",
+    entityType: "user",
+    entityId: userId,
+  });
+  return result;
+}
+
+export async function deleteUserPermanently(actor: AuthUser, userId: string) {
+  if (!hasPermission(actor, "users.manage.branch")) throw forbidden();
+  if (actor.id === userId) {
+    throw forbidden("Tidak dapat menghapus akun sendiri");
+  }
+
+  const user = await assertCanManageUser(actor, userId);
+
+  if (user.employeeId) {
+    await prisma.employee.update({
+      where: { id: user.employeeId },
+      data: { isActive: false },
+    });
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.lateExcuse.updateMany({
+      where: { reviewedById: userId },
+      data: { reviewedById: null },
+    });
+    await tx.attendanceApprovalRequest.updateMany({
+      where: { reviewedById: userId },
+      data: { reviewedById: null },
+    });
+    await tx.reward.updateMany({
+      where: { issuedById: userId },
+      data: { issuedById: null },
+    });
+    await tx.auditLog.updateMany({
+      where: { userId },
+      data: { userId: null },
+    });
+    await tx.managerEvaluation.deleteMany({
+      where: { managerId: userId },
+    });
+    await tx.attachment.deleteMany({
+      where: { uploadedBy: userId },
+    });
+    await tx.announcement.updateMany({
+      where: { createdById: userId },
+      data: { createdById: actor.id },
+    });
+    await tx.user.delete({ where: { id: userId } });
+  });
+
+  await writeAuditLog({
+    userId: actor.id,
+    action: "user.delete",
+    entityType: "user",
+    entityId: userId,
+    oldValues: { nik: user.nik, full_name: user.fullName },
+  });
+
+  await invalidateLeaderboardCaches();
+
+  return { deleted: true, id: userId };
 }

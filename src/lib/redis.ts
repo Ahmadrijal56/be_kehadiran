@@ -58,3 +58,24 @@ export async function cacheDel(key: string): Promise<void> {
     // ignore cache failures
   }
 }
+
+export async function cacheDeleteByPrefix(prefix: string): Promise<void> {
+  try {
+    const redis = getRedis();
+    if (redis.status !== "ready") await redis.connect().catch(() => null);
+    let cursor = "0";
+    do {
+      const [next, keys] = await redis.scan(
+        cursor,
+        "MATCH",
+        `${prefix}*`,
+        "COUNT",
+        100
+      );
+      cursor = next;
+      if (keys.length > 0) await redis.del(...keys);
+    } while (cursor !== "0");
+  } catch {
+    // ignore cache failures
+  }
+}

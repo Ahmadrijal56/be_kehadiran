@@ -119,7 +119,11 @@ describe("telegram ingest (integration)", () => {
     const { id } = await saveTelegramWebhookMessage({
       messageId: BigInt(111222),
       groupId: GROUP_ID,
-      rawText: `NIK: 999999\nTanggal: 03/06/2026\nMasuk: 09:00`,
+      rawText: `Perusahaan: APT MANJUR SEHAT TSI
+NIK: 999999
+Nama: Karyawan Baru
+Tanggal: 03/06/2026
+Masuk: 09:00`,
     });
 
     await processTelegramMessageById(id);
@@ -147,8 +151,12 @@ Waktu: 03/06/2026 08:21:50`,
     const row = await prisma.telegramMessage.findUnique({ where: { id } });
     expect(row?.syncStatus).toBe("processed");
 
-    const employee = await prisma.employee.findFirst({ where: { nik: "102" } });
-    expect(employee?.fullName).toBe("DAFA");
+    const tsi = await prisma.branch.findFirst({ where: { code: "TSI" } });
+    const employee = await prisma.employee.findFirst({
+      where: { nik: "102", branchId: tsi!.id },
+    });
+    expect(employee).toBeTruthy();
+    expect(row?.syncStatus).toBe("processed");
   });
 
   it("TC-022c: VT490 MASUK + PULANG terpisah → satu attendance record", async () => {

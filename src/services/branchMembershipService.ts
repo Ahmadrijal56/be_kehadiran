@@ -1,5 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { businessError, validationError } from "../lib/errors.js";
+import { attachEmployeeToUserAccount } from "./accountIdentityService.js";
 
 export type BranchSummary = {
   id: string;
@@ -138,6 +139,57 @@ export async function moveEmployeeBranch(
   });
   if (!branch) throw validationError("Cabang tidak valid");
 
+  const employee = await prisma.employee.findUnique({
+    where: { id: employeeId },
+    include: { user: true },
+  });
+  if (!employee) throw validationError("Karyawan tidak ditemukan");
+
+  if (employee.branchId === branchId) {
+    await prisma.$transaction([
+      prisma.userBranch.deleteMany({ where: { userId } }),
+      prisma.userBranch.create({ data: { userId, branchId } }),
+      prisma.user.update({
+        where: { id: userId },
+        data: { branchId, employeeId },
+      }),
+    ]);
+    await attachEmployeeToUserAccount(userId, employeeId);
+    return;
+  }
+
+  const targetEmployee = await prisma.employee.findFirst({
+    where: { branchId, nik: employee.nik },
+    include: { user: true },
+  });
+
+  if (targetEmployee) {
+    if (targetEmployee.user && targetEmployee.user.id !== userId) {
+      throw businessError(
+        `NIK ${employee.nik} di cabang ${branch.name} sudah dipakai akun lain.`
+      );
+    }
+
+    await prisma.$transaction([
+      ...(employee.id !== targetEmployee.id
+        ? [
+            prisma.employee.update({
+              where: { id: employee.id },
+              data: { isActive: false },
+            }),
+          ]
+        : []),
+      prisma.userBranch.deleteMany({ where: { userId } }),
+      prisma.userBranch.create({ data: { userId, branchId } }),
+      prisma.user.update({
+        where: { id: userId },
+        data: { branchId, employeeId: targetEmployee.id },
+      }),
+    ]);
+    await attachEmployeeToUserAccount(userId, targetEmployee.id);
+    return;
+  }
+
   await prisma.$transaction([
     prisma.employee.update({
       where: { id: employeeId },
@@ -150,6 +202,7 @@ export async function moveEmployeeBranch(
       data: { branchId },
     }),
   ]);
+  await attachEmployeeToUserAccount(userId, employeeId);
 }
 
 export function userHasBranchAccess(

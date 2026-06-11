@@ -1,6 +1,8 @@
 import { Router } from "express";
+import multer from "multer";
 import { authenticate, requireOwner } from "../../middleware/auth.js";
 import { asyncHandler } from "../../middleware/asyncHandler.js";
+import { validationError } from "../../lib/errors.js";
 import {
   getOwnerBranchesComparison,
   getOwnerDashboardSummary,
@@ -9,6 +11,15 @@ import {
 } from "../../services/ownerDashboardService.js";
 import { getGlobalLeaderboard } from "../../services/leaderboardService.js";
 import { listAllUsers } from "../../services/branchUserService.js";
+import {
+  buildUserImportTemplateExcel,
+  importUsersFromExcel,
+} from "../../services/userImportService.js";
+
+const excelUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+});
 
 export const ownerRouter = Router();
 ownerRouter.use(authenticate, requireOwner);
@@ -18,6 +29,33 @@ ownerRouter.get(
   asyncHandler(async (req, res) => {
     const branchId = req.query.branch_id as string | undefined;
     res.json({ data: await listAllUsers(branchId) });
+  })
+);
+
+ownerRouter.get(
+  "/users/import-template",
+  asyncHandler(async (_req, res) => {
+    const { buffer, filename } = await buildUserImportTemplateExcel({
+      includeAllBranches: true,
+    });
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(buffer);
+  })
+);
+
+ownerRouter.post(
+  "/users/import",
+  excelUpload.single("file"),
+  asyncHandler(async (req, res) => {
+    if (!req.file?.buffer) {
+      throw validationError("File Excel wajib (field: file)");
+    }
+    const data = await importUsersFromExcel(req.user!, req.file.buffer);
+    res.json({ data });
   })
 );
 

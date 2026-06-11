@@ -53,6 +53,19 @@ notificationsRouter.get(
 );
 
 notificationsRouter.patch(
+  "/notifications/read-all",
+  asyncHandler(async (req, res) => {
+    const userId = req.user!.id;
+    const now = new Date();
+    const result = await prisma.notification.updateMany({
+      where: { userId, readAt: null },
+      data: { readAt: now },
+    });
+    res.json({ data: { marked: result.count, read_at: formatWibIso(now) } });
+  })
+);
+
+notificationsRouter.patch(
   "/notifications/:id/read",
   asyncHandler(async (req, res) => {
     const id = String(req.params.id);

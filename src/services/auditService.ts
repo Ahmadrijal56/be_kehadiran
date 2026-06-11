@@ -1,4 +1,5 @@
 import { prisma } from "../lib/prisma.js";
+import { log } from "../lib/logger.js";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -27,22 +28,30 @@ export async function writeAuditLog(params: {
   oldValues?: unknown;
   newValues?: unknown;
 }) {
-  const userId = asUuidOrNull(params.userId);
-  const entityId = asUuidOrNull(params.entityId);
+  try {
+    const userId = asUuidOrNull(params.userId);
+    const entityId = asUuidOrNull(params.entityId);
 
-  const newValues =
-    params.entityId && !entityId
-      ? mergeValues(params.newValues, { entity_key: params.entityId })
-      : params.newValues;
+    const newValues =
+      params.entityId && !entityId
+        ? mergeValues(params.newValues, { entity_key: params.entityId })
+        : params.newValues;
 
-  await prisma.auditLog.create({
-    data: {
-      userId,
+    await prisma.auditLog.create({
+      data: {
+        userId,
+        action: params.action,
+        entityType: params.entityType,
+        entityId,
+        oldValues: params.oldValues ?? undefined,
+        newValues: newValues ?? undefined,
+      },
+    });
+  } catch (err) {
+    log("warn", "Gagal menulis audit log", {
       action: params.action,
       entityType: params.entityType,
-      entityId,
-      oldValues: params.oldValues ?? undefined,
-      newValues: newValues ?? undefined,
-    },
-  });
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }

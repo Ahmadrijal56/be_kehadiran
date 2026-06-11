@@ -35,12 +35,22 @@ describe("API v1 — auth (Fase 2)", () => {
       .post("/api/v1/auth/login")
       .send({ identifier: "100001", password: "wrong-password" });
     expect(res.status).toBe(401);
+    expect(res.body.error.message).toContain("password salah");
 
     const audit = await prisma.auditLog.findFirst({
       where: { action: "auth.login.failed" },
       orderBy: { createdAt: "desc" },
     });
     expect(audit).toBeTruthy();
+  });
+
+  it("TC-003b: akun tidak ada → pesan jelas, bukan error server", async () => {
+    const res = await request(app)
+      .post("/api/v1/auth/login")
+      .send({ identifier: "TIDAK_ADA_999", password: "password123" });
+    expect(res.status).toBe(401);
+    expect(res.body.error.message).toContain("Akun tidak ditemukan");
+    expect(String(res.body.error.message)).not.toContain("prisma");
   });
 
   it("TC-004: login sukses → audit log", async () => {

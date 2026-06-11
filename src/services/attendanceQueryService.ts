@@ -7,7 +7,8 @@ import {
   todayWorkDateWib,
 } from "../utils/format.js";
 import { resolveEffectiveShiftId, isOffShift } from "./employeeShiftScheduleService.js";
-import { toDateOnly } from "../utils/time.js";
+import { getBranchShiftWindow } from "./branchShiftConfigService.js";
+import { computeDeltaMinutes, timeFromDbTime, toDateOnly } from "../utils/time.js";
 
 const LATE_EXCUSE_LOOKBACK_DAYS = 14;
 
@@ -20,6 +21,52 @@ function historyDefaultFrom(): Date {
 function resolveHistoryRange(from?: Date, to?: Date) {
   if (from || to) return { from, to };
   return { from: historyDefaultFrom(), to: undefined as Date | undefined };
+}
+
+function employeeWhere(employeeIds: string | string[]) {
+  const ids = Array.isArray(employeeIds) ? employeeIds : [employeeIds];
+  return ids.length === 1 ? { employeeId: ids[0]! } : { employeeId: { in: ids } };
+}
+
+function formatDbTimeHHmm(value: Date): string {
+  const { hours, minutes } = timeFromDbTime(value);
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+/** Satu tanggal kerja = satu record (cabang pertama yang absen masuk). */
+function dedupeAttendanceByWorkDate<
+  T extends { workDate: Date; checkInAt: Date | null; id: string },
+>(records: T[]): T[] {
+  const byDate = new Map<string, T>();
+  for (const row of records) {
+    const key = row.workDate.toISOString().slice(0, 10);
+    const prev = byDate.get(key);
+    if (!prev) {
+      byDate.set(key, row);
+      continue;
+    }
+    if (row.checkInAt && !prev.checkInAt) {
+      byDate.set(key, row);
+    } else if (row.checkInAt && prev.checkInAt && row.checkInAt < prev.checkInAt) {
+      byDate.set(key, row);
+    }
+  }
+  return [...byDate.values()].sort(
+    (a, b) => b.workDate.getTime() - a.workDate.getTime()
+  );
+}
+
+const shiftWindowCache = new Map<
+  string,
+  Awaited<ReturnType<typeof getBranchShiftWindow>>
+>();
+
+async function getShiftWindowCached(branchId: string, shiftId: number) {
+  const key = `${branchId}:${shiftId}`;
+  if (!shiftWindowCache.has(key)) {
+    shiftWindowCache.set(key, await getBranchShiftWindow(branchId, shiftId));
+  }
+  return shiftWindowCache.get(key)!;
 }
 
 function formatWibDisplay(date: Date): string {
@@ -42,6 +89,19 @@ function formatAttendanceMode(type: AttendanceType | null | undefined): string |
   if (type === "face_id") return "face";
   return "fingerprint";
 }
+
+function perusahaanFromTelegram(parsedJson: unknown, branchName: string): string {
+  if (parsedJson && typeof parsedJson === "object") {
+    const row = parsedJson as { perusahaan?: string; cabang?: string };
+    const fromMsg = row.perusahaan?.trim() || row.cabang?.trim();
+    if (fromMsg) return fromMsg;
+  }
+  return branchName;
+}
+
+const sourceMessageInclude = {
+  sourceMessage: { select: { parsedJson: true } },
+} as const;
 
 type AttendanceEventRow = {
   id: string;
@@ -82,6 +142,7 @@ type AttendanceRecordForEvents = {
   }>;
   employee: { nik: string; fullName: string };
   branch: { name: string };
+  sourceMessage?: { parsedJson: unknown } | null;
   kpiDailyScore?: { totalPoints: number } | null;
 };
 
@@ -104,13 +165,17 @@ type BreakEventRow = {
 };
 
 function eventBase(row: AttendanceRecordForEvents) {
+  const perusahaan = perusahaanFromTelegram(
+    row.sourceMessage?.parsedJson,
+    row.branch.name
+  );
   return {
     employee_nik: row.employee.nik,
     employee_name: row.employee.fullName,
     attendance_type: formatAttendanceMode(row.attendanceType),
     shift_code: row.shift.code,
     shift_name: row.shift.name,
-    perusahaan: row.branch.name,
+    perusahaan,
     branch_name: row.branch.name,
     work_date: row.workDate.toISOString().slice(0, 10),
     late_minutes: row.lateMinutes,
@@ -274,6 +339,11 @@ export type TimelineDayRow = {
   employee_name: string;
   shift_code: string;
   shift_name: string;
+  shift_start_time: string;
+  shift_end_time: string;
+  check_in_time: string | null;
+  break_start_time: string | null;
+  minutes_shift_to_break: number | null;
   perusahaan: string;
   branch_name: string;
   late_minutes: number;
@@ -378,7 +448,7 @@ function buildTimelineEvents(
 }
 
 export async function listAttendanceTimeline(
-  employeeId: string,
+  employeeIds: string | string[],
   opts: { from?: string; to?: string; page?: number; limit?: number }
 ) {
   const from = parseDateQuery(opts.from);
@@ -388,7 +458,7 @@ export async function listAttendanceTimeline(
   const skip = (page - 1) * limit;
 
   const where = {
-    employeeId,
+    ...employeeWhere(employeeIds),
     ...(from || to
       ? {
           workDate: {
@@ -399,7 +469,7 @@ export async function listAttendanceTimeline(
       : {}),
   };
 
-  const records = await prisma.attendanceRecord.findMany({
+  const recordsRaw = await prisma.attendanceRecord.findMany({
     where,
     include: {
       shift: true,
@@ -407,16 +477,19 @@ export async function listAttendanceTimeline(
       employee: { select: { nik: true, fullName: true } },
       branch: { select: { name: true } },
       kpiDailyScore: { select: { totalPoints: true } },
+      ...sourceMessageInclude,
     },
     orderBy: { workDate: "desc" },
   });
+
+  const records = dedupeAttendanceByWorkDate(recordsRaw);
 
   const workDates = records.map((r) => r.workDate);
   const approvals =
     workDates.length > 0
       ? await prisma.attendanceApprovalRequest.findMany({
           where: {
-            employeeId,
+            ...employeeWhere(employeeIds),
             workDate: { in: workDates },
             type: { in: ["early_leave", "no_break"] },
             status: "approved",
@@ -432,35 +505,59 @@ export async function listAttendanceTimeline(
     ])
   );
 
-  const days: TimelineDayRow[] = records
-    .map((row) => {
-      const workDateStr = row.workDate.toISOString().slice(0, 10);
-      const approvalType = approvalByDate.get(workDateStr) ?? null;
-      const twoScan =
-        approvalType === "early_leave" || approvalType === "no_break";
-      const events = buildTimelineEvents(row, approvalType);
+  shiftWindowCache.clear();
 
-      return {
-        work_date: workDateStr,
-        employee_nik: row.employee.nik,
-        employee_name: row.employee.fullName,
-        shift_code: row.shift.code,
-        shift_name: row.shift.name,
-        perusahaan: row.branch.name,
-        branch_name: row.branch.name,
-        late_minutes: row.lateMinutes,
-        day_points: row.kpiDailyScore?.totalPoints ?? null,
-        two_scan_mode: twoScan,
-        approval_type: approvalType,
-        approval_label:
-          approvalType === "early_leave" || approvalType === "no_break"
-            ? APPROVAL_LABELS[approvalType]
-            : null,
-        record_status: row.status,
-        events,
-      };
-    })
-    .filter((d) => d.events.length > 0);
+  const dayRows = await Promise.all(
+      records.map(async (row) => {
+        const workDateStr = row.workDate.toISOString().slice(0, 10);
+        const approvalType = approvalByDate.get(workDateStr) ?? null;
+        const twoScan =
+          approvalType === "early_leave" || approvalType === "no_break";
+        const events = buildTimelineEvents(row, approvalType);
+        if (events.length === 0) return null;
+
+        const shiftWindow = await getShiftWindowCached(row.branchId, row.shiftId);
+        const firstBreak = row.breakSessions[0] ?? null;
+        const checkInTime = row.checkInAt ? formatWibDisplay(row.checkInAt).split(" ")[1] ?? null : null;
+        const breakStartTime = firstBreak
+          ? formatWibDisplay(firstBreak.breakStartAt).split(" ")[1] ?? null
+          : null;
+        const minutesShiftToBreak =
+          firstBreak && row.checkInAt
+            ? computeDeltaMinutes(firstBreak.breakStartAt, shiftWindow.startTime, row.workDate)
+            : null;
+
+        return {
+          work_date: workDateStr,
+          employee_nik: row.employee.nik,
+          employee_name: row.employee.fullName,
+          shift_code: row.shift.code,
+          shift_name: row.shift.name,
+          shift_start_time: formatDbTimeHHmm(shiftWindow.startTime),
+          shift_end_time: formatDbTimeHHmm(shiftWindow.endTime),
+          check_in_time: checkInTime,
+          break_start_time: breakStartTime,
+          minutes_shift_to_break: minutesShiftToBreak,
+          perusahaan: perusahaanFromTelegram(
+            row.sourceMessage?.parsedJson,
+            row.branch.name
+          ),
+          branch_name: row.branch.name,
+          late_minutes: row.lateMinutes,
+          day_points: row.kpiDailyScore?.totalPoints ?? null,
+          two_scan_mode: twoScan,
+          approval_type: approvalType,
+          approval_label:
+            approvalType === "early_leave" || approvalType === "no_break"
+              ? APPROVAL_LABELS[approvalType]
+              : null,
+          record_status: row.status as string,
+          events,
+        } satisfies TimelineDayRow;
+      })
+    );
+
+  const days = dayRows.filter((d): d is TimelineDayRow => d !== null);
 
   const total = days.length;
   const items = days.slice(skip, skip + limit);
@@ -472,14 +569,14 @@ export async function listAttendanceTimeline(
 }
 
 export async function listAttendanceHistory(
-  employeeId: string,
+  employeeIds: string | string[],
   opts: { from?: string; to?: string; page?: number; limit?: number }
 ) {
-  return listEmployeeAttendanceEvents(employeeId, opts);
+  return listEmployeeAttendanceEvents(employeeIds, opts);
 }
 
 export async function listEmployeeAttendanceEvents(
-  employeeId: string,
+  employeeIds: string | string[],
   opts: { from?: string; to?: string; page?: number; limit?: number }
 ) {
   const from = parseDateQuery(opts.from);
@@ -490,14 +587,14 @@ export async function listEmployeeAttendanceEvents(
   const skip = (page - 1) * limit;
 
   const where = {
-    employeeId,
+    ...employeeWhere(employeeIds),
     workDate: {
       ...(range.from ? { gte: range.from } : {}),
       ...(range.to ? { lte: range.to } : {}),
     },
   };
 
-  const records = await prisma.attendanceRecord.findMany({
+  const recordsRaw = await prisma.attendanceRecord.findMany({
     where,
     take: Math.min(500, skip + limit + 100),
     include: {
@@ -506,10 +603,12 @@ export async function listEmployeeAttendanceEvents(
       employee: { select: { nik: true, fullName: true } },
       branch: { select: { name: true } },
       kpiDailyScore: { select: { totalPoints: true } },
+      ...sourceMessageInclude,
     },
     orderBy: [{ workDate: "desc" }, { checkInAt: "desc" }],
   });
 
+  const records = dedupeAttendanceByWorkDate(recordsRaw);
   const allEvents = sortEventsNewestFirst(records.flatMap((row) => buildCheckInOutEvents(row)));
 
   const total = allEvents.length;
@@ -522,7 +621,7 @@ export async function listEmployeeAttendanceEvents(
 }
 
 export async function listBreakHistory(
-  employeeId: string,
+  employeeIds: string | string[],
   opts: { from?: string; to?: string; page?: number; limit?: number }
 ) {
   const from = parseDateQuery(opts.from);
@@ -533,7 +632,7 @@ export async function listBreakHistory(
   const skip = (page - 1) * limit;
 
   const where = {
-    employeeId,
+    ...employeeWhere(employeeIds),
     breakSessions: { some: {} },
     workDate: {
       ...(range.from ? { gte: range.from } : {}),
@@ -549,6 +648,7 @@ export async function listBreakHistory(
       breakSessions: { orderBy: { breakStartAt: "asc" } },
       employee: { select: { nik: true, fullName: true } },
       branch: { select: { name: true } },
+      ...sourceMessageInclude,
     },
     orderBy: [{ workDate: "desc" }, { checkInAt: "desc" }],
   });
@@ -573,8 +673,20 @@ export async function listBranchAttendanceEvents(
   const limit = Math.min(500, Math.max(1, opts.limit ?? 100));
   const skip = (page - 1) * limit;
 
+  const { listActiveEmployeeIdsForBranch } = await import(
+    "./activeEmployeeFilter.js"
+  );
+  const activeEmployeeIds = await listActiveEmployeeIdsForBranch(branchId);
+  if (activeEmployeeIds.length === 0) {
+    return {
+      items: [],
+      pagination: { page, limit, total: 0, total_pages: 0 },
+    };
+  }
+
   const where = {
     branchId,
+    employeeId: { in: activeEmployeeIds },
     ...(from || to
       ? {
           workDate: {
@@ -593,6 +705,7 @@ export async function listBranchAttendanceEvents(
       employee: { select: { nik: true, fullName: true } },
       branch: { select: { name: true } },
       kpiDailyScore: { select: { totalPoints: true } },
+      ...sourceMessageInclude,
     },
     orderBy: [{ workDate: "desc" }, { checkInAt: "desc" }],
   });
@@ -618,8 +731,20 @@ export async function listBranchBreakHistory(
   const limit = Math.min(500, Math.max(1, opts.limit ?? 100));
   const skip = (page - 1) * limit;
 
+  const { listActiveEmployeeIdsForBranch } = await import(
+    "./activeEmployeeFilter.js"
+  );
+  const activeEmployeeIds = await listActiveEmployeeIdsForBranch(branchId);
+  if (activeEmployeeIds.length === 0) {
+    return {
+      items: [],
+      pagination: { page, limit, total: 0, total_pages: 0 },
+    };
+  }
+
   const where = {
     branchId,
+    employeeId: { in: activeEmployeeIds },
     breakSessions: { some: {} },
     ...(from || to
       ? {
@@ -638,6 +763,7 @@ export async function listBranchBreakHistory(
       breakSessions: { orderBy: { breakStartAt: "asc" } },
       employee: { select: { nik: true, fullName: true } },
       branch: { select: { name: true } },
+      ...sourceMessageInclude,
     },
     orderBy: [{ workDate: "desc" }, { checkInAt: "desc" }],
   });
@@ -696,11 +822,11 @@ function isLateExcuseEligibleRecord(
 }
 
 export async function getAttendanceForLateExcuse(
-  employeeId: string,
+  employeeIds: string | string[],
   attendanceId: string
 ) {
   const row = await prisma.attendanceRecord.findFirst({
-    where: { id: attendanceId, employeeId },
+    where: { id: attendanceId, ...employeeWhere(employeeIds) },
   });
   if (!row) throw notFound("Absensi tidak ditemukan");
 
@@ -723,16 +849,22 @@ export async function getAttendanceForLateExcuse(
   return row;
 }
 
-export async function listLateExcuseEligibleAttendances(employeeId: string) {
+export async function listLateExcuseEligibleAttendances(
+  employeeIds: string | string[],
+  currentEmployeeId?: string
+) {
   const today = todayWorkDateWib();
-  await ensureAttendanceRecordForDate(employeeId, today);
+  const current =
+    currentEmployeeId ??
+    (Array.isArray(employeeIds) ? employeeIds[0] : employeeIds);
+  if (current) await ensureAttendanceRecordForDate(current, today);
 
   const oldest = new Date(today);
   oldest.setUTCDate(oldest.getUTCDate() - (LATE_EXCUSE_LOOKBACK_DAYS - 1));
 
   const records = await prisma.attendanceRecord.findMany({
     where: {
-      employeeId,
+      ...employeeWhere(employeeIds),
       workDate: { gte: oldest, lte: today },
     },
     include: {

@@ -12,14 +12,24 @@ announcementsRouter.get(
   asyncHandler(async (req, res) => {
     const user = req.user!;
     const now = new Date();
+
+    let branchId = user.branchId;
+    if (!branchId && user.employeeId) {
+      const employee = await prisma.employee.findUnique({
+        where: { id: user.employeeId },
+        select: { branchId: true },
+      });
+      branchId = employee?.branchId ?? null;
+    }
+
     const items = await prisma.announcement.findMany({
       where: {
         AND: [
           {
             OR: [
               { scope: "global" },
-              ...(user.branchId
-                ? [{ scope: "branch" as const, branchId: user.branchId }]
+              ...(branchId
+                ? [{ scope: "branch" as const, branchId }]
                 : []),
             ],
           },

@@ -4,6 +4,7 @@ import type { AuthUser } from "./authService.js";
 
 const employee: AuthUser = {
   id: "1",
+  accountCode: "KR-TEST001",
   nik: "100001",
   fullName: "Test",
   email: null,

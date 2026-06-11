@@ -10,11 +10,14 @@ import { formatWibIso } from "../utils/format.js";
 
 export async function createLateExcuse(
   user: AuthUser,
-  employeeId: string,
+  historyEmployeeIds: string[],
   data: { attendance_id: string; reason_text: string },
   file?: Express.Multer.File
 ) {
-  const attendance = await getAttendanceForLateExcuse(employeeId, data.attendance_id);
+  const attendance = await getAttendanceForLateExcuse(
+    historyEmployeeIds,
+    data.attendance_id
+  );
 
   const existing = await prisma.lateExcuse.findFirst({
     where: {
@@ -28,13 +31,13 @@ export async function createLateExcuse(
 
   let uploaded: Awaited<ReturnType<typeof uploadPrivateFile>> | null = null;
   if (file) {
-    uploaded = await uploadPrivateFile(file, `late-excuses/${employeeId}`);
+    uploaded = await uploadPrivateFile(file, `late-excuses/${attendance.employeeId}`);
   }
 
   const excuse = await prisma.lateExcuse.create({
     data: {
       attendanceId: attendance.id,
-      employeeId,
+      employeeId: attendance.employeeId,
       reasonText: data.reason_text.trim(),
       status: "pending",
     },

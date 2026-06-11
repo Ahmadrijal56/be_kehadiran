@@ -3,6 +3,7 @@ import { authenticate, requirePermission } from "../../middleware/auth.js";
 import { asyncHandler } from "../../middleware/asyncHandler.js";
 import {
   deactivateUser,
+  deleteUserPermanently,
   resetUserPassword,
   updateBranchUser,
   updateUserBranches,
@@ -17,8 +18,9 @@ usersRouter.patch(
   requirePermission("users.manage.branch"),
   asyncHandler(async (req, res) => {
     const userId = String(req.params.userId);
-    const { full_name, email, password, is_active } = req.body ?? {};
+    const { nik, full_name, email, password, is_active } = req.body ?? {};
     const data = await updateBranchUser(req.user!, userId, {
+      nik,
       full_name,
       email,
       password,
@@ -50,8 +52,19 @@ usersRouter.patch(
   })
 );
 
+usersRouter.delete(
+  "/:userId",
+  requirePermission("users.manage.branch"),
+  asyncHandler(async (req, res) => {
+    const userId = String(req.params.userId);
+    const data = await deleteUserPermanently(req.user!, userId);
+    res.json({ data });
+  })
+);
+
 usersRouter.put(
   "/:userId/branches",
+  requirePermission("users.manage.branch"),
   asyncHandler(async (req, res) => {
     const userId = String(req.params.userId);
     const { branch_ids } = req.body ?? {};

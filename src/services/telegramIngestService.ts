@@ -5,12 +5,17 @@ import { prisma } from "../lib/prisma.js";
 import { toDateOnly } from "../utils/time.js";
 import { processCheckIn, resolveShiftId } from "./attendanceService.js";
 import { ensureUserAccountForEmployee } from "./employeeAccountService.js";
+import { findCrossBranchAttendanceOnDate } from "./accountIdentityService.js";
 import { downloadAndStoreTelegramPhoto } from "./telegramPhotoService.js";
 import { correctBiofingerDateSkew } from "./telegramDateSkew.js";
 import {
   parseTelegramMessageText,
   type ParsedTelegramAttendance,
 } from "./telegramMessageParser.js";
+import {
+  employeeNameMismatchError,
+  namesMatch,
+} from "./employeeMatching.js";
 
 type DailyScanSlot = "check_in" | "break_start" | "break_end" | "check_out";
 
@@ -271,17 +276,32 @@ export async function processTelegramMessageById(
   }
 }
 
+function isSharedBiofingerGroup(telegramGroupId: bigint): boolean {
+  return Boolean(
+    env.telegramBiofingerChatId && telegramGroupId === env.telegramBiofingerChatId
+  );
+}
+
 async function resolveBranchFromCompanyHint(hint?: string) {
   const normalized = hint?.trim();
   if (!normalized) return null;
 
   const branches = await prisma.branch.findMany({ where: { isActive: true } });
   const lower = normalized.toLowerCase();
+  const tokens = normalized.split(/\s+/).map((t) => t.toUpperCase());
 
   const exact = branches.find((b) => b.name.toLowerCase() === lower);
   if (exact) return exact;
 
-  const codeToken = normalized.split(/\s+/).pop()?.toUpperCase();
+  for (const branch of branches) {
+    const code = branch.code.toUpperCase();
+    if (tokens.includes(code)) return branch;
+    if (lower.endsWith(` ${code.toLowerCase()}`) || lower.includes(` ${code.toLowerCase()} `)) {
+      return branch;
+    }
+  }
+
+  const codeToken = tokens[tokens.length - 1];
   if (codeToken) {
     const byCode = branches.find((b) => b.code.toUpperCase() === codeToken);
     if (byCode) return byCode;
@@ -297,68 +317,70 @@ async function resolveBranchFromCompanyHint(hint?: string) {
 
 async function resolveBranchForAttendance(
   telegramGroupId: bigint,
-  parsed: ReturnType<typeof parseTelegramMessageText>,
-  employeeBranchId?: string
+  parsed: ReturnType<typeof parseTelegramMessageText>
 ) {
-  const fromCompany = await resolveBranchFromCompanyHint(
-    parsed.perusahaan ?? parsed.cabang
-  );
+  const hint = parsed.perusahaan ?? parsed.cabang;
+  const fromCompany = await resolveBranchFromCompanyHint(hint);
   if (fromCompany) return fromCompany;
-  return resolveBranchForGroup(telegramGroupId, employeeBranchId);
+
+  if (isSharedBiofingerGroup(telegramGroupId)) {
+    throw new Error(
+      `BRANCH_NOT_RESOLVED:Perusahaan/Cabang tidak dikenali dari pesan (${hint?.trim() || "kosong"}). ` +
+        "Pastikan mesin BioFinger mengirim field Perusahaan dengan kode cabang (mis. TSI, ALS)."
+    );
+  }
+
+  return resolveBranchForGroup(telegramGroupId);
 }
 
-async function resolveBranchForGroup(telegramGroupId: bigint, employeeBranchId?: string) {
+async function resolveBranchForGroup(telegramGroupId: bigint) {
   const branchByGroup = await prisma.branch.findFirst({
     where: { telegramGroupId, isActive: true },
   });
   if (branchByGroup) return branchByGroup;
 
-  if (
-    env.telegramBiofingerChatId &&
-    telegramGroupId === env.telegramBiofingerChatId
-  ) {
-    const branchByChat = await prisma.branch.findFirst({
-      where: { telegramGroupId: env.telegramBiofingerChatId, isActive: true },
+  if (env.telegramDefaultBranchId) {
+    const def = await prisma.branch.findUnique({
+      where: { id: env.telegramDefaultBranchId },
     });
-    if (branchByChat) return branchByChat;
+    if (def?.isActive) return def;
   }
 
-  if (employeeBranchId) {
-    const branch = await prisma.branch.findUnique({ where: { id: employeeBranchId } });
-    if (branch) return branch;
-  }
-
-  const fallback = await prisma.branch.findFirst({
-    where: { isActive: true },
-    orderBy: { createdAt: "asc" },
-  });
-  if (!fallback) throw new Error("BRANCH_NOT_FOUND");
-  return fallback;
+  throw new Error(
+    "BRANCH_NOT_RESOLVED:tidak dapat menentukan cabang dari grup Telegram atau field Perusahaan"
+  );
 }
 
 async function findOrCreateEmployee(
   parsed: ReturnType<typeof parseTelegramMessageText>,
-  branchId: string
+  branchId: string,
+  branchLabel: string
 ): Promise<Employee> {
   const existing = await prisma.employee.findFirst({
-    where: { branchId, nik: parsed.nik },
+    where: { branchId, nik: parsed.nik, isActive: true },
   });
 
   if (existing) {
-    await ensureUserAccountForEmployee(existing);
-    if (parsed.nama && parsed.nama !== existing.fullName) {
-      return prisma.employee.update({
-        where: { id: existing.id },
-        data: { fullName: parsed.nama },
-      });
+    const telegramName = parsed.nama?.trim();
+    if (telegramName && !namesMatch(telegramName, existing.fullName)) {
+      throw new Error(
+        employeeNameMismatchError(
+          parsed.nik,
+          branchLabel,
+          existing.fullName,
+          telegramName
+        )
+      );
     }
+    await ensureUserAccountForEmployee(existing);
     return existing;
   }
 
+  const telegramName = parsed.nama?.trim();
   const employee = await prisma.employee.create({
     data: {
       nik: parsed.nik,
-      fullName: parsed.nama ?? `Karyawan ${parsed.nik}`,
+      fullName: telegramName || `Karyawan ${parsed.nik}`,
       branchId,
       defaultShiftId: DEFAULT_SHIFT_ID,
     },
@@ -370,6 +392,7 @@ async function findOrCreateEmployee(
     nik: parsed.nik,
     fullName: employee.fullName,
     branchId,
+    branchLabel,
   });
 
   return employee;
@@ -521,7 +544,11 @@ async function applyParsedAttendance(
   photoFileId: string | null
 ): Promise<{ attendanceId: string; eventLabel: string }> {
   const branch = await resolveBranchForAttendance(telegramGroupId, parsedInput);
-  const employee = await findOrCreateEmployee(parsedInput, branch.id);
+  const employee = await findOrCreateEmployee(
+    parsedInput,
+    branch.id,
+    branch.name
+  );
   const resolvedBranch = branch;
 
   let photoUrl: string | null = null;
@@ -533,6 +560,12 @@ async function applyParsedAttendance(
   }
 
   const workDate = toDateOnly(parsedInput.workDate);
+
+  const crossBranch = await findCrossBranchAttendanceOnDate(employee.id, workDate);
+  if (crossBranch) {
+    throw new Error(`DUPLICATE_ATTENDANCE:cross_branch:${parsedInput.nik}`);
+  }
+
   let parsed = await reconcileParsedScan(employee.id, workDate, parsedInput);
 
   const shiftId = await resolveShiftId(employee.id, workDate);

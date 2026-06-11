@@ -48,8 +48,12 @@ import {
   listBranchEmployeesWithType,
   updateEmployeeType,
 } from "../../services/organizationConfigService.js";
+import {
+  buildUserImportTemplateExcel,
+  importUsersFromExcel,
+} from "../../services/userImportService.js";
 
-const shiftUpload = multer({
+const excelUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024, files: 1 },
 });
@@ -188,6 +192,39 @@ branchesRouter.post(
       branch_ids,
     });
     res.status(201).json({ data: user });
+  })
+);
+
+branchesRouter.get(
+  "/:branchId/users/import-template",
+  requirePermission("users.manage.branch"),
+  asyncHandler(async (req, res) => {
+    const branchId = branchIdParam(req);
+    assertBranchAccess(req.user!, branchId);
+    const { buffer, filename } = await buildUserImportTemplateExcel({ branchId });
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(buffer);
+  })
+);
+
+branchesRouter.post(
+  "/:branchId/users/import",
+  requirePermission("users.manage.branch"),
+  excelUpload.single("file"),
+  asyncHandler(async (req, res) => {
+    const branchId = branchIdParam(req);
+    assertBranchAccess(req.user!, branchId);
+    if (!req.file?.buffer) {
+      throw validationError("File Excel wajib (field: file)");
+    }
+    const data = await importUsersFromExcel(req.user!, req.file.buffer, {
+      fixedBranchId: branchId,
+    });
+    res.json({ data });
   })
 );
 
@@ -340,7 +377,7 @@ branchesRouter.get(
 branchesRouter.post(
   "/:branchId/shift-schedule/upload",
   requirePermission("users.manage.branch"),
-  shiftUpload.single("file"),
+  excelUpload.single("file"),
   asyncHandler(async (req, res) => {
     const branchId = branchIdParam(req);
     assertBranchAccess(req.user!, branchId);

@@ -3,6 +3,7 @@ import { formatWibIso, todayWorkDateWib } from "../utils/format.js";
 import { OFF_SHIFT_ID } from "../constants/shifts.js";
 import { cacheGet, cacheSet } from "../lib/redis.js";
 import { resolveEffectiveShiftIdsForEmployees } from "./employeeShiftScheduleService.js";
+import { listActiveEmployeeIdsForBranch } from "./activeEmployeeFilter.js";
 
 export type BranchEmployeeAttendance = {
   employee_id: string;
@@ -95,10 +96,15 @@ async function loadBranchRows(branchId: string): Promise<BranchEmployeeAttendanc
     return redisHit.items;
   }
 
+  const activeEmployeeIds = await listActiveEmployeeIdsForBranch(branchId);
+  if (activeEmployeeIds.length === 0) {
+    return [];
+  }
+
   const shiftById = await getShiftsById();
 
   const employees = await prisma.employee.findMany({
-    where: { branchId, isActive: true },
+    where: { branchId, isActive: true, id: { in: activeEmployeeIds } },
     include: {
       defaultShift: true,
       attendanceRecords: {

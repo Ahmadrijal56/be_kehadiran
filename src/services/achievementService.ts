@@ -46,9 +46,10 @@ function mapAchievement(
   };
 }
 
-export async function listEmployeeAchievements(employeeId: string) {
+export async function listEmployeeAchievements(employeeIds: string | string[]) {
+  const ids = Array.isArray(employeeIds) ? employeeIds : [employeeIds];
   const items = await prisma.achievement.findMany({
-    where: { employeeId },
+    where: { employeeId: ids.length === 1 ? ids[0]! : { in: ids } },
     include: { rewards: true },
     orderBy: [{ yearMonth: "desc" }, { createdAt: "desc" }],
   });

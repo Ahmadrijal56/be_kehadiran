@@ -19,12 +19,18 @@ import {
 } from "./tokenSecurityService.js";
 import { linkUserToEmployeeByNik } from "./employeeAccountService.js";
 import {
+  attachEmployeeToUserAccount,
+  ensureUserAccountCode,
+  resolveEmployeeAccountScope,
+} from "./accountIdentityService.js";
+import {
   getBranchIdsForUser,
   listBranchesForUser,
 } from "./branchMembershipService.js";
 
 export type AuthUser = {
   id: string;
+  accountCode: string | null;
   nik: string;
   fullName: string;
   email: string | null;
@@ -64,6 +70,7 @@ export async function login(identifier: string, password: string) {
   if (!user) {
     await recordLoginFailure(identifier);
     await writeAuditLog({
+      userId: null,
       action: "auth.login.failed",
       entityType: "user",
       newValues: {
@@ -72,7 +79,9 @@ export async function login(identifier: string, password: string) {
         actor: "anonymous",
       },
     });
-    throw unauthorized("ID/email atau password salah");
+    throw unauthorized(
+      "Akun tidak ditemukan. Periksa ID/email Anda atau hubungi owner jika belum punya akun."
+    );
   }
 
   const valid = await bcrypt.compare(password, user.passwordHash);
@@ -109,9 +118,14 @@ export async function login(identifier: string, password: string) {
 
   const branchId = user.branchId ?? branchIds[0] ?? null;
   const permissionCodes = [...new Set(permissions.map((p) => p.permission.code))];
+  const accountCode = await ensureUserAccountCode(user.id);
+  if (user.employeeId) {
+    await attachEmployeeToUserAccount(user.id, user.employeeId);
+  }
 
   const authUser: AuthUser = {
     id: user.id,
+    accountCode,
     nik: user.nik,
     fullName: user.fullName,
     email: user.email,
@@ -160,6 +174,7 @@ export async function login(identifier: string, password: string) {
 export function mapAuthUserResponse(user: AuthUser) {
   return {
     id: user.id,
+    account_code: user.accountCode,
     nik: user.nik,
     full_name: user.fullName,
     employee_id: user.employeeId,
@@ -276,6 +291,11 @@ export async function resolveAuthUser(userId: string): Promise<AuthUser> {
   });
   if (!user || !user.isActive) throw unauthorized();
 
+  const accountCode = await ensureUserAccountCode(userId);
+  if (user.employeeId) {
+    await attachEmployeeToUserAccount(userId, user.employeeId);
+  }
+
   const roleIds = user.userRoles.map((ur) => ur.roleId);
   const roles = user.userRoles.map((ur) => ur.role.code);
   const permissions = await prisma.rolePermission.findMany({
@@ -286,6 +306,7 @@ export async function resolveAuthUser(userId: string): Promise<AuthUser> {
 
   const authUser: AuthUser = {
     id: user.id,
+    accountCode,
     nik: user.nik,
     fullName: user.fullName,
     email: user.email,
@@ -323,4 +344,14 @@ export function requireEmployeeProfile(user: AuthUser): string {
     throw new AppError(422, "BUSINESS_RULE_VIOLATION", "User tidak terhubung ke data karyawan");
   }
   return user.employeeId;
+}
+
+/** Employee aktif + semua record lintas cabang untuk riwayat absensi/KPI. */
+export async function requireEmployeeAccountScope(user: AuthUser): Promise<{
+  currentEmployeeId: string;
+  historyEmployeeIds: string[];
+  accountCode: string;
+}> {
+  const currentEmployeeId = requireEmployeeProfile(user);
+  return resolveEmployeeAccountScope(user.id, currentEmployeeId);
 }
