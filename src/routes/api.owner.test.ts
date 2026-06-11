@@ -106,6 +106,22 @@ describe("API v1 — owner module", () => {
     expect(audit).toBeTruthy();
   });
 
+  it("POST /owner/factory-reset — tolak manager", async () => {
+    const res = await request(app)
+      .post("/api/v1/owner/factory-reset")
+      .set("Authorization", `Bearer ${managerToken}`)
+      .send({ password: "password123", confirm_phrase: "RESET" });
+    expect(res.status).toBe(403);
+  });
+
+  it("POST /owner/factory-reset — tolak frasa salah", async () => {
+    const res = await request(app)
+      .post("/api/v1/owner/factory-reset")
+      .set("Authorization", `Bearer ${ownerToken}`)
+      .send({ password: "password123", confirm_phrase: "SALAH" });
+    expect(res.status).toBe(400);
+  });
+
   it("TC-038: GET /reports/export monthly — file Excel valid", async () => {
     const ym = new Date().toISOString().slice(0, 7);
     const res = await request(app)

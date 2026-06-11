@@ -1,11 +1,12 @@
 import { prisma } from "../lib/prisma.js";
 import {
-  businessError,
   notFound,
   validationError,
 } from "../lib/errors.js";
 import { writeAuditLog } from "./auditService.js";
 import { assignOwnerToBranch } from "./branchMembershipService.js";
+import type { AuthUser } from "./authService.js";
+import { permanentlyDeleteBranch } from "./branchPurgeService.js";
 
 function mapBranch(b: {
   id: string;
@@ -133,26 +134,10 @@ export async function updateBranch(
   return mapBranch(branch);
 }
 
-export async function deleteBranch(actorId: string, branchId: string) {
-  const existing = await prisma.branch.findUnique({ where: { id: branchId } });
-  if (!existing) throw notFound("Cabang tidak ditemukan");
-
-  const empCount = await prisma.employee.count({ where: { branchId } });
-  if (empCount > 0) {
-    throw businessError("Cabang masih memiliki karyawan — nonaktifkan saja");
-  }
-
-  await prisma.branch.update({
-    where: { id: branchId },
-    data: { isActive: false },
-  });
-
-  await writeAuditLog({
-    userId: actorId,
-    action: "branch.deactivate",
-    entityType: "branch",
-    entityId: branchId,
-    oldValues: mapBranch(existing),
-    newValues: { is_active: false },
-  });
+export async function deleteBranch(
+  actor: AuthUser,
+  branchId: string,
+  confirmCode: string
+) {
+  return permanentlyDeleteBranch(actor, branchId, confirmCode);
 }

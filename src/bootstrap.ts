@@ -43,6 +43,12 @@ export async function startBackgroundServices(): Promise<void> {
 
   void import("./services/organizationConfigService.js")
     .then(({ ensureOrganizationDefaults }) => ensureOrganizationDefaults())
+    .then(() =>
+      import("./services/ownerRegistrationTokenService.js").then(
+        ({ ensureOwnerRegistrationTokenForSetup }) =>
+          ensureOwnerRegistrationTokenForSetup()
+      )
+    )
     .then(() => log("info", "Organization config defaults OK"))
     .catch((err) => {
       log("warn", "Organization config sync skipped", {

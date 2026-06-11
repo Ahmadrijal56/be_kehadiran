@@ -14,6 +14,7 @@ import {
   listAllBranches,
   updateBranch,
 } from "../../services/branchAdminService.js";
+import { purgeBranchEmployees } from "../../services/branchPurgeService.js";
 import {
   getBranchStatsToday,
   listBranchAttendanceAbsent,
@@ -107,11 +108,36 @@ branchesRouter.patch(
 );
 
 branchesRouter.delete(
+  "/:branchId/employees",
+  requireOwner,
+  asyncHandler(async (req, res) => {
+    const { confirm_code } = req.body ?? {};
+    if (!confirm_code) {
+      throw validationError("confirm_code wajib (kode cabang)");
+    }
+    const data = await purgeBranchEmployees(
+      req.user!,
+      branchIdParam(req),
+      String(confirm_code)
+    );
+    res.json({ data });
+  })
+);
+
+branchesRouter.delete(
   "/:branchId",
   requireOwner,
   asyncHandler(async (req, res) => {
-    await deleteBranch(req.user!.id, branchIdParam(req));
-    res.status(204).send();
+    const { confirm_code } = req.body ?? {};
+    if (!confirm_code) {
+      throw validationError("confirm_code wajib (kode cabang)");
+    }
+    const data = await deleteBranch(
+      req.user!,
+      branchIdParam(req),
+      String(confirm_code)
+    );
+    res.json({ data });
   })
 );
 

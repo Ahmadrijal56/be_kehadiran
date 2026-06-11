@@ -79,6 +79,9 @@ export const env = {
 
   /** Token untuk POST /dev/attendance/ingest (bypass manual, development). */
   manualIngestToken: process.env.MANUAL_INGEST_TOKEN ?? "",
+
+  /** Izinkan reset pabrik di production (POST /owner/factory-reset). */
+  allowFactoryReset: process.env.ALLOW_FACTORY_RESET === "true",
 } as const;
 
 if (env.nodeEnv === "production" && env.jwtSecret === "dev-only-change-in-production") {

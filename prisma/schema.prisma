@@ -463,6 +463,7 @@ model GamificationSettings {
   top2RewardLabel       String   @default("Voucher Indomaret") @map("top2_reward_label") @db.VarChar(150)
   top3AmountIdr         Int      @default(25000) @map("top3_amount_idr")
   top3RewardLabel       String   @default("Voucher Indomaret") @map("top3_reward_label") @db.VarChar(150)
+  ownerRegistrationToken String? @map("owner_registration_token") @db.VarChar(128)
   updatedAt             DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
   @@map("gamification_settings")

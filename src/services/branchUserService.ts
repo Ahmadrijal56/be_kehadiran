@@ -21,6 +21,8 @@ import {
   ensureUserAccountCode,
 } from "./accountIdentityService.js";
 import { invalidateLeaderboardCaches } from "./leaderboardService.js";
+import { purgeEmployeeOperationalData } from "./branchPurgeService.js";
+import { invalidateBranchAttendanceCache } from "./branchAttendanceService.js";
 
 export type BranchUserRole = "employee" | "manager";
 
@@ -608,15 +610,20 @@ export async function deleteUserPermanently(actor: AuthUser, userId: string) {
   }
 
   const user = await assertCanManageUser(actor, userId);
-
-  if (user.employeeId) {
-    await prisma.employee.update({
-      where: { id: user.employeeId },
-      data: { isActive: false },
-    });
-  }
+  const employeeId = user.employeeId;
+  const employeeBranchId = employeeId
+    ? (
+        await prisma.employee.findUnique({
+          where: { id: employeeId },
+          select: { branchId: true },
+        })
+      )?.branchId ?? user.branchId
+    : user.branchId;
 
   await prisma.$transaction(async (tx) => {
+    if (employeeId) {
+      await purgeEmployeeOperationalData(tx, [employeeId]);
+    }
     await tx.lateExcuse.updateMany({
       where: { reviewedById: userId },
       data: { reviewedById: null },
@@ -643,7 +650,11 @@ export async function deleteUserPermanently(actor: AuthUser, userId: string) {
       where: { createdById: userId },
       data: { createdById: actor.id },
     });
+    await tx.userBranch.deleteMany({ where: { userId } });
     await tx.user.delete({ where: { id: userId } });
+    if (employeeId) {
+      await tx.employee.delete({ where: { id: employeeId } });
+    }
   });
 
   await writeAuditLog({
@@ -654,6 +665,9 @@ export async function deleteUserPermanently(actor: AuthUser, userId: string) {
     oldValues: { nik: user.nik, full_name: user.fullName },
   });
 
+  if (employeeBranchId) {
+    invalidateBranchAttendanceCache(employeeBranchId);
+  }
   await invalidateLeaderboardCaches();
 
   return { deleted: true, id: userId };

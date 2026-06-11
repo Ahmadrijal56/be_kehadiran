@@ -1,9 +1,15 @@
 import bcrypt from "bcrypt";
-import { env } from "../config/env.js";
 import { businessError, forbidden, validationError } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
 import { writeAuditLog } from "./auditService.js";
 import { login } from "./authService.js";
+import {
+  clearStoredOwnerRegistrationToken,
+  getEnvOwnerRegistrationToken,
+  getStoredOwnerRegistrationToken,
+  hasOwnerRegistrationToken,
+  validateOwnerRegistrationToken,
+} from "./ownerRegistrationTokenService.js";
 
 export async function getBootstrapStatus() {
   const ownerRole = await prisma.role.findUnique({ where: { code: "owner" } });
@@ -12,6 +18,7 @@ export async function getBootstrapStatus() {
       seeded: false,
       has_owner: false,
       registration_enabled: false,
+      requires_license_token: false,
     };
   }
 
@@ -19,10 +26,19 @@ export async function getBootstrapStatus() {
     where: { roleId: ownerRole.id },
   });
 
+  const canRegister = ownerCount === 0 && (await hasOwnerRegistrationToken());
+  const dbToken = await getStoredOwnerRegistrationToken();
+  const envToken = getEnvOwnerRegistrationToken();
+
   return {
     seeded: true,
     has_owner: ownerCount > 0,
-    registration_enabled: Boolean(env.ownerLicenseToken),
+    registration_enabled: canRegister,
+    requires_license_token: canRegister,
+    /** Token dari reset pabrik (OWN-…) tersimpan di DB — autofill sessionStorage valid. */
+    has_reset_registration_token: Boolean(dbToken),
+    /** Token dari OWNER_LICENSE_TOKEN di .env server. */
+    uses_env_registration_token: Boolean(envToken),
   };
 }
 
@@ -41,16 +57,8 @@ export async function registerOwner(data: {
 
   if (!licenseToken || !nik || !fullName || password.length < 8) {
     throw validationError(
-      "license_token, nik, full_name, dan password (min 8) wajib diisi"
+      "Kode aktivasi, ID pengguna, nama lengkap, dan password (min 8) wajib diisi"
     );
-  }
-
-  if (!env.ownerLicenseToken) {
-    throw businessError("Registrasi owner belum dikonfigurasi di server");
-  }
-
-  if (licenseToken !== env.ownerLicenseToken) {
-    throw forbidden("Token lisensi tidak valid");
   }
 
   const ownerRole = await prisma.role.findUnique({ where: { code: "owner" } });
@@ -65,6 +73,28 @@ export async function registerOwner(data: {
     throw businessError(
       "Akun owner sudah ada. Hubungi owner yang terdaftar atau reset database untuk setup ulang."
     );
+  }
+
+  if (!(await hasOwnerRegistrationToken())) {
+    throw businessError(
+      "Kode aktivasi belum tersedia. Hubungi administrator atau lakukan reset pabrik."
+    );
+  }
+
+  if (!(await validateOwnerRegistrationToken(licenseToken))) {
+    const dbToken = await getStoredOwnerRegistrationToken();
+    const envToken = getEnvOwnerRegistrationToken();
+    if (dbToken) {
+      throw forbidden(
+        "Kode aktivasi tidak valid. Gunakan kode yang ditampilkan setelah reset pabrik."
+      );
+    }
+    if (envToken) {
+      throw forbidden(
+        "Kode aktivasi tidak valid. Pastikan sama dengan kode yang diberikan administrator sistem."
+      );
+    }
+    throw forbidden("Kode aktivasi tidak valid");
   }
 
   const existing = await prisma.user.findFirst({
@@ -84,6 +114,8 @@ export async function registerOwner(data: {
       userRoles: { create: { roleId: ownerRole.id } },
     },
   });
+
+  await clearStoredOwnerRegistrationToken();
 
   await writeAuditLog({
     userId: owner.id,
