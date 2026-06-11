@@ -9,14 +9,21 @@ import { syncAttendanceRemindersForUser } from "../../services/attendanceReminde
 export const notificationsRouter = Router();
 notificationsRouter.use(authenticate);
 
+const lastReminderSync = new Map<string, number>();
+const REMINDER_SYNC_INTERVAL_MS = 15 * 60 * 1000;
+
 notificationsRouter.get(
   "/notifications",
   asyncHandler(async (req, res) => {
     if (req.user?.employeeId) {
-      await syncAttendanceRemindersForUser(
-        req.user.id,
-        req.user.employeeId
-      ).catch(() => {});
+      const last = lastReminderSync.get(req.user.id) ?? 0;
+      if (Date.now() - last >= REMINDER_SYNC_INTERVAL_MS) {
+        lastReminderSync.set(req.user.id, Date.now());
+        await syncAttendanceRemindersForUser(
+          req.user.id,
+          req.user.employeeId
+        ).catch(() => {});
+      }
     }
 
     const userId = req.user!.id;

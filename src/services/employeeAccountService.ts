@@ -20,7 +20,10 @@ export async function findEmployeeByNik(
 }
 
 export async function linkUserToEmployeeByNik(userId: string): Promise<string | null> {
-  const user = await prisma.user.findUnique({ where: { id: userId } });
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { employeeId: true, nik: true, branchId: true },
+  });
   if (!user || user.employeeId) return user?.employeeId ?? null;
 
   const employee = await findEmployeeByNik(user.nik, user.branchId);

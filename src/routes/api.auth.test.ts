@@ -24,7 +24,7 @@ describe("API v1 — auth (Fase 2)", () => {
   });
 
   it("TC-002: login manager & owner", async () => {
-    const mgr = await login("MGR001");
+    const mgr = await login("101");
     expect(mgr.user.roles).toContain("manager");
     const own = await login("OWN001");
     expect(own.user.roles).toContain("owner");
@@ -44,7 +44,7 @@ describe("API v1 — auth (Fase 2)", () => {
   });
 
   it("TC-004: login sukses → audit log", async () => {
-    await login("100002");
+    await login("102");
     const audit = await prisma.auditLog.findFirst({
       where: { action: "auth.login.success" },
       orderBy: { createdAt: "desc" },
@@ -94,8 +94,9 @@ describe("API v1 — auth (Fase 2)", () => {
   });
 
   it("TC-007: manager reset password user cabang", async () => {
-    const mgr = await login("MGR001");
-    const target = await prisma.user.findUnique({ where: { nik: "100003" } });
+    const mgr = await login("101");
+    const target = await prisma.user.findUnique({ where: { nik: "103" } });
+    expect(target).toBeTruthy();
     const res = await request(app)
       .post(`/api/v1/users/${target!.id}/reset-password`)
       .set("Authorization", `Bearer ${mgr.access_token}`)

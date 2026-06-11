@@ -8,6 +8,7 @@ import { formatOffsetRange } from "../lib/kpiOffsetTime.js";
 import { WORK_SHIFT_IDS } from "../constants/shifts.js";
 import { forbidden, validationError } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
+import { cacheDel, cacheGet, cacheSet } from "../lib/redis.js";
 import type { AuthUser } from "./authService.js";
 import { hasPermission } from "./authService.js";
 import { writeAuditLog } from "./auditService.js";
@@ -65,8 +66,13 @@ export type PublicRulesPayload = {
 
 let rulesCache: KpiPointRuleRow[] | null = null;
 let settingsCache: GamificationSettingsRow | null = null;
+let publicRulesCache: PublicRulesPayload | null = null;
 let rulesCacheAt = 0;
+let settingsCacheAt = 0;
+let publicRulesCacheAt = 0;
 const CACHE_MS = 30_000;
+const PUBLIC_RULES_CACHE_MS = 5 * 60_000;
+const PUBLIC_RULES_REDIS_KEY = "public:rules";
 
 function formatIdr(amount: number): string {
   return `Rp ${amount.toLocaleString("id-ID")}`;
@@ -245,6 +251,22 @@ export async function listKpiPointRules(options?: {
   }));
 }
 
+let allRulesCache: KpiPointRuleRow[] | null = null;
+let allRulesCacheAt = 0;
+
+export async function listKpiPointRulesCached(options?: {
+  activeOnly?: boolean;
+}): Promise<KpiPointRuleRow[]> {
+  const activeOnly = options?.activeOnly ?? true;
+  if (activeOnly) return getActiveKpiRulesCached();
+
+  const now = Date.now();
+  if (allRulesCache && now - allRulesCacheAt < CACHE_MS) return allRulesCache;
+  allRulesCache = await listKpiPointRules({ activeOnly: false });
+  allRulesCacheAt = now;
+  return allRulesCache;
+}
+
 export async function getActiveKpiRulesCached(): Promise<KpiPointRuleRow[]> {
   const now = Date.now();
   if (rulesCache && now - rulesCacheAt < CACHE_MS) return rulesCache;
@@ -255,16 +277,22 @@ export async function getActiveKpiRulesCached(): Promise<KpiPointRuleRow[]> {
 
 export async function getGamificationSettingsCached(): Promise<GamificationSettingsRow> {
   const now = Date.now();
-  if (settingsCache && now - rulesCacheAt < CACHE_MS) return settingsCache;
+  if (settingsCache && now - settingsCacheAt < CACHE_MS) return settingsCache;
   settingsCache = await getGamificationSettings();
-  rulesCacheAt = now;
+  settingsCacheAt = now;
   return settingsCache;
 }
 
 export function invalidateConfigCache() {
   rulesCache = null;
   settingsCache = null;
+  publicRulesCache = null;
+  allRulesCache = null;
   rulesCacheAt = 0;
+  settingsCacheAt = 0;
+  publicRulesCacheAt = 0;
+  allRulesCacheAt = 0;
+  void cacheDel(PUBLIC_RULES_REDIS_KEY);
 }
 
 export async function saveGamificationConfig(
@@ -390,11 +418,11 @@ export async function rewardAmountFromSettings(
   return null;
 }
 
-export async function getPublicRules(): Promise<PublicRulesPayload> {
+async function buildPublicRules(): Promise<PublicRulesPayload> {
   const [types, rules, settings] = await Promise.all([
     listEmployeeTypes(),
     listKpiPointRules(),
-    getGamificationSettings(),
+    getGamificationSettingsCached(),
   ]);
 
   const shifts = await prisma.shift.findMany({
@@ -439,6 +467,26 @@ export async function getPublicRules(): Promise<PublicRulesPayload> {
       },
     },
   };
+}
+
+export async function getPublicRules(): Promise<PublicRulesPayload> {
+  return buildPublicRules();
+}
+
+export async function getPublicRulesCached(): Promise<PublicRulesPayload> {
+  const redisCached = await cacheGet<PublicRulesPayload>(PUBLIC_RULES_REDIS_KEY);
+  if (redisCached) return redisCached;
+
+  const now = Date.now();
+  if (publicRulesCache && now - publicRulesCacheAt < PUBLIC_RULES_CACHE_MS) {
+    return publicRulesCache;
+  }
+
+  const data = await buildPublicRules();
+  publicRulesCache = data;
+  publicRulesCacheAt = now;
+  await cacheSet(PUBLIC_RULES_REDIS_KEY, data, 300);
+  return data;
 }
 
 export async function listBranchEmployeesWithType(

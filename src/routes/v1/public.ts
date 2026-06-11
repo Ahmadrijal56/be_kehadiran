@@ -1,24 +1,8 @@
 import { Router } from "express";
-import rateLimit from "express-rate-limit";
 import { asyncHandler } from "../../middleware/asyncHandler.js";
-import { env } from "../../config/env.js";
+import { publicDisplayRateLimit } from "../../middleware/rateLimit.js";
 import { getPublicDisplay, getPublicDisplayBranch, getPublicDisplayBranches } from "../../services/publicDisplayService.js";
-import { getPublicRules } from "../../services/organizationConfigService.js";
-
-const isTest = env.nodeEnv === "test" || process.env.VITEST === "true";
-
-export const publicDisplayRateLimit = rateLimit({
-  windowMs: 60 * 1000,
-  max: isTest ? 10_000 : 60,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: {
-    error: {
-      code: "RATE_LIMITED",
-      message: "Terlalu banyak permintaan. Coba lagi nanti.",
-    },
-  },
-});
+import { getPublicRulesCached } from "../../services/organizationConfigService.js";
 
 export const publicRouter = Router();
 
@@ -26,6 +10,7 @@ publicRouter.get(
   "/display/branches",
   publicDisplayRateLimit,
   asyncHandler(async (_req, res) => {
+    res.set("Cache-Control", "public, max-age=30, stale-while-revalidate=60");
     const data = await getPublicDisplayBranches();
     res.json({ data });
   })
@@ -46,6 +31,7 @@ publicRouter.get(
         });
         return;
       }
+      res.set("Cache-Control", "public, max-age=25, stale-while-revalidate=60");
       res.json({ data });
       return;
     }
@@ -59,6 +45,7 @@ publicRouter.get(
   "/rules",
   publicDisplayRateLimit,
   asyncHandler(async (_req, res) => {
-    res.json({ data: await getPublicRules() });
+    res.set("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
+    res.json({ data: await getPublicRulesCached() });
   })
 );

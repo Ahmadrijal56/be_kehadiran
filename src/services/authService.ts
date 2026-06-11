@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import { env } from "../config/env.js";
 import { AppError, unauthorized } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
+import { getCachedAuthUser, setCachedAuthUser } from "../lib/authUserCache.js";
 import { writeAuditLog } from "./auditService.js";
 import {
   blacklistToken,
@@ -264,6 +265,9 @@ export async function logout(accessToken: string): Promise<void> {
 }
 
 export async function resolveAuthUser(userId: string): Promise<AuthUser> {
+  const cached = getCachedAuthUser(userId);
+  if (cached) return cached;
+
   await linkUserToEmployeeByNik(userId);
 
   const user = await prisma.user.findUnique({
@@ -280,7 +284,7 @@ export async function resolveAuthUser(userId: string): Promise<AuthUser> {
   });
   const branchIds = await getBranchIdsForUser(user.id, roles);
 
-  return {
+  const authUser: AuthUser = {
     id: user.id,
     nik: user.nik,
     fullName: user.fullName,
@@ -291,6 +295,9 @@ export async function resolveAuthUser(userId: string): Promise<AuthUser> {
     roles,
     permissions: [...new Set(permissions.map((p) => p.permission.code))],
   };
+
+  setCachedAuthUser(userId, authUser);
+  return authUser;
 }
 
 export async function verifyAccessToken(token: string): Promise<string> {

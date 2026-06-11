@@ -271,19 +271,51 @@ export async function resolveEffectiveShiftId(
   employeeId: string,
   workDate: Date
 ): Promise<number> {
-  const dateOnly = toDateOnly(workDate);
-  const override = await prisma.employeeShift.findUnique({
-    where: {
-      employeeId_workDate: { employeeId, workDate: dateOnly },
-    },
-  });
-  if (override) return override.shiftId;
+  const map = await resolveEffectiveShiftIdsForEmployees(
+    [{ id: employeeId, defaultShiftId: 0 }],
+    workDate,
+    true
+  );
+  const resolved = map.get(employeeId);
+  if (resolved !== undefined) return resolved;
 
   const employee = await prisma.employee.findUniqueOrThrow({
     where: { id: employeeId },
     select: { defaultShiftId: true },
   });
   return employee.defaultShiftId;
+}
+
+/** Batch: satu query override untuk banyak karyawan. */
+export async function resolveEffectiveShiftIdsForEmployees(
+  employees: Array<{ id: string; defaultShiftId: number }>,
+  workDate: Date,
+  skipMissingDefault = false
+): Promise<Map<string, number>> {
+  const result = new Map<string, number>();
+  if (employees.length === 0) return result;
+
+  const dateOnly = toDateOnly(workDate);
+  const overrides = await prisma.employeeShift.findMany({
+    where: {
+      employeeId: { in: employees.map((e) => e.id) },
+      workDate: dateOnly,
+    },
+    select: { employeeId: true, shiftId: true },
+  });
+  const overrideMap = new Map(
+    overrides.map((o) => [o.employeeId, o.shiftId] as const)
+  );
+
+  for (const emp of employees) {
+    const override = overrideMap.get(emp.id);
+    if (override !== undefined) {
+      result.set(emp.id, override);
+    } else if (!skipMissingDefault || emp.defaultShiftId > 0) {
+      result.set(emp.id, emp.defaultShiftId);
+    }
+  }
+  return result;
 }
 
 export function isOffShift(shiftId: number): boolean {

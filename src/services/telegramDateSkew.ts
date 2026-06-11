@@ -37,9 +37,11 @@ function wibClock(d: Date): string {
  */
 export function correctBiofingerDateSkew(
   parsed: ParsedTelegramAttendance,
-  receivedAt: Date
+  receivedAt: Date,
+  /** Override "today" (WIB) — dipakai unit test agar tidak tergantung tanggal sistem. */
+  todayOverride?: Date
 ): ParsedTelegramAttendance {
-  const today = todayWorkDateWib();
+  const today = todayOverride ?? todayWorkDateWib();
   const yesterday = new Date(today);
   yesterday.setUTCDate(yesterday.getUTCDate() - 1);
 

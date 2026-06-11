@@ -13,14 +13,57 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixturePath = join(__dirname, "../../tests/fixtures/telegram_message.json");
 const GROUP_ID = BigInt(-1001234567890);
 
+/** Hanya data ingest test — jangan hapus absensi hari ini yang dipakai tes API lain. */
+const INGEST_TEST_NIKS = ["100001", "999999", "102", "103", "104", "105"];
+const INGEST_TEST_WORK_FROM = new Date("2026-06-01T00:00:00.000Z");
+const INGEST_TEST_WORK_TO = new Date("2026-06-11T00:00:00.000Z");
+
+async function cleanupIngestTestData() {
+  const employees = await prisma.employee.findMany({
+    where: { nik: { in: INGEST_TEST_NIKS } },
+    select: { id: true },
+  });
+  const employeeIds = employees.map((e) => e.id);
+  if (employeeIds.length === 0) return;
+
+  const attendanceRows = await prisma.attendanceRecord.findMany({
+    where: {
+      employeeId: { in: employeeIds },
+      workDate: { gte: INGEST_TEST_WORK_FROM, lt: INGEST_TEST_WORK_TO },
+    },
+    select: { id: true },
+  });
+  const attendanceIds = attendanceRows.map((a) => a.id);
+
+  if (attendanceIds.length > 0) {
+    await prisma.lateExcuse.deleteMany({
+      where: { attendanceId: { in: attendanceIds } },
+    });
+    await prisma.breakSession.deleteMany({
+      where: { attendanceId: { in: attendanceIds } },
+    });
+  }
+
+  await prisma.kpiDailyScore.deleteMany({
+    where: {
+      employeeId: { in: employeeIds },
+      workDate: { gte: INGEST_TEST_WORK_FROM, lt: INGEST_TEST_WORK_TO },
+    },
+  });
+  await prisma.attendanceRecord.deleteMany({
+    where: {
+      employeeId: { in: employeeIds },
+      workDate: { gte: INGEST_TEST_WORK_FROM, lt: INGEST_TEST_WORK_TO },
+    },
+  });
+  await prisma.telegramMessage.deleteMany({
+    where: { telegramGroupId: GROUP_ID },
+  });
+}
+
 describe("telegram ingest (integration)", () => {
   beforeEach(async () => {
-    await prisma.lateExcuse.deleteMany();
-    await prisma.attachment.deleteMany();
-    await prisma.breakSession.deleteMany();
-    await prisma.kpiDailyScore.deleteMany();
-    await prisma.attendanceRecord.deleteMany();
-    await prisma.telegramMessage.deleteMany();
+    await cleanupIngestTestData();
   });
 
   it("TC-020: pesan valid baru → record tersimpan & diproses", async () => {
@@ -41,8 +84,16 @@ describe("telegram ingest (integration)", () => {
     expect(row?.syncStatus).toBe("processed");
     expect(row?.attendanceId).toBeTruthy();
 
-    const kpi = await prisma.kpiDailyScore.findFirst({
-      where: { employee: { nik: "100001" } },
+    const attendance = await prisma.attendanceRecord.findUniqueOrThrow({
+      where: { id: row!.attendanceId! },
+    });
+    const kpi = await prisma.kpiDailyScore.findUnique({
+      where: {
+        employeeId_workDate: {
+          employeeId: attendance.employeeId,
+          workDate: attendance.workDate,
+        },
+      },
     });
     expect(kpi?.lateMinutes).toBeGreaterThan(0);
   });

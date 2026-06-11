@@ -1,3 +1,4 @@
+import compression from "compression";
 import cors from "cors";
 import express, { Router } from "express";
 import helmet from "helmet";
@@ -11,7 +12,7 @@ import {
   biofingerWebhookRouter,
 } from "./routes/webhooks/biofinger.js";
 import { v1Router } from "./routes/v1/index.js";
-import { globalApiRateLimit } from "./middleware/rateLimit.js";
+import { globalApiRateLimit, publicDisplayRateLimit } from "./middleware/rateLimit.js";
 import { asyncHandler } from "./middleware/asyncHandler.js";
 import { getPublicDisplay } from "./services/publicDisplayService.js";
 
@@ -29,6 +30,7 @@ app.use(
     crossOriginResourcePolicy: { policy: "cross-origin" },
   })
 );
+app.use(compression());
 app.use(requestIdMiddleware);
 app.use(
   cors({
@@ -69,6 +71,7 @@ app.use("/iclock", biofingerAdmsRouter);
 const legacyPublicRouter = Router();
 legacyPublicRouter.get(
   "/display",
+  publicDisplayRateLimit,
   asyncHandler(async (req, res) => {
     const month = req.query.month as string | undefined;
     

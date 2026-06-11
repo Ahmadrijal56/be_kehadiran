@@ -13,13 +13,38 @@ async function loginEmployee() {
 
 describe("Gamification — monthly ranks & achievements", () => {
   let employeeToken: string;
+  let testBranchId: string;
   const TEST_MONTH = "2099-06";
 
   beforeAll(async () => {
-    employeeToken = await loginEmployee();
-    const employees = await prisma.employee.findMany({
-      where: { nik: { in: ["100001", "100002", "100003"] } },
+    await prisma.gamificationSettings.update({
+      where: { id: "default" },
+      data: {
+        monthlyRewardsEnabled: true,
+        top1AmountIdr: 100_000,
+        top2AmountIdr: 50_000,
+        top3AmountIdr: 25_000,
+      },
     });
+
+    employeeToken = await loginEmployee();
+
+    const anchor = await prisma.employee.findFirstOrThrow({
+      where: { nik: "100001" },
+    });
+    testBranchId = anchor.branchId;
+
+    const employees = await prisma.employee.findMany({
+      where: { branchId: testBranchId, isActive: true },
+      orderBy: { nik: "asc" },
+      take: 3,
+    });
+    if (employees.length < 3) {
+      throw new Error(
+        `Butuh minimal 3 karyawan aktif di cabang ${testBranchId} untuk tes gamification`
+      );
+    }
+
     const start = new Date(`${TEST_MONTH}-01T00:00:00.000Z`);
     const end = new Date("2099-07-01T00:00:00.000Z");
 
@@ -40,7 +65,9 @@ describe("Gamification — monthly ranks & achievements", () => {
     const points = [30, 20, 10];
     for (let i = 0; i < employees.length; i++) {
       const emp = employees[i]!;
-      const workDate = new Date(`${TEST_MONTH}-${String(10 + i).padStart(2, "0")}T00:00:00.000Z`);
+      const workDate = new Date(
+        `${TEST_MONTH}-${String(10 + i).padStart(2, "0")}T00:00:00.000Z`
+      );
       await prisma.attendanceRecord.create({
         data: {
           employeeId: emp.id,
@@ -67,13 +94,12 @@ describe("Gamification — monthly ranks & achievements", () => {
   });
 
   it("TC-039: Top 3 bulan — 3 achievement branch per toko", async () => {
-    const branch = await prisma.branch.findUnique({ where: { code: "DEMO01" } });
     const branchAchievements = await prisma.achievement.findMany({
       where: {
         yearMonth: TEST_MONTH,
         scope: "branch",
         type: { in: ["top_1", "top_2", "top_3"] },
-        employee: { branchId: branch!.id },
+        employee: { branchId: testBranchId },
       },
     });
     expect(branchAchievements.length).toBe(3);
@@ -81,7 +107,12 @@ describe("Gamification — monthly ranks & achievements", () => {
 
   it("TC-040: Top 1 — voucher Rp100.000", async () => {
     const top1 = await prisma.achievement.findFirst({
-      where: { yearMonth: TEST_MONTH, type: "top_1", scope: "branch" },
+      where: {
+        yearMonth: TEST_MONTH,
+        type: "top_1",
+        scope: "branch",
+        employee: { branchId: testBranchId },
+      },
       include: { rewards: true },
     });
     expect(top1).toBeTruthy();

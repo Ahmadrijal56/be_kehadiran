@@ -1,7 +1,8 @@
 import { prisma } from "../lib/prisma.js";
 import { formatWibIso, todayWorkDateWib } from "../utils/format.js";
 import { OFF_SHIFT_ID } from "../constants/shifts.js";
-import { resolveEffectiveShiftId } from "./employeeShiftScheduleService.js";
+import { cacheGet, cacheSet } from "../lib/redis.js";
+import { resolveEffectiveShiftIdsForEmployees } from "./employeeShiftScheduleService.js";
 
 export type BranchEmployeeAttendance = {
   employee_id: string;
@@ -15,6 +16,29 @@ export type BranchEmployeeAttendance = {
   break_start_at: string | null;
   scheduled_off?: boolean;
 };
+
+type ShiftRow = { id: number; code: string; name: string };
+
+let shiftsCache: ShiftRow[] | null = null;
+let shiftsCacheAt = 0;
+const SHIFTS_CACHE_MS = 5 * 60_000;
+
+const rowsMemCache = new Map<
+  string,
+  { at: number; rows: BranchEmployeeAttendance[] }
+>();
+const ROWS_MEM_CACHE_MS = 20_000;
+
+async function getShiftsById(): Promise<Record<number, ShiftRow>> {
+  const now = Date.now();
+  if (!shiftsCache || now - shiftsCacheAt >= SHIFTS_CACHE_MS) {
+    shiftsCache = await prisma.shift.findMany({
+      select: { id: true, code: true, name: true },
+    });
+    shiftsCacheAt = now;
+  }
+  return Object.fromEntries(shiftsCache.map((s) => [s.id, s]));
+}
 
 function mapRow(
   emp: {
@@ -54,10 +78,24 @@ function mapRow(
   };
 }
 
-async function loadBranchRows(branchId: string) {
+async function loadBranchRows(branchId: string): Promise<BranchEmployeeAttendance[]> {
   const workDate = todayWorkDateWib();
-  const shifts = await prisma.shift.findMany();
-  const shiftById = Object.fromEntries(shifts.map((s) => [s.id, s]));
+  const workDateKey = workDate.toISOString().slice(0, 10);
+  const memKey = `${branchId}:${workDateKey}`;
+
+  const memHit = rowsMemCache.get(memKey);
+  if (memHit && Date.now() - memHit.at < ROWS_MEM_CACHE_MS) {
+    return memHit.rows;
+  }
+
+  const redisKey = `branch:attendance:today:${memKey}`;
+  const redisHit = await cacheGet<{ items: BranchEmployeeAttendance[] }>(redisKey);
+  if (redisHit?.items) {
+    rowsMemCache.set(memKey, { at: Date.now(), rows: redisHit.items });
+    return redisHit.items;
+  }
+
+  const shiftById = await getShiftsById();
 
   const employees = await prisma.employee.findMany({
     where: { branchId, isActive: true },
@@ -74,22 +112,31 @@ async function loadBranchRows(branchId: string) {
     orderBy: { fullName: "asc" },
   });
 
-  const rows = await Promise.all(
-    employees.map(async (emp) => {
-      const att = emp.attendanceRecords[0];
-      const effectiveShiftId = await resolveEffectiveShiftId(emp.id, workDate);
-      const scheduledOff = effectiveShiftId === OFF_SHIFT_ID;
-      const scheduledShift = shiftById[effectiveShiftId];
-      return mapRow(
-        emp,
-        att,
-        scheduledShift
-          ? { code: scheduledShift.code, name: scheduledShift.name }
-          : undefined,
-        scheduledOff
-      );
-    })
+  const shiftMap = await resolveEffectiveShiftIdsForEmployees(
+    employees.map((emp) => ({
+      id: emp.id,
+      defaultShiftId: emp.defaultShiftId,
+    })),
+    workDate
   );
+
+  const rows = employees.map((emp) => {
+    const att = emp.attendanceRecords[0];
+    const effectiveShiftId = shiftMap.get(emp.id) ?? emp.defaultShiftId;
+    const scheduledOff = effectiveShiftId === OFF_SHIFT_ID;
+    const scheduledShift = shiftById[effectiveShiftId];
+    return mapRow(
+      emp,
+      att,
+      scheduledShift
+        ? { code: scheduledShift.code, name: scheduledShift.name }
+        : undefined,
+      scheduledOff
+    );
+  });
+
+  rowsMemCache.set(memKey, { at: Date.now(), rows });
+  await cacheSet(redisKey, { items: rows }, 25);
 
   return rows;
 }
@@ -103,31 +150,36 @@ export async function listBranchAttendanceToday(branchId: string) {
 }
 
 export async function listBranchAttendanceLate(branchId: string) {
-  const data = await listBranchAttendanceToday(branchId);
-  return { ...data, items: data.items.filter((r) => r.status === "late") };
+  const rows = await loadBranchRows(branchId);
+  return {
+    work_date: todayWorkDateWib().toISOString().slice(0, 10),
+    items: rows.filter((r) => r.status === "late"),
+  };
 }
 
 export async function listBranchAttendanceAbsent(branchId: string) {
-  const data = await listBranchAttendanceToday(branchId);
+  const rows = await loadBranchRows(branchId);
   return {
-    ...data,
-    items: data.items.filter((r) => r.status === "absent"),
+    work_date: todayWorkDateWib().toISOString().slice(0, 10),
+    items: rows.filter((r) => r.status === "absent"),
   };
 }
 
 export async function listBranchAttendanceOnBreak(branchId: string) {
-  const data = await listBranchAttendanceToday(branchId);
-  return { ...data, items: data.items.filter((r) => r.status === "on_break") };
+  const rows = await loadBranchRows(branchId);
+  return {
+    work_date: todayWorkDateWib().toISOString().slice(0, 10),
+    items: rows.filter((r) => r.status === "on_break"),
+  };
 }
 
 export async function getBranchStatsToday(branchId: string) {
-  const data = await listBranchAttendanceToday(branchId);
-  const items = data.items;
-  const count = (s: string) => items.filter((i) => i.status === s).length;
+  const rows = await loadBranchRows(branchId);
+  const count = (s: string) => rows.filter((i) => i.status === s).length;
 
   return {
-    work_date: data.work_date,
-    total_employees: items.filter((i) => i.status !== "off").length,
+    work_date: todayWorkDateWib().toISOString().slice(0, 10),
+    total_employees: rows.filter((i) => i.status !== "off").length,
     present: count("present"),
     late: count("late"),
     absent: count("absent"),
@@ -135,4 +187,15 @@ export async function getBranchStatsToday(branchId: string) {
     left: count("left"),
     off: count("off"),
   };
+}
+
+export function invalidateBranchAttendanceCache(branchId?: string): void {
+  if (!branchId) {
+    rowsMemCache.clear();
+    return;
+  }
+  const prefix = `${branchId}:`;
+  for (const key of Array.from(rowsMemCache.keys())) {
+    if (key.startsWith(prefix)) rowsMemCache.delete(key);
+  }
 }

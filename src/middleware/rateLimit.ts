@@ -28,3 +28,16 @@ export const loginRateLimit = rateLimit({
     },
   },
 });
+
+export const publicDisplayRateLimit = rateLimit({
+  windowMs: 60 * 1000,
+  max: isTest ? 10_000 : 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: {
+      code: "RATE_LIMITED",
+      message: "Terlalu banyak permintaan. Coba lagi nanti.",
+    },
+  },
+});

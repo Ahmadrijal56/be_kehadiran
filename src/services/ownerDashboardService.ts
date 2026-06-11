@@ -4,15 +4,18 @@ import { todayWorkDateWib } from "../utils/format.js";
 
 export async function getOwnerDashboardSummary() {
   const workDate = todayWorkDateWib();
-  const employees = await prisma.employee.count({ where: { isActive: true } });
+  const [employees, statusGroups] = await Promise.all([
+    prisma.employee.count({ where: { isActive: true } }),
+    prisma.attendanceRecord.groupBy({
+      by: ["status"],
+      where: { workDate },
+      _count: { id: true },
+    }),
+  ]);
 
-  const records = await prisma.attendanceRecord.findMany({
-    where: { workDate },
-    select: { status: true },
-  });
-
-  const count = (s: string) => records.filter((r) => r.status === s).length;
-  const withRecord = records.length;
+  const count = (s: string) =>
+    statusGroups.find((g) => g.status === s)?._count.id ?? 0;
+  const withRecord = statusGroups.reduce((sum, g) => sum + g._count.id, 0);
   const absent = Math.max(0, employees - withRecord) + count("absent");
 
   return {
@@ -33,36 +36,66 @@ export async function getOwnerBranchesComparison() {
     orderBy: { code: "asc" },
   });
 
-  const items = await Promise.all(
-    branches.map(async (branch) => {
-      const totalEmployees = await prisma.employee.count({
-        where: { branchId: branch.id, isActive: true },
-      });
+  const [employeeCounts, attendanceGroups] = await Promise.all([
+    prisma.employee.groupBy({
+      by: ["branchId"],
+      where: { isActive: true },
+      _count: { id: true },
+    }),
+    prisma.attendanceRecord.groupBy({
+      by: ["branchId", "status"],
+      where: { workDate },
+      _count: { id: true },
+    }),
+  ]);
 
-      const records = await prisma.attendanceRecord.findMany({
-        where: { branchId: branch.id, workDate },
-        select: { status: true },
-      });
-
-      const presentCount =
-        records.filter((r) => r.status === "present" || r.status === "left")
-          .length +
-        records.filter((r) => r.status === "on_break").length;
-      const lateCount = records.filter((r) => r.status === "late").length;
-      const denom = totalEmployees || 1;
-
-      return {
-        branch_id: branch.id,
-        branch_code: branch.code,
-        branch_name: branch.name,
-        total_employees: totalEmployees,
-        present_count: presentCount,
-        late_count: lateCount,
-        present_pct: Math.round((presentCount / denom) * 1000) / 10,
-        late_pct: Math.round((lateCount / denom) * 1000) / 10,
-      };
-    })
+  const empCountMap = new Map(
+    employeeCounts.map((row) => [row.branchId, row._count.id])
   );
+  const statusByBranch = new Map<
+    string,
+    { present: number; late: number; onBreak: number }
+  >();
+
+  for (const row of attendanceGroups) {
+    const current = statusByBranch.get(row.branchId) ?? {
+      present: 0,
+      late: 0,
+      onBreak: 0,
+    };
+    if (row.status === "present" || row.status === "left") {
+      current.present += row._count.id;
+    } else if (row.status === "on_break") {
+      current.onBreak += row._count.id;
+      current.present += row._count.id;
+    } else if (row.status === "late") {
+      current.late += row._count.id;
+    }
+    statusByBranch.set(row.branchId, current);
+  }
+
+  const items = branches.map((branch) => {
+    const totalEmployees = empCountMap.get(branch.id) ?? 0;
+    const stats = statusByBranch.get(branch.id) ?? {
+      present: 0,
+      late: 0,
+      onBreak: 0,
+    };
+    const presentCount = stats.present;
+    const lateCount = stats.late;
+    const denom = totalEmployees || 1;
+
+    return {
+      branch_id: branch.id,
+      branch_code: branch.code,
+      branch_name: branch.name,
+      total_employees: totalEmployees,
+      present_count: presentCount,
+      late_count: lateCount,
+      present_pct: Math.round((presentCount / denom) * 1000) / 10,
+      late_pct: Math.round((lateCount / denom) * 1000) / 10,
+    };
+  });
 
   return { work_date: workDate.toISOString().slice(0, 10), items };
 }

@@ -7,13 +7,30 @@ export type BranchSummary = {
   name: string;
 };
 
+let activeBranchIdsCache: { ids: string[]; at: number } | null = null;
+const BRANCH_IDS_CACHE_MS = 60_000;
+
 export async function listActiveBranchIds(): Promise<string[]> {
+  const now = Date.now();
+  if (
+    activeBranchIdsCache &&
+    now - activeBranchIdsCache.at < BRANCH_IDS_CACHE_MS
+  ) {
+    return activeBranchIdsCache.ids;
+  }
+
   const branches = await prisma.branch.findMany({
     where: { isActive: true },
     select: { id: true },
     orderBy: { code: "asc" },
   });
-  return branches.map((b) => b.id);
+  const ids = branches.map((b) => b.id);
+  activeBranchIdsCache = { ids, at: now };
+  return ids;
+}
+
+export function invalidateActiveBranchIdsCache(): void {
+  activeBranchIdsCache = null;
 }
 
 export async function getBranchIdsForUser(

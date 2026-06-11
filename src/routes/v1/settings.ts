@@ -6,9 +6,9 @@ import {
 } from "../../middleware/auth.js";
 import { asyncHandler } from "../../middleware/asyncHandler.js";
 import {
-  getGamificationSettings,
+  getGamificationSettingsCached,
   listEmployeeTypes,
-  listKpiPointRules,
+  listKpiPointRulesCached,
   saveEmployeeTypes,
   saveGamificationConfig,
 } from "../../services/organizationConfigService.js";
@@ -40,8 +40,8 @@ settingsRouter.get(
   requireOwner,
   asyncHandler(async (_req, res) => {
     const [settings, kpi_rules] = await Promise.all([
-      getGamificationSettings(),
-      listKpiPointRules({ activeOnly: false }),
+      getGamificationSettingsCached(),
+      listKpiPointRulesCached({ activeOnly: false }),
     ]);
     res.json({ data: { settings, kpi_rules } });
   })

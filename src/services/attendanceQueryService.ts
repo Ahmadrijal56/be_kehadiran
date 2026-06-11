@@ -11,6 +11,17 @@ import { toDateOnly } from "../utils/time.js";
 
 const LATE_EXCUSE_LOOKBACK_DAYS = 14;
 
+function historyDefaultFrom(): Date {
+  const d = todayWorkDateWib();
+  d.setUTCDate(d.getUTCDate() - 90);
+  return d;
+}
+
+function resolveHistoryRange(from?: Date, to?: Date) {
+  if (from || to) return { from, to };
+  return { from: historyDefaultFrom(), to: undefined as Date | undefined };
+}
+
 function formatWibDisplay(date: Date): string {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Jakarta",
@@ -473,24 +484,22 @@ export async function listEmployeeAttendanceEvents(
 ) {
   const from = parseDateQuery(opts.from);
   const to = parseDateQuery(opts.to);
+  const range = resolveHistoryRange(from, to);
   const page = Math.max(1, opts.page ?? 1);
   const limit = Math.min(500, Math.max(1, opts.limit ?? 100));
   const skip = (page - 1) * limit;
 
   const where = {
     employeeId,
-    ...(from || to
-      ? {
-          workDate: {
-            ...(from ? { gte: from } : {}),
-            ...(to ? { lte: to } : {}),
-          },
-        }
-      : {}),
+    workDate: {
+      ...(range.from ? { gte: range.from } : {}),
+      ...(range.to ? { lte: range.to } : {}),
+    },
   };
 
   const records = await prisma.attendanceRecord.findMany({
     where,
+    take: Math.min(500, skip + limit + 100),
     include: {
       shift: true,
       breakSessions: { orderBy: { breakStartAt: "asc" } },
@@ -518,6 +527,7 @@ export async function listBreakHistory(
 ) {
   const from = parseDateQuery(opts.from);
   const to = parseDateQuery(opts.to);
+  const range = resolveHistoryRange(from, to);
   const page = Math.max(1, opts.page ?? 1);
   const limit = Math.min(100, Math.max(1, opts.limit ?? 20));
   const skip = (page - 1) * limit;
@@ -525,18 +535,15 @@ export async function listBreakHistory(
   const where = {
     employeeId,
     breakSessions: { some: {} },
-    ...(from || to
-      ? {
-          workDate: {
-            ...(from ? { gte: from } : {}),
-            ...(to ? { lte: to } : {}),
-          },
-        }
-      : {}),
+    workDate: {
+      ...(range.from ? { gte: range.from } : {}),
+      ...(range.to ? { lte: range.to } : {}),
+    },
   };
 
   const records = await prisma.attendanceRecord.findMany({
     where,
+    take: Math.min(300, skip + limit + 50),
     include: {
       shift: true,
       breakSessions: { orderBy: { breakStartAt: "asc" } },

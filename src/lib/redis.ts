@@ -48,3 +48,13 @@ export async function cacheSet(key: string, value: unknown, ttlSeconds: number):
     // ignore cache failures
   }
 }
+
+export async function cacheDel(key: string): Promise<void> {
+  try {
+    const redis = getRedis();
+    if (redis.status !== "ready") await redis.connect().catch(() => null);
+    await redis.del(key);
+  } catch {
+    // ignore cache failures
+  }
+}

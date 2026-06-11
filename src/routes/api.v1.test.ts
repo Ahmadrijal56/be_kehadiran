@@ -15,7 +15,7 @@ async function loginEmployee() {
 async function loginManager() {
   const res = await request(app)
     .post("/api/v1/auth/login")
-    .send({ identifier: "MGR001", password: "password123" });
+    .send({ identifier: "101", password: "password123" });
   expect(res.status).toBe(200);
   return res.body.access_token as string;
 }
