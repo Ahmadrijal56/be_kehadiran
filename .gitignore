@@ -10,8 +10,9 @@ dist/
 .env.*.local
 .env.avatar-test
 
-# Telegram MTProto session file
+# Telegram MTProto session file (auto-generated saat npm run dev / start)
 .telegram-session
+.telegram-bot-session
 
 # IDE
 .vscode/

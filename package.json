@@ -29,7 +29,6 @@
     "telegram:set-webhook": "tsx scripts/set-telegram-webhook.ts",
     "telegram:get-chat-id": "tsx scripts/telegram-get-chat-id.ts",
     "telegram:user-login": "tsx scripts/telegram-user-login.ts",
-    "telegram:bot-session": "tsx scripts/telegram-bot-session.ts",
     "telegram:bot-listen": "tsx src/telegramBotListener.ts",
     "telegram:biofinger": "tsx src/telegramBotListener.ts",
     "telegram:poll": "tsx src/telegramListener.ts",

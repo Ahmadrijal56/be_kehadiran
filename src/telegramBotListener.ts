@@ -16,10 +16,14 @@ import type { Api } from "telegram";
 import { env } from "./config/env.js";
 import { enqueueProcessTelegramMessage } from "./lib/queue.js";
 import { log } from "./lib/logger.js";
+import {
+  loadTelegramBotSession,
+  saveTelegramBotSession,
+} from "./lib/telegramBotSessionStore.js";
 import { saveTelegramWebhookMessage } from "./services/telegramIngestService.js";
 
-function botSession(): StringSession {
-  return new StringSession(env.telegramBotSession || "");
+function botSession(sessionString: string): StringSession {
+  return new StringSession(sessionString);
 }
 
 export function isTelegramFloodWaitError(err: unknown): boolean {
@@ -114,7 +118,8 @@ export async function startBiofingerBotListener(): Promise<void> {
     throw new Error("TELEGRAM_BOT_TOKEN wajib di backend/.env");
   }
 
-  const client = new TelegramClient(botSession(), apiId, apiHash, {
+  const sessionString = await loadTelegramBotSession();
+  const client = new TelegramClient(botSession(sessionString), apiId, apiHash, {
     connectionRetries: 10,
   });
 
@@ -127,22 +132,16 @@ export async function startBiofingerBotListener(): Promise<void> {
       const sec = floodWaitSeconds(err);
       log("warn", "Telegram rate-limit (ImportBotAuthorization) — listener dilewati", {
         wait_seconds: sec,
-        hint:
-          "Set TELEGRAM_BOT_SESSION di Railway (jalankan: npm run telegram:bot-session) atau tunggu rate-limit habis",
+        hint: "Tunggu rate-limit habis; session akan dipakai otomatis dari Redis/file setelah auth sukses",
       });
       return;
     }
     throw err;
   }
 
-  if (!env.telegramBotSession) {
-    const saved = client.session.save() as unknown as string;
-    if (saved) {
-      log("info", "MTProto bot session baru — simpan ke TELEGRAM_BOT_SESSION", {
-        session_chars: saved.length,
-        hint: "Jalankan npm run telegram:bot-session lalu paste ke Railway env",
-      });
-    }
+  const saved = client.session.save() as unknown as string;
+  if (saved && saved !== sessionString) {
+    await saveTelegramBotSession(saved);
   }
 
   const me = await client.getMe();
