@@ -108,6 +108,19 @@ function mapUser(u: {
   };
 }
 
+function branchIdsForUser(user: {
+  branchId: string | null;
+  userBranches: Array<{ branchId: string }>;
+}): string[] {
+  const ids =
+    user.userBranches.length > 0
+      ? user.userBranches.map((ub) => ub.branchId)
+      : user.branchId
+        ? [user.branchId]
+        : [];
+  return [...new Set(ids)];
+}
+
 export async function listBranchUsers(branchId: string) {
   const users = await prisma.user.findMany({
     where: {
@@ -527,6 +540,10 @@ export async function updateBranchUser(
   });
 
   if (data.is_active !== undefined) {
+    const branchIds = branchIdsForUser(updated);
+    for (const branchId of branchIds) {
+      invalidateBranchAttendanceCache(branchId);
+    }
     await invalidateLeaderboardCaches();
   }
 
@@ -604,21 +621,27 @@ export async function deactivateUser(actor: AuthUser, userId: string) {
 }
 
 export async function deleteUserPermanently(actor: AuthUser, userId: string) {
-  if (!hasPermission(actor, "users.manage.branch")) throw forbidden();
+  if (
+    !hasPermission(actor, "users.manage.branch") &&
+    !actor.roles.includes("owner")
+  ) {
+    throw forbidden();
+  }
   if (actor.id === userId) {
     throw forbidden("Tidak dapat menghapus akun sendiri");
   }
 
   const user = await assertCanManageUser(actor, userId);
   const employeeId = user.employeeId;
-  const employeeBranchId = employeeId
-    ? (
-        await prisma.employee.findUnique({
-          where: { id: employeeId },
-          select: { branchId: true },
-        })
-      )?.branchId ?? user.branchId
-    : user.branchId;
+  const affectedBranchIds = branchIdsForUser(user);
+  if (employeeId) {
+    const emp = await prisma.employee.findUnique({
+      where: { id: employeeId },
+      select: { branchId: true },
+    });
+    if (emp?.branchId) affectedBranchIds.push(emp.branchId);
+  }
+  const uniqueBranchIds = [...new Set(affectedBranchIds)];
 
   await prisma.$transaction(async (tx) => {
     if (employeeId) {
@@ -646,10 +669,17 @@ export async function deleteUserPermanently(actor: AuthUser, userId: string) {
     await tx.attachment.deleteMany({
       where: { uploadedBy: userId },
     });
+    await tx.notification.deleteMany({
+      where: { userId },
+    });
+    await tx.announcementRead.deleteMany({
+      where: { userId },
+    });
     await tx.announcement.updateMany({
       where: { createdById: userId },
       data: { createdById: actor.id },
     });
+    await tx.userRole.deleteMany({ where: { userId } });
     await tx.userBranch.deleteMany({ where: { userId } });
     await tx.user.delete({ where: { id: userId } });
     if (employeeId) {
@@ -662,13 +692,17 @@ export async function deleteUserPermanently(actor: AuthUser, userId: string) {
     action: "user.delete",
     entityType: "user",
     entityId: userId,
-    oldValues: { nik: user.nik, full_name: user.fullName },
+    oldValues: {
+      nik: user.nik,
+      full_name: user.fullName,
+      employee_id: employeeId,
+    },
   });
 
-  if (employeeBranchId) {
-    invalidateBranchAttendanceCache(employeeBranchId);
+  for (const branchId of uniqueBranchIds) {
+    invalidateBranchAttendanceCache(branchId);
   }
   await invalidateLeaderboardCaches();
 
-  return { deleted: true, id: userId };
+  return { deleted: true, id: userId, employee_id: employeeId };
 }

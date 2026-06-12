@@ -8,7 +8,7 @@ import { sumDedupedMonthlyPoints } from "./kpiQueryService.js";
 import { ACTIVE_EMPLOYEE_USER_WHERE } from "./activeEmployeeFilter.js";
 
 const CACHE_TTL = 60;
-const CACHE_VERSION = "v6";
+const CACHE_VERSION = "v7";
 
 /** Hapus cache leaderboard & display publik (setelah hapus/nonaktifkan akun). */
 export async function invalidateLeaderboardCaches(): Promise<void> {

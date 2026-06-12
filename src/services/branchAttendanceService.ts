@@ -1,7 +1,7 @@
 import { prisma } from "../lib/prisma.js";
 import { formatWibIso, todayWorkDateWib } from "../utils/format.js";
 import { OFF_SHIFT_ID } from "../constants/shifts.js";
-import { cacheGet, cacheSet } from "../lib/redis.js";
+import { cacheDeleteByPrefix, cacheGet, cacheSet } from "../lib/redis.js";
 import { resolveEffectiveShiftIdsForEmployees } from "./employeeShiftScheduleService.js";
 import { listActiveEmployeeIdsForBranch } from "./activeEmployeeFilter.js";
 
@@ -198,10 +198,12 @@ export async function getBranchStatsToday(branchId: string) {
 export function invalidateBranchAttendanceCache(branchId?: string): void {
   if (!branchId) {
     rowsMemCache.clear();
+    void cacheDeleteByPrefix("branch:attendance:today:");
     return;
   }
   const prefix = `${branchId}:`;
   for (const key of Array.from(rowsMemCache.keys())) {
     if (key.startsWith(prefix)) rowsMemCache.delete(key);
   }
+  void cacheDeleteByPrefix(`branch:attendance:today:${prefix}`);
 }
