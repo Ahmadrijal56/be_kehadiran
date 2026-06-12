@@ -6,13 +6,12 @@ import { businessError, validationError } from "../lib/errors.js";
 import { log } from "../lib/logger.js";
 import {
   deleteLocalStoredFile,
-  getSignedFileUrl,
   isLocalFilePath,
-  localFileKey,
+  resolveStoredObjectKey,
   signLocalFileUrl,
   writeLocalBytes,
 } from "./storageService.js";
-import { deleteObject, isObjectStorageConfigured, objectKeyFromPublicUrl, putObject, shouldUseObjectStorage, formatStorageError } from "../lib/s3Client.js";
+import { deleteObject, objectKeyFromPublicUrl, putObject, shouldUseObjectStorage, formatStorageError } from "../lib/s3Client.js";
 import { invalidateAuthUserCache } from "../lib/authUserCache.js";
 import { AVATAR_FORMAT_HINT, isAllowedAvatarUpload } from "../lib/avatarMime.js";
 import type { AuthUser } from "./authService.js";
@@ -32,44 +31,47 @@ export type AvatarProfileFields = {
   avatar_visibility: AvatarVisibility;
 };
 
-/** URL tampilan untuk path tersimpan: local:, kunci S3, atau URL publik legacy. */
+/** URL tampilan — selalu via API backend agar bisa diakses dari HP/LAN/papan publik. */
 export async function resolveAvatarDisplayUrl(
   storedPath: string | null | undefined,
   publicBaseUrl?: string,
-  expiresSec = AVATAR_URL_TTL_SEC
+  expiresSec = AVATAR_URL_TTL_SEC,
+  cacheBust?: string | number
 ): Promise<string | null> {
   if (!storedPath?.trim()) return null;
 
-  if (isLocalFilePath(storedPath)) {
-    return signLocalFileUrl(localFileKey(storedPath), expiresSec, publicBaseUrl);
-  }
-
-  if (storedPath.startsWith("http://") || storedPath.startsWith("https://")) {
+  if (
+    (storedPath.startsWith("http://") || storedPath.startsWith("https://")) &&
+    !objectKeyFromPublicUrl(storedPath)
+  ) {
     return storedPath;
   }
 
-  if (!isObjectStorageConfigured()) return null;
+  const objectKey = resolveStoredObjectKey(storedPath);
+  if (!objectKey) return null;
 
-  try {
-    return await getSignedFileUrl(storedPath, expiresSec);
-  } catch (err) {
-    log("warn", "Failed to sign avatar object URL", {
-      storedPath,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return null;
-  }
+  return signLocalFileUrl(objectKey, expiresSec, publicBaseUrl, cacheBust);
+}
+
+function avatarCacheBust(updatedAt?: Date): string | number | undefined {
+  return updatedAt ? updatedAt.getTime() : undefined;
 }
 
 export async function mapAvatarProfileFields(
   row: {
     avatarUrl: string | null;
     avatarVisibility: AvatarVisibility;
+    updatedAt?: Date;
   },
   publicBaseUrl?: string
 ): Promise<AvatarProfileFields> {
   return {
-    avatar_url: await resolveAvatarDisplayUrl(row.avatarUrl, publicBaseUrl),
+    avatar_url: await resolveAvatarDisplayUrl(
+      row.avatarUrl,
+      publicBaseUrl,
+      AVATAR_URL_TTL_SEC,
+      avatarCacheBust(row.updatedAt)
+    ),
     avatar_visibility: row.avatarVisibility,
   };
 }
@@ -80,7 +82,7 @@ export async function getAvatarProfile(
 ): Promise<AvatarProfileFields> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { avatarUrl: true, avatarVisibility: true },
+    select: { avatarUrl: true, avatarVisibility: true, updatedAt: true },
   });
   if (!user) {
     return { avatar_url: null, avatar_visibility: "branch" };
@@ -106,12 +108,18 @@ export async function resolveVisibleAvatarUrl(
     avatarUrl: string | null;
     avatarVisibility: AvatarVisibility;
     branchIds: string[];
+    updatedAt?: Date;
   },
   _viewer: AuthUser,
   publicBaseUrl?: string
 ): Promise<string | null> {
   if (!target.avatarUrl) return null;
-  return resolveAvatarDisplayUrl(target.avatarUrl, publicBaseUrl);
+  return resolveAvatarDisplayUrl(
+    target.avatarUrl,
+    publicBaseUrl,
+    AVATAR_URL_TTL_SEC,
+    avatarCacheBust(target.updatedAt)
+  );
 }
 
 /** Papan publik (tanpa login) — foto profil tampil untuk semua cabang. */
@@ -120,12 +128,18 @@ export async function resolvePublicDisplayAvatarUrl(
     avatarUrl: string | null;
     avatarVisibility: AvatarVisibility;
     branchIds: string[];
+    updatedAt?: Date;
   },
   _displayBranchId: string,
   publicBaseUrl?: string
 ): Promise<string | null> {
   if (!target.avatarUrl) return null;
-  return resolveAvatarDisplayUrl(target.avatarUrl, publicBaseUrl);
+  return resolveAvatarDisplayUrl(
+    target.avatarUrl,
+    publicBaseUrl,
+    AVATAR_URL_TTL_SEC,
+    avatarCacheBust(target.updatedAt)
+  );
 }
 
 export async function attachPublicDisplayAvatars<T extends { nik: string }>(
@@ -142,6 +156,7 @@ export async function attachPublicDisplayAvatars<T extends { nik: string }>(
       nik: true,
       avatarUrl: true,
       avatarVisibility: true,
+      updatedAt: true,
       branchId: true,
       userBranches: { select: { branchId: true } },
     },
@@ -153,6 +168,7 @@ export async function attachPublicDisplayAvatars<T extends { nik: string }>(
       avatarUrl: string | null;
       avatarVisibility: AvatarVisibility;
       branchIds: string[];
+      updatedAt?: Date;
     }
   >();
 
@@ -165,6 +181,7 @@ export async function attachPublicDisplayAvatars<T extends { nik: string }>(
       avatarUrl: user.avatarUrl,
       avatarVisibility: user.avatarVisibility,
       branchIds,
+      updatedAt: user.updatedAt,
     });
   }
 
@@ -201,6 +218,7 @@ export async function attachLeaderboardAvatars<
       nik: true,
       avatarUrl: true,
       avatarVisibility: true,
+      updatedAt: true,
       branchId: true,
       userBranches: { select: { branchId: true } },
     },
@@ -213,6 +231,7 @@ export async function attachLeaderboardAvatars<
       avatarUrl: string | null;
       avatarVisibility: AvatarVisibility;
       branchIds: string[];
+      updatedAt?: Date;
     }
   >();
 
@@ -226,6 +245,7 @@ export async function attachLeaderboardAvatars<
       avatarUrl: user.avatarUrl,
       avatarVisibility: user.avatarVisibility,
       branchIds,
+      updatedAt: user.updatedAt,
     });
   }
 
@@ -398,8 +418,8 @@ export async function uploadUserAvatar(
 
   const updated = await prisma.user.update({
     where: { id: userId },
-    data: { avatarUrl: storedPath },
-    select: { avatarUrl: true, avatarVisibility: true },
+    data: { avatarUrl: storedPath, avatarVisibility: "global" },
+    select: { avatarUrl: true, avatarVisibility: true, updatedAt: true },
   });
 
   if (previous?.avatarUrl && previous.avatarUrl !== storedPath) {
@@ -419,7 +439,7 @@ export async function updateAvatarVisibility(
   const updated = await prisma.user.update({
     where: { id: userId },
     data: { avatarVisibility },
-    select: { avatarUrl: true, avatarVisibility: true },
+    select: { avatarUrl: true, avatarVisibility: true, updatedAt: true },
   });
   invalidateAuthUserCache(userId);
   return mapAvatarProfileFields(updated, publicBaseUrl);
@@ -442,7 +462,7 @@ export async function removeUserAvatar(
   const updated = await prisma.user.update({
     where: { id: userId },
     data: { avatarUrl: null },
-    select: { avatarUrl: true, avatarVisibility: true },
+    select: { avatarUrl: true, avatarVisibility: true, updatedAt: true },
   });
   invalidateAuthUserCache(userId);
   return mapAvatarProfileFields(updated, publicBaseUrl);

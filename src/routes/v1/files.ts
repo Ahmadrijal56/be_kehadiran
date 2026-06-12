@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { asyncHandler } from "../../middleware/asyncHandler.js";
 import { notFound } from "../../lib/errors.js";
-import { readLocalFile, verifyLocalFileSignature } from "../../services/storageService.js";
+import { readLocalFile, readStoredFile, verifyLocalFileSignature } from "../../services/storageService.js";
 
 export const filesRouter = Router();
 
@@ -17,11 +17,12 @@ filesRouter.get(
       throw notFound("File tidak ditemukan");
     }
 
-    const file = await readLocalFile(key);
+    const file = await readStoredFile(key);
     if (!file) throw notFound("File tidak ditemukan");
 
     res.setHeader("Content-Type", file.mimeType);
-    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.setHeader("Cache-Control", "private, max-age=3600, stale-while-revalidate=86400");
+    res.setHeader("ETag", `"${file.buffer.length}-${file.mimeType}"`);
     res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
     const origin = req.get("origin");
     if (origin) {

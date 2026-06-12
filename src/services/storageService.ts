@@ -6,7 +6,13 @@ import path from "node:path";
 import { env } from "../config/env.js";
 import { businessError } from "../lib/errors.js";
 import { log } from "../lib/logger.js";
-import { getS3Client, isObjectStorageConfigured, shouldUseObjectStorage } from "../lib/s3Client.js";
+import {
+  getObjectBuffer,
+  getS3Client,
+  isObjectStorageConfigured,
+  objectKeyFromPublicUrl,
+  shouldUseObjectStorage,
+} from "../lib/s3Client.js";
 
 const MAX_BYTES = 5 * 1024 * 1024;
 const ALLOWED_MIME = new Set(["image/jpeg", "image/png", "image/jpg"]);
@@ -48,7 +54,8 @@ function resolveLocalPath(key: string): string {
 export function signLocalFileUrl(
   key: string,
   expiresSec: number,
-  publicBaseUrl?: string
+  publicBaseUrl?: string,
+  cacheBust?: string | number
 ): string {
   const base = (publicBaseUrl ?? env.appUrl).replace(/\/$/, "");
   const expires = Math.floor(Date.now() / 1000) + expiresSec;
@@ -59,7 +66,23 @@ export function signLocalFileUrl(
     .split("/")
     .map((segment) => encodeURIComponent(segment))
     .join("/");
-  return `${base}/api/v1/files/${encodedKey}?expires=${expires}&sig=${sig}`;
+  const bust =
+    cacheBust != null && String(cacheBust).length > 0
+      ? `&v=${encodeURIComponent(String(cacheBust))}`
+      : "";
+  return `${base}/api/v1/files/${encodedKey}?expires=${expires}&sig=${sig}${bust}`;
+}
+
+/** Normalisasi path tersimpan (local:, kunci S3, URL legacy) ke object key. */
+export function resolveStoredObjectKey(storedPath: string): string | null {
+  const trimmed = storedPath.trim();
+  if (!trimmed) return null;
+  if (isLocalFilePath(trimmed)) return localFileKey(trimmed);
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    return objectKeyFromPublicUrl(trimmed);
+  }
+  if (!trimmed.includes("://")) return trimmed;
+  return null;
 }
 
 export function verifyLocalFileSignature(
@@ -156,6 +179,15 @@ export async function getSignedFileUrl(filePath: string, expiresSec = 3600): Pro
   return url;
 }
 
+/** Baca file dari disk lokal atau object storage (S3/R2/MinIO). */
+export async function readStoredFile(
+  key: string
+): Promise<{ buffer: Buffer; mimeType: string } | null> {
+  const local = await readLocalFile(key);
+  if (local) return local;
+  return getObjectBuffer(key);
+}
+
 export async function readLocalFile(
   key: string
 ): Promise<{ buffer: Buffer; mimeType: string } | null> {
@@ -196,11 +228,11 @@ export async function deleteLocalStoredFile(storedPath: string): Promise<void> {
 export function resolveStoredFileUrl(
   storedPath: string | null | undefined,
   expiresSec = 30 * 24 * 3600,
-  publicBaseUrl?: string
+  publicBaseUrl?: string,
+  cacheBust?: string | number
 ): string | null {
   if (!storedPath?.trim()) return null;
-  if (isLocalFilePath(storedPath)) {
-    return signLocalFileUrl(localFileKey(storedPath), expiresSec, publicBaseUrl);
-  }
-  return storedPath;
+  const objectKey = resolveStoredObjectKey(storedPath);
+  if (!objectKey) return storedPath.startsWith("http") ? storedPath : null;
+  return signLocalFileUrl(objectKey, expiresSec, publicBaseUrl, cacheBust);
 }

@@ -1,5 +1,6 @@
 import {
   DeleteObjectCommand,
+  GetObjectCommand,
   ListBucketsCommand,
   PutObjectCommand,
   S3Client,
@@ -199,6 +200,37 @@ export async function putObject(
     })
   );
   return buildPublicObjectUrl(objectKey);
+}
+
+function mimeTypeFromObjectKey(objectKey: string): string {
+  const ext = objectKey.split(".").pop()?.toLowerCase();
+  if (ext === "webp") return "image/webp";
+  if (ext === "png") return "image/png";
+  return "image/jpeg";
+}
+
+/** Baca objek dari S3/R2/MinIO — dipakai proxy file via API. */
+export async function getObjectBuffer(
+  objectKey: string
+): Promise<{ buffer: Buffer; mimeType: string } | null> {
+  const client = getS3Client();
+  if (!client) return null;
+
+  try {
+    const res = await client.send(
+      new GetObjectCommand({
+        Bucket: env.awsBucket,
+        Key: objectKey,
+      })
+    );
+    if (!res.Body) return null;
+    const buffer = Buffer.from(await res.Body.transformToByteArray());
+    const mimeType =
+      res.ContentType?.split(";")[0]?.trim() || mimeTypeFromObjectKey(objectKey);
+    return { buffer, mimeType };
+  } catch {
+    return null;
+  }
 }
 
 export async function deleteObject(objectKey: string): Promise<void> {
