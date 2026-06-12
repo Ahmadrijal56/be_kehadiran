@@ -9,6 +9,11 @@ import {
 import { resolveEffectiveShiftId, isOffShift } from "./employeeShiftScheduleService.js";
 import { getBranchShiftWindow } from "./branchShiftConfigService.js";
 import { computeDeltaMinutes, timeFromDbTime, toDateOnly } from "../utils/time.js";
+import {
+  computeWorkDurationMinutes,
+  formatWorkDurationLabel,
+  resolveOvertimeFields,
+} from "../utils/workDuration.js";
 
 const LATE_EXCUSE_LOOKBACK_DAYS = 14;
 
@@ -119,6 +124,10 @@ type AttendanceEventRow = {
   branch_name: string;
   work_date: string;
   late_minutes: number;
+  work_duration_minutes: number | null;
+  work_duration_label: string | null;
+  is_overtime: boolean;
+  overtime_label: string | null;
 };
 
 function sortEventsNewestFirst(events: AttendanceEventRow[]): AttendanceEventRow[] {
@@ -141,7 +150,7 @@ type AttendanceRecordForEvents = {
     durationMinutes?: number | null;
   }>;
   employee: { nik: string; fullName: string };
-  branch: { name: string };
+  branch: { name: string; breakAttendanceEnabled: boolean };
   sourceMessage?: { parsedJson: unknown } | null;
   kpiDailyScore?: { totalPoints: number } | null;
 };
@@ -195,10 +204,23 @@ function buildCheckInOutEvents(row: AttendanceRecordForEvents): AttendanceEventR
       waktu: formatWibDisplay(row.checkInAt),
       event_at: formatWibIso(row.checkInAt)!,
       points: row.kpiDailyScore?.totalPoints ?? null,
+      work_duration_minutes: null,
+      work_duration_label: null,
+      is_overtime: false,
+      overtime_label: null,
     });
   }
 
   if (row.checkOutAt) {
+    const workMinutes =
+      row.checkInAt != null
+        ? computeWorkDurationMinutes(row.checkInAt, row.checkOutAt)
+        : null;
+    const overtime = resolveOvertimeFields(
+      workMinutes,
+      row.checkInAt,
+      row.checkOutAt
+    );
     events.push({
       id: `${row.id}:out`,
       ...base,
@@ -206,6 +228,10 @@ function buildCheckInOutEvents(row: AttendanceRecordForEvents): AttendanceEventR
       waktu: formatWibDisplay(row.checkOutAt),
       event_at: formatWibIso(row.checkOutAt)!,
       points: null,
+      work_duration_minutes: workMinutes,
+      work_duration_label:
+        workMinutes != null ? formatWorkDurationLabel(workMinutes) : null,
+      ...overtime,
     });
   }
 
@@ -302,6 +328,15 @@ function mapAttendance(row: {
 
 export async function getTodayAttendance(employeeId: string) {
   const workDate = todayWorkDateWib();
+  const employee = await prisma.employee.findUnique({
+    where: { id: employeeId },
+    select: {
+      branch: { select: { breakAttendanceEnabled: true } },
+    },
+  });
+  const breakAttendanceEnabled =
+    employee?.branch.breakAttendanceEnabled ?? true;
+
   const row = await prisma.attendanceRecord.findUnique({
     where: { employeeId_workDate: { employeeId, workDate } },
     include: { shift: true, breakSessions: { orderBy: { breakStartAt: "desc" } } },
@@ -315,10 +350,38 @@ export async function getTodayAttendance(employeeId: string) {
       check_in_at: null,
       check_out_at: null,
       break: null,
+      break_attendance_enabled: breakAttendanceEnabled,
+      work_duration_minutes: null,
+      work_duration_label: null,
+      is_overtime: false,
+      overtime_label: null,
     };
   }
 
-  return mapAttendance(row);
+  const mapped = mapAttendance(row);
+  const workDurationMinutes = row.checkInAt
+    ? computeWorkDurationMinutes(
+        row.checkInAt,
+        row.checkOutAt ?? new Date()
+      )
+    : null;
+  const overtime = resolveOvertimeFields(
+    workDurationMinutes,
+    row.checkInAt,
+    row.checkOutAt
+  );
+
+  return {
+    ...mapped,
+    break_attendance_enabled: breakAttendanceEnabled,
+    break: breakAttendanceEnabled ? mapped.break : null,
+    work_duration_minutes: row.checkOutAt ? workDurationMinutes : null,
+    work_duration_label:
+      row.checkOutAt && workDurationMinutes != null
+        ? formatWorkDurationLabel(workDurationMinutes)
+        : null,
+    ...overtime,
+  };
 }
 
 export type TimelineEventRow = {
@@ -349,8 +412,14 @@ export type TimelineDayRow = {
   late_minutes: number;
   day_points: number | null;
   two_scan_mode: boolean;
+  break_attendance_enabled: boolean;
   approval_type: AttendanceApprovalType | null;
   approval_label: string | null;
+  attendance_mode_label: string | null;
+  work_duration_minutes: number | null;
+  work_duration_label: string | null;
+  is_overtime: boolean;
+  overtime_label: string | null;
   record_status: string;
   events: TimelineEventRow[];
 };
@@ -362,12 +431,14 @@ const APPROVAL_LABELS: Record<"early_leave" | "no_break", string> = {
 
 function buildTimelineEvents(
   row: AttendanceRecordForEvents,
-  twoScanType: AttendanceApprovalType | null
+  twoScanType: AttendanceApprovalType | null,
+  breakAttendanceEnabled: boolean
 ): TimelineEventRow[] {
   const events: TimelineEventRow[] = [];
   const mode = formatAttendanceMode(row.attendanceType);
-  const twoScan =
+  const twoScanFromApproval =
     twoScanType === "early_leave" || twoScanType === "no_break";
+  const twoScan = !breakAttendanceEnabled || twoScanFromApproval;
 
   if (row.checkInAt) {
     const isLate = row.status === "late" || row.lateMinutes > 0;
@@ -475,7 +546,7 @@ export async function listAttendanceTimeline(
       shift: true,
       breakSessions: { orderBy: { breakStartAt: "asc" } },
       employee: { select: { nik: true, fullName: true } },
-      branch: { select: { name: true } },
+      branch: { select: { name: true, breakAttendanceEnabled: true } },
       kpiDailyScore: { select: { totalPoints: true } },
       ...sourceMessageInclude,
     },
@@ -511,10 +582,26 @@ export async function listAttendanceTimeline(
       records.map(async (row) => {
         const workDateStr = row.workDate.toISOString().slice(0, 10);
         const approvalType = approvalByDate.get(workDateStr) ?? null;
-        const twoScan =
+        const breakAttendanceEnabled = row.branch.breakAttendanceEnabled;
+        const twoScanFromApproval =
           approvalType === "early_leave" || approvalType === "no_break";
-        const events = buildTimelineEvents(row, approvalType);
+        const twoScan = !breakAttendanceEnabled || twoScanFromApproval;
+        const events = buildTimelineEvents(
+          row,
+          approvalType,
+          breakAttendanceEnabled
+        );
         if (events.length === 0) return null;
+
+        const workDurationMinutes =
+          row.checkInAt && row.checkOutAt
+            ? computeWorkDurationMinutes(row.checkInAt, row.checkOutAt)
+            : null;
+        const overtime = resolveOvertimeFields(
+          workDurationMinutes,
+          row.checkInAt,
+          row.checkOutAt
+        );
 
         const shiftWindow = await getShiftWindowCached(row.branchId, row.shiftId);
         const firstBreak = row.breakSessions[0] ?? null;
@@ -546,11 +633,25 @@ export async function listAttendanceTimeline(
           late_minutes: row.lateMinutes,
           day_points: row.kpiDailyScore?.totalPoints ?? null,
           two_scan_mode: twoScan,
+          break_attendance_enabled: breakAttendanceEnabled,
           approval_type: approvalType,
           approval_label:
-            approvalType === "early_leave" || approvalType === "no_break"
+            twoScanFromApproval &&
+            (approvalType === "early_leave" || approvalType === "no_break")
               ? APPROVAL_LABELS[approvalType]
               : null,
+          attendance_mode_label: !breakAttendanceEnabled
+            ? "Cabang tanpa absen istirahat (masuk & pulang)"
+            : twoScanFromApproval &&
+                (approvalType === "early_leave" || approvalType === "no_break")
+              ? APPROVAL_LABELS[approvalType]
+              : null,
+          work_duration_minutes: workDurationMinutes,
+          work_duration_label:
+            workDurationMinutes != null
+              ? formatWorkDurationLabel(workDurationMinutes)
+              : null,
+          ...overtime,
           record_status: row.status as string,
           events,
         } satisfies TimelineDayRow;
@@ -601,7 +702,7 @@ export async function listEmployeeAttendanceEvents(
       shift: true,
       breakSessions: { orderBy: { breakStartAt: "asc" } },
       employee: { select: { nik: true, fullName: true } },
-      branch: { select: { name: true } },
+      branch: { select: { name: true, breakAttendanceEnabled: true } },
       kpiDailyScore: { select: { totalPoints: true } },
       ...sourceMessageInclude,
     },
@@ -647,7 +748,7 @@ export async function listBreakHistory(
       shift: true,
       breakSessions: { orderBy: { breakStartAt: "asc" } },
       employee: { select: { nik: true, fullName: true } },
-      branch: { select: { name: true } },
+      branch: { select: { name: true, breakAttendanceEnabled: true } },
       ...sourceMessageInclude,
     },
     orderBy: [{ workDate: "desc" }, { checkInAt: "desc" }],
@@ -703,7 +804,7 @@ export async function listBranchAttendanceEvents(
       shift: true,
       breakSessions: { orderBy: { breakStartAt: "asc" } },
       employee: { select: { nik: true, fullName: true } },
-      branch: { select: { name: true } },
+      branch: { select: { name: true, breakAttendanceEnabled: true } },
       kpiDailyScore: { select: { totalPoints: true } },
       ...sourceMessageInclude,
     },
@@ -762,7 +863,7 @@ export async function listBranchBreakHistory(
       shift: true,
       breakSessions: { orderBy: { breakStartAt: "asc" } },
       employee: { select: { nik: true, fullName: true } },
-      branch: { select: { name: true } },
+      branch: { select: { name: true, breakAttendanceEnabled: true } },
       ...sourceMessageInclude,
     },
     orderBy: [{ workDate: "desc" }, { checkInAt: "desc" }],

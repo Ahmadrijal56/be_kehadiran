@@ -95,12 +95,14 @@ branchesRouter.patch(
   requireOwner,
   asyncHandler(async (req, res) => {
     const branchId = branchIdParam(req);
-    const { name, address, telegram_group_id, timezone, is_active } = req.body ?? {};
+    const { name, address, telegram_group_id, timezone, break_attendance_enabled, is_active } =
+      req.body ?? {};
     const data = await updateBranch(req.user!.id, branchId, {
       name,
       address,
       telegram_group_id,
       timezone,
+      break_attendance_enabled,
       is_active,
     });
     res.json({ data });

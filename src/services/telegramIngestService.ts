@@ -573,6 +573,14 @@ async function applyParsedAttendance(
 
   let parsed = await reconcileParsedScan(employee.id, workDate, parsedInput);
 
+  if (!resolvedBranch.breakAttendanceEnabled) {
+    parsed = {
+      ...parsed,
+      istirahatMulai: undefined,
+      istirahatSelesai: undefined,
+    };
+  }
+
   const shiftId = await resolveShiftId(employee.id, workDate);
   let attendanceId: string | undefined;
 
@@ -650,10 +658,12 @@ async function applyParsedAttendance(
     parsed.jamPulang &&
     (await isDuplicateAttendanceEvent(employee.id, parsed.jamPulang, "check_out"));
 
+  const breakAttendanceEnabled = resolvedBranch.breakAttendanceEnabled;
+
   const shouldUpdateAttendance =
     (parsed.jamPulang && !duplicateCheckOut) ||
-    parsed.istirahatMulai ||
-    parsed.istirahatSelesai ||
+    (breakAttendanceEnabled &&
+      (parsed.istirahatMulai || parsed.istirahatSelesai)) ||
     photoUrl;
 
   if (shouldUpdateAttendance) {
@@ -669,23 +679,23 @@ async function applyParsedAttendance(
           : {}),
         status: parsed.jamPulang
           ? "left"
-          : parsed.istirahatSelesai
+          : breakAttendanceEnabled && parsed.istirahatSelesai
             ? "present"
-            : parsed.istirahatMulai
+            : breakAttendanceEnabled && parsed.istirahatMulai
               ? "on_break"
               : undefined,
       },
     });
   }
 
-  if (parsed.istirahatMulai) {
+  if (breakAttendanceEnabled && parsed.istirahatMulai) {
     const duplicateBreakStart = (await loadDailyAttendance(employee.id, workDate))?.breakSessions.some(
       (b) => b.breakStartAt.getTime() === parsed.istirahatMulai!.getTime()
     );
     if (!duplicateBreakStart) {
       await upsertBreakSession(attendanceId, parsed.istirahatMulai, parsed.istirahatSelesai);
     }
-  } else if (parsed.istirahatSelesai) {
+  } else if (breakAttendanceEnabled && parsed.istirahatSelesai) {
     const duplicateBreakEnd = (await loadDailyAttendance(employee.id, workDate))?.breakSessions.some(
       (b) => b.breakEndAt?.getTime() === parsed.istirahatSelesai!.getTime()
     );

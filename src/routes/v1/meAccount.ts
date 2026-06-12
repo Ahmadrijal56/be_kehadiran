@@ -42,17 +42,31 @@ meAccountRouter.get(
       user.branchId
         ? prisma.branch.findUnique({
             where: { id: user.branchId },
-            select: { id: true, code: true, name: true },
+            select: {
+              id: true,
+              code: true,
+              name: true,
+              breakAttendanceEnabled: true,
+            },
           })
         : Promise.resolve(null),
       getAvatarProfile(user.id, publicBaseUrl),
     ]);
 
+    const branchPayload = branch
+      ? {
+          id: branch.id,
+          code: branch.code,
+          name: branch.name,
+          break_attendance_enabled: branch.breakAttendanceEnabled,
+        }
+      : null;
+
     res.json({
       data: {
         ...mapAuthUserResponse(user),
         ...avatar,
-        branch,
+        branch: branchPayload,
       },
     });
   })

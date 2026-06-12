@@ -6,6 +6,7 @@ export type BranchSummary = {
   id: string;
   code: string;
   name: string;
+  break_attendance_enabled: boolean;
 };
 
 let activeBranchIdsCache: { ids: string[]; at: number } | null = null;
@@ -66,10 +67,20 @@ export async function listBranchesForUser(
 
   const branches = await prisma.branch.findMany({
     where: { id: { in: ids }, isActive: true },
-    select: { id: true, code: true, name: true },
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      breakAttendanceEnabled: true,
+    },
     orderBy: { code: "asc" },
   });
-  return branches;
+  return branches.map((b) => ({
+    id: b.id,
+    code: b.code,
+    name: b.name,
+    break_attendance_enabled: b.breakAttendanceEnabled,
+  }));
 }
 
 export async function ensureUserBranchMembership(

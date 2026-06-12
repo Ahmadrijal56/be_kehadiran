@@ -4,6 +4,11 @@ import { OFF_SHIFT_ID } from "../constants/shifts.js";
 import { cacheDeleteByPrefix, cacheGet, cacheSet } from "../lib/redis.js";
 import { resolveEffectiveShiftIdsForEmployees } from "./employeeShiftScheduleService.js";
 import { listActiveEmployeeIdsForBranch } from "./activeEmployeeFilter.js";
+import {
+  computeWorkDurationMinutes,
+  formatWorkDurationLabel,
+  resolveOvertimeFields,
+} from "../utils/workDuration.js";
 
 export type BranchEmployeeAttendance = {
   employee_id: string;
@@ -15,6 +20,10 @@ export type BranchEmployeeAttendance = {
   check_out_at: string | null;
   late_minutes: number;
   break_start_at: string | null;
+  work_duration_minutes: number | null;
+  work_duration_label: string | null;
+  is_overtime: boolean;
+  overtime_label: string | null;
   scheduled_off?: boolean;
 };
 
@@ -60,6 +69,17 @@ function mapRow(
   scheduledOff = false
 ): BranchEmployeeAttendance {
   const activeBreak = att?.breakSessions.find((b) => !b.breakEndAt);
+  const workMinutes =
+    att?.checkInAt && att?.checkOutAt
+      ? computeWorkDurationMinutes(att.checkInAt, att.checkOutAt)
+      : att?.checkInAt
+        ? computeWorkDurationMinutes(att.checkInAt, new Date())
+        : null;
+  const overtime = resolveOvertimeFields(
+    workMinutes,
+    att?.checkInAt,
+    att?.checkOutAt
+  );
   return {
     employee_id: emp.id,
     nik: emp.nik,
@@ -75,6 +95,12 @@ function mapRow(
     break_start_at: activeBreak
       ? formatWibIso(activeBreak.breakStartAt)
       : null,
+    work_duration_minutes: att?.checkOutAt ? workMinutes : null,
+    work_duration_label:
+      att?.checkOutAt && workMinutes != null
+        ? formatWorkDurationLabel(workMinutes)
+        : null,
+    ...overtime,
     scheduled_off: scheduledOff,
   };
 }

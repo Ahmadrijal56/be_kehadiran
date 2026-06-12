@@ -5,6 +5,7 @@
   "description": "Sistem Manajemen Kehadiran & KPI — REST API (Node.js)",
   "type": "module",
   "scripts": {
+    "predev": "prisma generate",
     "dev": "tsx watch src/index.ts",
     "build": "prisma generate && tsc",
     "postinstall": "prisma generate",

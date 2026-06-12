@@ -144,7 +144,12 @@ export async function login(
   const branchPromise = branchId
     ? prisma.branch.findUnique({
         where: { id: branchId },
-        select: { id: true, code: true, name: true },
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          breakAttendanceEnabled: true,
+        },
       })
     : Promise.resolve(null);
 
@@ -174,7 +179,12 @@ export async function login(
       ...mapAuthUserResponse(authUser),
       ...avatar,
       branch: branch
-        ? { id: branch.id, code: branch.code, name: branch.name }
+        ? {
+            id: branch.id,
+            code: branch.code,
+            name: branch.name,
+            break_attendance_enabled: branch.breakAttendanceEnabled,
+          }
         : null,
     },
   };
@@ -203,7 +213,12 @@ export async function enrichAuthUserResponse(
     user.branchId
       ? prisma.branch.findUnique({
           where: { id: user.branchId },
-          select: { id: true, code: true, name: true },
+          select: {
+            id: true,
+            code: true,
+            name: true,
+            breakAttendanceEnabled: true,
+          },
         })
       : Promise.resolve(null),
     getAvatarProfile(user.id, publicBaseUrl),
@@ -212,7 +227,12 @@ export async function enrichAuthUserResponse(
     ...base,
     ...avatar,
     branch: branch
-      ? { id: branch.id, code: branch.code, name: branch.name }
+      ? {
+          id: branch.id,
+          code: branch.code,
+          name: branch.name,
+          break_attendance_enabled: branch.breakAttendanceEnabled,
+        }
       : null,
   };
 }

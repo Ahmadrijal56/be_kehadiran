@@ -15,6 +15,7 @@ function mapBranch(b: {
   address: string | null;
   telegramGroupId: bigint | null;
   timezone: string;
+  breakAttendanceEnabled: boolean;
   isActive: boolean;
 }) {
   return {
@@ -24,6 +25,7 @@ function mapBranch(b: {
     address: b.address,
     telegram_group_id: b.telegramGroupId?.toString() ?? null,
     timezone: b.timezone,
+    break_attendance_enabled: b.breakAttendanceEnabled,
     is_active: b.isActive,
   };
 }
@@ -63,6 +65,7 @@ export async function createBranch(
       address: data.address?.trim() ?? null,
       telegramGroupId,
       timezone: data.timezone?.trim() || "Asia/Jakarta",
+      breakAttendanceEnabled: true,
     },
   });
 
@@ -90,6 +93,7 @@ export async function updateBranch(
     address?: string;
     telegram_group_id?: string | null;
     timezone?: string;
+    break_attendance_enabled?: boolean;
     is_active?: boolean;
   }
 ) {
@@ -118,6 +122,9 @@ export async function updateBranch(
         : {}),
       ...(telegramGroupId !== undefined ? { telegramGroupId } : {}),
       ...(data.timezone !== undefined ? { timezone: data.timezone.trim() } : {}),
+      ...(data.break_attendance_enabled !== undefined
+        ? { breakAttendanceEnabled: Boolean(data.break_attendance_enabled) }
+        : {}),
       ...(data.is_active !== undefined ? { isActive: data.is_active } : {}),
     },
   });

@@ -42,6 +42,10 @@ describe("publicScheduleService", () => {
           check_out_at: null,
           late_minutes: 0,
           break_start_at: null,
+          work_duration_minutes: null,
+          work_duration_label: null,
+          is_overtime: false,
+          overtime_label: null,
         },
         {
           employee_id: "e2",
@@ -53,6 +57,10 @@ describe("publicScheduleService", () => {
           check_out_at: null,
           late_minutes: 0,
           break_start_at: null,
+          work_duration_minutes: null,
+          work_duration_label: null,
+          is_overtime: false,
+          overtime_label: null,
         },
       ],
       [
