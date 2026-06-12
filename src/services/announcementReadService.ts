@@ -78,6 +78,16 @@ export async function markAnnouncementsReadForUser(
   return result.count;
 }
 
+export async function syncAnnouncementReadFromNotification(
+  userId: string,
+  notification: { type: string; dataJson: unknown }
+): Promise<void> {
+  if (notification.type !== "announcement_published") return;
+  const data = notification.dataJson as { announcement_id?: string } | null;
+  if (!data?.announcement_id) return;
+  await markAnnouncementsReadForUser(userId, [data.announcement_id]);
+}
+
 export async function markAnnouncementNotificationsRead(
   userId: string,
   announcementIds: string[]

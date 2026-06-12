@@ -5,6 +5,7 @@ import type {
 } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { approvalTypeLabel } from "../constants/approvalTypes.js";
+import { formatWorkDateLabelLong } from "../utils/format.js";
 
 const ACHIEVEMENT_LABELS: Record<AchievementType, string> = {
   top_1: "Juara 1",
@@ -164,17 +165,40 @@ export async function notifyForgotCheckout(
   });
 }
 
+export type AttendanceShiftContext = {
+  shift_id: number;
+  shift_code: string;
+  shift_name: string;
+  time_range: string;
+};
+
+function shiftSchedulePhrase(shift: AttendanceShiftContext): string {
+  return `Jadwal shift Anda: ${shift.shift_name} (${shift.time_range})`;
+}
+
 export async function notifyAttendanceMissing(
   userId: string,
-  workDate: string
+  workDate: string,
+  shift: AttendanceShiftContext
 ): Promise<void> {
+  const dateLabel = formatWorkDateLabelLong(workDate);
   await prisma.notification.create({
     data: {
       userId,
       type: "attendance_missing",
-      title: "Belum absen masuk",
-      body: `Anda belum melakukan absen masuk hari ini (${workDate}). Segera scan Face ID.`,
-      dataJson: { work_date: workDate },
+      title: "Belum tercatat absen masuk",
+      body:
+        `Kehadiran masuk pada ${dateLabel} belum muncul di sistem. ` +
+        `${shiftSchedulePhrase(shift)}. ` +
+        "Silakan lakukan absen masuk melalui mesin BioFinger di toko. " +
+        "Setelah scan berhasil, data kehadiran akan otomatis tampil di menu Riwayat Absensi.",
+      dataJson: {
+        work_date: workDate,
+        shift_id: shift.shift_id,
+        shift_code: shift.shift_code,
+        shift_name: shift.shift_name,
+        time_range: shift.time_range,
+      },
     },
   });
 }
@@ -222,15 +246,29 @@ export async function notifyNewBranchAnnouncement(
 export async function notifyAttendanceLate(
   userId: string,
   workDate: string,
-  lateMinutes: number
+  lateMinutes: number,
+  shift: AttendanceShiftContext
 ): Promise<void> {
+  const dateLabel = formatWorkDateLabelLong(workDate);
+  const lateText =
+    lateMinutes > 0 ? ` ${lateMinutes} menit` : "";
   await prisma.notification.create({
     data: {
       userId,
       type: "attendance_late",
-      title: "Anda terlambat hari ini",
-      body: `Absen masuk tercatat terlambat${lateMinutes > 0 ? ` ${lateMinutes} menit` : ""} (${workDate}).`,
-      dataJson: { work_date: workDate, late_minutes: lateMinutes },
+      title: "Absen masuk tercatat terlambat",
+      body:
+        `Absen masuk Anda pada ${dateLabel} tercatat terlambat${lateText} ` +
+        `berdasarkan ${shiftSchedulePhrase(shift).toLowerCase()} dan data mesin BioFinger. ` +
+        "Detail lengkap dapat dilihat di menu Riwayat Absensi.",
+      dataJson: {
+        work_date: workDate,
+        late_minutes: lateMinutes,
+        shift_id: shift.shift_id,
+        shift_code: shift.shift_code,
+        shift_name: shift.shift_name,
+        time_range: shift.time_range,
+      },
     },
   });
 }

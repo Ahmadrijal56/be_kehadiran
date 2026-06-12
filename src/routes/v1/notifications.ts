@@ -5,6 +5,7 @@ import { notFound } from "../../lib/errors.js";
 import { prisma } from "../../lib/prisma.js";
 import { formatWibIso } from "../../utils/format.js";
 import { syncAttendanceRemindersForUser } from "../../services/attendanceReminderService.js";
+import { syncAnnouncementReadFromNotification } from "../../services/announcementReadService.js";
 
 export const notificationsRouter = Router();
 notificationsRouter.use(authenticate);
@@ -58,7 +59,11 @@ notificationsRouter.patch(
     const userId = req.user!.id;
     const now = new Date();
     const result = await prisma.notification.updateMany({
-      where: { userId, readAt: null },
+      where: {
+        userId,
+        readAt: null,
+        type: { not: "announcement_published" },
+      },
       data: { readAt: now },
     });
     res.json({ data: { marked: result.count, read_at: formatWibIso(now) } });
@@ -73,10 +78,12 @@ notificationsRouter.patch(
       where: { id, userId: req.user!.id },
     });
     if (!row) throw notFound();
+    const now = new Date();
     await prisma.notification.update({
       where: { id },
-      data: { readAt: new Date() },
+      data: { readAt: now },
     });
-    res.json({ data: { id, read_at: formatWibIso(new Date()) } });
+    await syncAnnouncementReadFromNotification(req.user!.id, row);
+    res.json({ data: { id, read_at: formatWibIso(now) } });
   })
 );

@@ -41,6 +41,21 @@ export function currentYearMonthWib(): string {
   return `${y}-${m}`;
 }
 
+/** Label tanggal kerja untuk notifikasi, mis. "Jumat, 12 Juni 2026". */
+export function formatWorkDateLabelLong(workDate: string): string {
+  try {
+    return new Intl.DateTimeFormat("id-ID", {
+      timeZone: WIB,
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    }).format(new Date(`${workDate}T00:00:00.000Z`));
+  } catch {
+    return workDate;
+  }
+}
+
 export function parseDateQuery(value: string | undefined): Date | undefined {
   if (!value) return undefined;
   const d = new Date(value);

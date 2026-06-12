@@ -1,13 +1,28 @@
 import { prisma } from "../lib/prisma.js";
 import { todayWorkDateWib } from "../utils/format.js";
+import { timeFromDbTime } from "../utils/time.js";
 import { getBranchShiftWindow } from "./branchShiftConfigService.js";
-import { resolveEffectiveShiftId } from "./employeeShiftScheduleService.js";
+import {
+  isOffShift,
+  resolveEffectiveShiftId,
+} from "./employeeShiftScheduleService.js";
 import {
   notifyAttendanceLate,
   notifyAttendanceMissing,
+  type AttendanceShiftContext,
 } from "./notificationService.js";
 
 const TIMEZONE = "Asia/Jakarta";
+
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
+}
+
+function formatShiftTimeRange(start: Date, end: Date): string {
+  const s = timeFromDbTime(start);
+  const e = timeFromDbTime(end);
+  return `${pad2(s.hours)}:${pad2(s.minutes)}–${pad2(e.hours)}:${pad2(e.minutes)}`;
+}
 
 function nowWibParts(): { hour: number; minute: number } {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -39,6 +54,30 @@ async function hasNotificationToday(
   });
 }
 
+async function shiftContextFromId(
+  branchId: string,
+  shiftId: number
+): Promise<AttendanceShiftContext> {
+  const window = await getBranchShiftWindow(branchId, shiftId);
+  return {
+    shift_id: shiftId,
+    shift_code: window.code,
+    shift_name: window.name,
+    time_range: formatShiftTimeRange(window.startTime, window.endTime),
+  };
+}
+
+/** Shift efektif per tanggal kerja (override jadwal dashboard atau default karyawan). */
+async function resolveShiftContext(
+  employeeId: string,
+  branchId: string,
+  workDate: Date
+): Promise<AttendanceShiftContext | null> {
+  const shiftId = await resolveEffectiveShiftId(employeeId, workDate);
+  if (isOffShift(shiftId)) return null;
+  return shiftContextFromId(branchId, shiftId);
+}
+
 export async function syncAttendanceRemindersForUser(
   userId: string,
   employeeId: string
@@ -52,13 +91,28 @@ export async function syncAttendanceRemindersForUser(
   const workDate = todayWorkDateWib();
   const workDateStr = workDate.toISOString().slice(0, 10);
 
+  const shift = await resolveShiftContext(
+    employeeId,
+    employee.branchId,
+    workDate
+  );
+  if (!shift) return;
+
   const attendance = await prisma.attendanceRecord.findUnique({
     where: { employeeId_workDate: { employeeId, workDate } },
+    select: {
+      checkInAt: true,
+      status: true,
+      lateMinutes: true,
+      shiftId: true,
+    },
   });
 
-  const shiftId = await resolveEffectiveShiftId(employeeId, workDate);
-  const window = await getBranchShiftWindow(employee.branchId, shiftId);
-  const start = window.startTime;
+  const shiftWindow = await getBranchShiftWindow(
+    employee.branchId,
+    shift.shift_id
+  );
+  const start = shiftWindow.startTime;
   const startHour = start.getUTCHours();
   const startMin = start.getUTCMinutes();
 
@@ -73,7 +127,7 @@ export async function syncAttendanceRemindersForUser(
       workDateStr
     );
     if (!dup) {
-      await notifyAttendanceMissing(userId, workDateStr);
+      await notifyAttendanceMissing(userId, workDateStr, shift);
     }
     return;
   }
@@ -89,7 +143,16 @@ export async function syncAttendanceRemindersForUser(
       workDateStr
     );
     if (!dup) {
-      await notifyAttendanceLate(userId, workDateStr, attendance.lateMinutes);
+      const lateShift =
+        attendance.shiftId != null
+          ? await shiftContextFromId(employee.branchId, attendance.shiftId)
+          : shift;
+      await notifyAttendanceLate(
+        userId,
+        workDateStr,
+        attendance.lateMinutes,
+        lateShift
+      );
     }
   }
 }
