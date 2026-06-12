@@ -56,11 +56,12 @@ Tanpa ini, upload avatar disimpan di disk container (hilang saat redeploy).
 
 | Variable | Keterangan |
 |----------|------------|
-| `TELEGRAM_LISTENER_MODE` | `polling` (disarankan di Railway) atau `none` jika pakai webhook terpisah |
+| `TELEGRAM_LISTENER_MODE` | `auto` (MTProto bot BioFinger) — butuh `TELEGRAM_BOT_SESSION` |
 | `TELEGRAM_BOT_TOKEN` | Dari @BotFather |
 | `TELEGRAM_WEBHOOK_SECRET` | **Buat string baru** untuk production (jangan pakai dev) |
 | `TELEGRAM_API_ID` | Dari my.telegram.org |
 | `TELEGRAM_API_HASH` | Dari my.telegram.org |
+| `TELEGRAM_BOT_SESSION` | **Wajib** jika `TELEGRAM_LISTENER_MODE=auto` — jalankan `npm run telegram:bot-session` sekali, paste string ke Railway (hindari rate-limit ImportBotAuthorization) |
 | `TELEGRAM_MONITOR_BOT_USERNAME` | `manjursehatkehadiran_bot` |
 | `TELEGRAM_BIOFINGER_CHAT_ID` | Isi setelah `npm run telegram:get-chat-id` |
 | `TELEGRAM_ALLOWED_GROUP_IDS` | ID grup absensi (opsional) |

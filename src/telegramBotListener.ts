@@ -18,7 +18,20 @@ import { enqueueProcessTelegramMessage } from "./lib/queue.js";
 import { log } from "./lib/logger.js";
 import { saveTelegramWebhookMessage } from "./services/telegramIngestService.js";
 
-const BOT_SESSION = new StringSession("");
+function botSession(): StringSession {
+  return new StringSession(env.telegramBotSession || "");
+}
+
+export function isTelegramFloodWaitError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /wait of \d+ seconds is required/i.test(message);
+}
+
+export function floodWaitSeconds(err: unknown): number | null {
+  const message = err instanceof Error ? err.message : String(err);
+  const match = message.match(/wait of (\d+) seconds/i);
+  return match ? Number(match[1]) : null;
+}
 
 function isAttendanceText(text: string): boolean {
   const t = text.trim();
@@ -101,13 +114,36 @@ export async function startBiofingerBotListener(): Promise<void> {
     throw new Error("TELEGRAM_BOT_TOKEN wajib di backend/.env");
   }
 
-  const client = new TelegramClient(BOT_SESSION, apiId, apiHash, {
+  const client = new TelegramClient(botSession(), apiId, apiHash, {
     connectionRetries: 10,
   });
 
-  await client.start({
-    botAuthToken: botToken,
-  });
+  try {
+    await client.start({
+      botAuthToken: botToken,
+    });
+  } catch (err) {
+    if (isTelegramFloodWaitError(err)) {
+      const sec = floodWaitSeconds(err);
+      log("warn", "Telegram rate-limit (ImportBotAuthorization) — listener dilewati", {
+        wait_seconds: sec,
+        hint:
+          "Set TELEGRAM_BOT_SESSION di Railway (jalankan: npm run telegram:bot-session) atau tunggu rate-limit habis",
+      });
+      return;
+    }
+    throw err;
+  }
+
+  if (!env.telegramBotSession) {
+    const saved = client.session.save() as unknown as string;
+    if (saved) {
+      log("info", "MTProto bot session baru — simpan ke TELEGRAM_BOT_SESSION", {
+        session_chars: saved.length,
+        hint: "Jalankan npm run telegram:bot-session lalu paste ke Railway env",
+      });
+    }
+  }
 
   const me = await client.getMe();
   log("info", "MTProto bot listener aktif (tanpa login HP)", {

@@ -315,7 +315,7 @@ async function persistAvatarBytes(
       await putObject(objectKey, buffer, "image/webp");
       return objectKey;
     } catch (err) {
-      log("error", "Avatar object storage upload failed, falling back to local disk", {
+      log("warn", "Avatar S3/R2 gagal — pakai disk lokal (atur AWS_* di Railway untuk persisten)", {
         userId,
         objectKey,
         error: err instanceof Error ? err.message : String(err),

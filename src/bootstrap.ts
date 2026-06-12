@@ -87,7 +87,6 @@ async function startTelegramListeners(): Promise<void> {
   }
 
   if (mode === "auto") {
-    // Auto-detect: prefer MTProto bot > long-polling
     if (hasBotMtprotoCredentials()) {
       await startBotMtprotoListener();
     } else if (hasPollingCredentials()) {
@@ -136,10 +135,14 @@ async function startTelegramListeners(): Promise<void> {
 
 async function startBotMtprotoListener(): Promise<void> {
   try {
-    const { startBiofingerBotListener } = await import("./telegramBotListener.js");
+    const { startBiofingerBotListener, isTelegramFloodWaitError } = await import(
+      "./telegramBotListener.js"
+    );
     void startBiofingerBotListener().catch((err) => {
-      log("error", "BioFinger MTProto bot listener crash", {
-        error: err instanceof Error ? err.message : String(err),
+      const message = err instanceof Error ? err.message : String(err);
+      const level = isTelegramFloodWaitError(err) ? "warn" : "error";
+      log(level, "BioFinger MTProto bot listener tidak aktif", {
+        error: message,
       });
     });
   } catch (err) {

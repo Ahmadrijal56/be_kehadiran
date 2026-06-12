@@ -59,6 +59,8 @@ export const env = {
     | "none",
   telegramMonitorBotUsername: process.env.TELEGRAM_MONITOR_BOT_USERNAME?.replace(/^@/, "") ?? "",
   telegramUserSession: process.env.TELEGRAM_USER_SESSION ?? "",
+  /** Session MTProto bot (gramJS) — hindari re-auth tiap deploy Railway. */
+  telegramBotSession: process.env.TELEGRAM_BOT_SESSION ?? "",
 
   awsAccessKeyId: process.env.AWS_ACCESS_KEY_ID ?? "",
   awsSecretAccessKey: process.env.AWS_SECRET_ACCESS_KEY ?? "",
