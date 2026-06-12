@@ -3,8 +3,7 @@ import { notFound, validationError, businessError } from "../lib/errors.js";
 import { processCheckIn, resolveShiftId } from "./attendanceService.js";
 import { invalidatePapanCaches } from "./papanCacheInvalidation.js";
 import { todayWorkDateWib, currentYearMonthWib } from "../utils/format.js";
-import { toDateOnly } from "../utils/time.js";
-import { timeFromDbTime } from "../utils/time.js";
+import { toDateOnly, timeFromDbTime, combineDateAndTimeWib } from "../utils/time.js";
 import { getGamificationSettingsCached } from "./organizationConfigService.js";
 import {
   findLoadTestUserByNik,
@@ -165,6 +164,32 @@ async function setKpiForEmployeeId(
 
 export type LoadTestCheckInVariant = "on_time" | "late";
 
+/** Hitung jam check-in simulasi QA — dipisah agar mudah diuji. */
+export function buildLoadTestCheckInAt(
+  workDate: Date,
+  shiftStartTime: Date,
+  variant: LoadTestCheckInVariant,
+  lateMinutes: number,
+  lateThresholdSeconds: number
+): Date {
+  const { hours, minutes } = timeFromDbTime(shiftStartTime);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const shiftStart = combineDateAndTimeWib(
+    workDate,
+    `${pad(hours)}:${pad(minutes)}`
+  );
+
+  if (variant === "on_time") {
+    // Tepat waktu: jam mulai shift persis — lateMinutes tidak dipakai.
+    return shiftStart;
+  }
+
+  const extraMin =
+    Math.ceil(lateThresholdSeconds / 60) +
+    Math.max(1, Math.min(120, lateMinutes));
+  return new Date(shiftStart.getTime() + extraMin * 60_000);
+}
+
 async function resolveLoadTestCheckInAt(
   employeeId: string,
   workDate: Date,
@@ -179,26 +204,14 @@ async function resolveLoadTestCheckInAt(
   const { getBranchShiftWindow } = await import("./branchShiftConfigService.js");
   const shiftWindow = await getBranchShiftWindow(employee.branchId, shiftId);
   const settings = await getGamificationSettingsCached();
-  const { hours, minutes } = timeFromDbTime(shiftWindow.startTime);
-  const workDateStr = workDate.toISOString().slice(0, 10);
-  const pad = (n: number) => String(n).padStart(2, "0");
 
-  if (variant === "on_time") {
-    return new Date(
-      `${workDateStr}T${pad(hours)}:${pad(minutes)}:20+07:00`
-    );
-  }
-
-  const extraMin =
-    Math.ceil(settings.late_threshold_seconds / 60) +
-    Math.max(1, Math.min(120, lateMinutes));
-  let h = hours;
-  let m = minutes + extraMin;
-  while (m >= 60) {
-    m -= 60;
-    h += 1;
-  }
-  return new Date(`${workDateStr}T${pad(h)}:${pad(m)}:00+07:00`);
+  return buildLoadTestCheckInAt(
+    workDate,
+    shiftWindow.startTime,
+    variant,
+    lateMinutes,
+    settings.late_threshold_seconds
+  );
 }
 
 export async function loadTestCheckIn(options?: {

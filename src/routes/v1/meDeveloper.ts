@@ -34,6 +34,7 @@ import {
 } from "../../services/developerScenarioService.js";
 import { setDeveloperKpiBatch } from "../../services/developerToolsService.js";
 import { getDeveloperMonitorSnapshot } from "../../services/developerMonitorService.js";
+import { executeFactoryReset } from "../../services/factoryResetService.js";
 import { handleDeveloperMonitorStream } from "./developerMonitorStream.js";
 
 const avatarUpload = multer({
@@ -269,6 +270,22 @@ meDeveloperRouter.post(
   "/stress-test/stop",
   asyncHandler(async (req, res) => {
     const data = stopDeveloperStressTest(req.user!.id);
+    res.json({ data });
+  })
+);
+
+meDeveloperRouter.post(
+  "/factory-reset",
+  asyncHandler(async (req, res) => {
+    const body = req.body as {
+      password?: string;
+      confirm_phrase?: string;
+    };
+    const data = await executeFactoryReset(
+      req.user!,
+      body.password ?? "",
+      body.confirm_phrase ?? ""
+    );
     res.json({ data });
   })
 );

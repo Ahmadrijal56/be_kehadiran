@@ -76,13 +76,13 @@ export const env = {
   biofingerWebhookSecret: process.env.BIOFINGER_WEBHOOK_SECRET ?? "",
   admsPort: Number(process.env.ADMS_PORT ?? 7792),
 
-  /** Token lisensi untuk registrasi owner pertama via halaman login. */
+  /** Kode aktivasi owner (OWNER_LICENSE_TOKEN) — biasanya nomor HP admin. */
   ownerLicenseToken: process.env.OWNER_LICENSE_TOKEN ?? "",
 
   /** Token untuk POST /dev/attendance/ingest (bypass manual, development). */
   manualIngestToken: process.env.MANUAL_INGEST_TOKEN ?? "",
 
-  /** Izinkan reset pabrik di production (POST /owner/factory-reset). */
+  /** Izinkan reset pabrik di production (POST /me/developer/factory-reset). */
   allowFactoryReset: process.env.ALLOW_FACTORY_RESET === "true",
 
   /** Akun developer tersembunyi untuk QA production (on/off). */

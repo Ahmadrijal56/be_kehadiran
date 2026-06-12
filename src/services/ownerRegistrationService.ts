@@ -35,9 +35,9 @@ export async function getBootstrapStatus() {
     has_owner: ownerCount > 0,
     registration_enabled: canRegister,
     requires_license_token: canRegister,
-    /** Token dari reset pabrik (OWN-…) tersimpan di DB — autofill sessionStorage valid. */
+    /** Legacy: token OWN- di DB (tidak dipakai — gunakan OWNER_LICENSE_TOKEN). */
     has_reset_registration_token: Boolean(dbToken),
-    /** Token dari OWNER_LICENSE_TOKEN di .env server. */
+    /** Kode aktivasi dari OWNER_LICENSE_TOKEN di env (mis. nomor HP admin). */
     uses_env_registration_token: Boolean(envToken),
   };
 }
@@ -86,7 +86,7 @@ export async function registerOwner(data: {
     const envToken = getEnvOwnerRegistrationToken();
     if (dbToken) {
       throw forbidden(
-        "Kode aktivasi tidak valid. Gunakan kode yang ditampilkan setelah reset pabrik."
+        "Kode aktivasi tidak valid. Gunakan nomor/kode aktivasi dari administrator sistem."
       );
     }
     if (envToken) {

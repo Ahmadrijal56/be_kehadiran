@@ -7,7 +7,10 @@ import { writeAuditLog } from "./auditService.js";
 import { invalidateBranchAttendanceCache } from "./branchAttendanceService.js";
 import { invalidateLeaderboardCaches } from "./leaderboardService.js";
 import { ensureOrganizationDefaults } from "./organizationConfigService.js";
-import { issueOwnerRegistrationToken } from "./ownerRegistrationTokenService.js";
+import {
+  clearStoredOwnerRegistrationToken,
+  requireEnvOwnerRegistrationToken,
+} from "./ownerRegistrationTokenService.js";
 
 export const FACTORY_RESET_CONFIRM_PHRASE = "RESET";
 
@@ -18,10 +21,10 @@ export async function executeFactoryReset(
 ): Promise<{
   reset_at: string;
   users_deleted: number;
-  owner_registration_token: string;
+  uses_env_registration_token: true;
 }> {
-  if (!actor.roles.includes("owner")) {
-    throw forbidden("Hanya owner yang dapat melakukan reset pabrik");
+  if (!actor.roles.includes("developer")) {
+    throw forbidden("Hanya akun developer QA yang dapat melakukan reset pabrik");
   }
 
   if (env.nodeEnv === "production" && !env.allowFactoryReset) {
@@ -95,7 +98,8 @@ export async function executeFactoryReset(
   );
 
   await ensureOrganizationDefaults();
-  const ownerRegistrationToken = await issueOwnerRegistrationToken();
+  requireEnvOwnerRegistrationToken();
+  await clearStoredOwnerRegistrationToken();
 
   const resetAt = new Date().toISOString();
 
@@ -116,6 +120,6 @@ export async function executeFactoryReset(
   return {
     reset_at: resetAt,
     users_deleted: usersDeleted,
-    owner_registration_token: ownerRegistrationToken,
+    uses_env_registration_token: true,
   };
 }

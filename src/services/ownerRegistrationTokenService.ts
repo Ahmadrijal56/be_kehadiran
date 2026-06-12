@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import { businessError } from "../lib/errors.js";
 import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
 import { log } from "../lib/logger.js";
@@ -23,18 +23,14 @@ export async function hasOwnerRegistrationToken(): Promise<boolean> {
   );
 }
 
-export async function issueOwnerRegistrationToken(): Promise<string> {
-  const token = `OWN-${crypto.randomBytes(18).toString("hex")}`;
-
-  await prisma.gamificationSettings.upsert({
-    where: { id: SETTINGS_ID },
-    update: { ownerRegistrationToken: token },
-    create: {
-      id: SETTINGS_ID,
-      ownerRegistrationToken: token,
-    },
-  });
-
+/** Wajib ada OWNER_LICENSE_TOKEN di env (mis. nomor HP admin). */
+export function requireEnvOwnerRegistrationToken(): string {
+  const token = getEnvOwnerRegistrationToken();
+  if (!token) {
+    throw businessError(
+      "OWNER_LICENSE_TOKEN belum diisi di environment server. Isi nomor/kode aktivasi di .env atau Railway."
+    );
+  }
   return token;
 }
 
@@ -51,32 +47,28 @@ export async function validateOwnerRegistrationToken(
   const token = provided.trim();
   if (!token) return false;
 
-  const stored = await getStoredOwnerRegistrationToken();
-  if (stored && token === stored) return true;
-
   const envToken = getEnvOwnerRegistrationToken();
   if (envToken && token === envToken) return true;
+
+  const stored = await getStoredOwnerRegistrationToken();
+  if (stored && token === stored) return true;
 
   return false;
 }
 
-/** Pastikan ada token daftar owner saat belum ada akun owner (setup / setelah reset). */
-export async function ensureOwnerRegistrationTokenForSetup(): Promise<string | null> {
+/** Pastikan registrasi owner pertama memakai OWNER_LICENSE_TOKEN dari env. */
+export async function ensureOwnerRegistrationTokenForSetup(): Promise<void> {
   const ownerRole = await prisma.role.findUnique({ where: { code: "owner" } });
-  if (!ownerRole) return null;
+  if (!ownerRole) return;
 
   const ownerCount = await prisma.userRole.count({
     where: { roleId: ownerRole.id },
   });
-  if (ownerCount > 0) return null;
+  if (ownerCount > 0) return;
 
-  if (await hasOwnerRegistrationToken()) return null;
+  await clearStoredOwnerRegistrationToken();
 
-  const token = await issueOwnerRegistrationToken();
-  if (env.nodeEnv === "development") {
-    log("info", "Token daftar owner dibuat (development)", { token });
-  } else {
-    log("info", "Token daftar owner dibuat — gunakan saat registrasi owner pertama");
+  if (!getEnvOwnerRegistrationToken()) {
+    log("warn", "Belum ada owner — isi OWNER_LICENSE_TOKEN di environment untuk aktivasi daftar");
   }
-  return token;
 }

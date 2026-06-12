@@ -16,8 +16,6 @@ import {
   buildUserImportTemplateExcel,
   importUsersFromExcel,
 } from "../../services/userImportService.js";
-import { executeFactoryReset } from "../../services/factoryResetService.js";
-
 const excelUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024, files: 1 },
@@ -57,22 +55,6 @@ ownerRouter.post(
       throw validationError("File Excel wajib (field: file)");
     }
     const data = await importUsersFromExcel(req.user!, req.file.buffer);
-    res.json({ data });
-  })
-);
-
-ownerRouter.post(
-  "/factory-reset",
-  asyncHandler(async (req, res) => {
-    const body = req.body as {
-      password?: string;
-      confirm_phrase?: string;
-    };
-    const data = await executeFactoryReset(
-      req.user!,
-      body.password ?? "",
-      body.confirm_phrase ?? ""
-    );
     res.json({ data });
   })
 );
