@@ -9,7 +9,7 @@ import { currentYearMonthWib } from "../utils/format.js";
 import { ACTIVE_EMPLOYEE_USER_WHERE } from "./activeEmployeeFilter.js";
 
 const CACHE_TTL = 60;
-const CACHE_VERSION = "v8";
+const CACHE_VERSION = "v9";
 
 /** Hapus cache leaderboard & display publik (setelah hapus/nonaktifkan akun). */
 export async function invalidateLeaderboardCaches(): Promise<void> {
@@ -154,7 +154,11 @@ async function buildLeaderboardEntries(
 
   const pointsCache = new Map<
     string,
-    { total_points: number; total_late_count: number }
+    {
+      total_points: number;
+      total_late_count: number;
+      total_present_days: number;
+    }
   >();
 
   for (const [key, representative] of groups) {
@@ -166,6 +170,7 @@ async function buildLeaderboardEntries(
     pointsCache.set(key, {
       total_points: summary.total_points,
       total_late_count: summary.total_late_count,
+      total_present_days: summary.total_present_days,
     });
   }
 
@@ -181,14 +186,18 @@ async function buildLeaderboardEntries(
         branch_name: representative.branch.name,
         total_points: stats.total_points,
         total_late_count: stats.total_late_count,
+        total_present_days: stats.total_present_days,
       };
     })
     .sort((a, b) => {
       if (b.total_points !== a.total_points) return b.total_points - a.total_points;
+      if (b.total_present_days !== a.total_present_days) {
+        return b.total_present_days - a.total_present_days;
+      }
       if (a.total_late_count !== b.total_late_count) {
         return a.total_late_count - b.total_late_count;
       }
-      return a.full_name.localeCompare(b.full_name);
+      return a.nik.localeCompare(b.nik);
     })
     .map((row, i) => ({ ...row, rank: i + 1 }));
 

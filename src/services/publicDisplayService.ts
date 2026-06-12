@@ -72,7 +72,9 @@ async function buildBranchBoard(
     listBranchAttendanceToday(b.id),
     computeBranchLeaderboard(b.id, ym),
   ]);
-  const attByNik = new Map(attendance.items.map((a) => [a.nik, a]));
+  const attByEmployeeId = new Map(
+    attendance.items.map((a) => [a.employee_id, a])
+  );
 
   return {
     branch_id: b.id,
@@ -80,7 +82,7 @@ async function buildBranchBoard(
     name: b.name,
     summary_today: stats,
     rankings: rankings.map((r) => {
-      const att = attByNik.get(r.nik);
+      const att = attByEmployeeId.get(r.employee_id);
       const checkIn = att?.check_in_at;
       const status = att?.status ?? "absent";
       const today_points =

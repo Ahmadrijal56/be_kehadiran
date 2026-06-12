@@ -103,8 +103,10 @@ async function loadBranchRows(branchId: string): Promise<BranchEmployeeAttendanc
 
   const shiftById = await getShiftsById();
 
+  // Peserta = akun karyawan aktif di cabang (user.branch / user_branches),
+  // selaras dengan leaderboard — bukan filter employee.branchId saja.
   const employees = await prisma.employee.findMany({
-    where: { branchId, isActive: true, id: { in: activeEmployeeIds } },
+    where: { isActive: true, id: { in: activeEmployeeIds } },
     include: {
       defaultShift: true,
       attendanceRecords: {

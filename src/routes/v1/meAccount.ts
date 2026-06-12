@@ -7,6 +7,7 @@ import { getRequestPublicBaseUrl } from "../../lib/requestBaseUrl.js";
 import { mapAuthUserResponse } from "../../services/authService.js";
 import { listBranchesForUser } from "../../services/branchMembershipService.js";
 import { changeOwnPassword } from "../../services/passwordService.js";
+import { isAllowedAvatarUpload } from "../../lib/avatarMime.js";
 import {
   AVATAR_MAX_UPLOAD_BYTES,
   getAvatarProfile,
@@ -20,8 +21,7 @@ const avatarUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: AVATAR_MAX_UPLOAD_BYTES, files: 1 },
   fileFilter: (_req, file, cb) => {
-    const mime = file.mimetype.toLowerCase();
-    if (!mime.startsWith("image/")) {
+    if (!isAllowedAvatarUpload(file.mimetype, file.originalname)) {
       cb(new Error("INVALID_AVATAR_MIME"));
       return;
     }

@@ -1,7 +1,9 @@
 import type { NextFunction, Request, Response } from "express";
-import { AppError } from "../lib/errors.js";
+import multer from "multer";
+import { AppError, validationError } from "../lib/errors.js";
 import { log } from "../lib/logger.js";
 import { env } from "../config/env.js";
+import { AVATAR_FORMAT_HINT } from "../lib/avatarMime.js";
 
 export function errorHandler(
   err: Error,
@@ -10,6 +12,36 @@ export function errorHandler(
   _next: NextFunction
 ): void {
   const requestId = req.requestId ?? "unknown";
+
+  if (err instanceof multer.MulterError) {
+    const message =
+      err.code === "LIMIT_FILE_SIZE"
+        ? "Ukuran foto maksimal 2 MB"
+        : err.message;
+    const appErr = validationError(message);
+    res.status(appErr.statusCode).json({
+      error: {
+        code: appErr.code,
+        message: appErr.message,
+        details: appErr.details,
+        request_id: requestId,
+      },
+    });
+    return;
+  }
+
+  if (err.message === "INVALID_AVATAR_MIME") {
+    const appErr = validationError(`Format foto harus ${AVATAR_FORMAT_HINT}`);
+    res.status(appErr.statusCode).json({
+      error: {
+        code: appErr.code,
+        message: appErr.message,
+        details: appErr.details,
+        request_id: requestId,
+      },
+    });
+    return;
+  }
 
   if (err instanceof AppError) {
     res.status(err.statusCode).json({

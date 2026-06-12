@@ -1,5 +1,8 @@
 FROM node:20-alpine
 
+# HEIC/HEIF (foto iPhone) — dukungan libvips untuk sharp
+RUN apk add --no-cache libc6-compat vips-cpp libheif
+
 WORKDIR /app
 
 # Copy package files first

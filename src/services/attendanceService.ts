@@ -11,6 +11,7 @@ import {
   getActiveKpiRulesCached,
   getGamificationSettingsCached,
 } from "./organizationConfigService.js";
+import { invalidatePapanCaches } from "./papanCacheInvalidation.js";
 
 export type ProcessCheckInInput = {
   employeeId: string;
@@ -144,6 +145,8 @@ export async function processCheckIn(
     },
     update: {},
   });
+
+  await invalidatePapanCaches();
 
   return {
     attendanceId: attendance.id,

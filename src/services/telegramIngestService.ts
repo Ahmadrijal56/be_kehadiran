@@ -16,6 +16,7 @@ import {
   employeeNameMismatchError,
   namesMatch,
 } from "./employeeMatching.js";
+import { invalidatePapanCaches } from "./papanCacheInvalidation.js";
 
 type DailyScanSlot = "check_in" | "break_start" | "break_end" | "check_out";
 
@@ -212,12 +213,14 @@ export async function processTelegramMessageById(
       parseTelegramMessageText(message.rawText),
       message.receivedAt
     );
-    const { attendanceId } = await applyParsedAttendance(
+    const { attendanceId, branchId } = await applyParsedAttendance(
       parsed,
       message.id,
       message.telegramGroupId,
       message.photoFileId
     );
+
+    await invalidatePapanCaches(branchId);
 
     const linkedByOther = await prisma.telegramMessage.findFirst({
       where: {
@@ -489,12 +492,14 @@ export async function ingestManualAttendanceFromText(rawText: string): Promise<{
   });
 
   try {
-    const { attendanceId, eventLabel } = await applyParsedAttendance(
+    const { attendanceId, branchId, eventLabel } = await applyParsedAttendance(
       parsed,
       record.id,
       telegramGroupId,
       null
     );
+
+    await invalidatePapanCaches(branchId);
 
     const linkedByOther = await prisma.telegramMessage.findFirst({
       where: {
@@ -542,7 +547,7 @@ async function applyParsedAttendance(
   sourceMessageId: string,
   telegramGroupId: bigint,
   photoFileId: string | null
-): Promise<{ attendanceId: string; eventLabel: string }> {
+): Promise<{ attendanceId: string; branchId: string; eventLabel: string }> {
   const branch = await resolveBranchForAttendance(telegramGroupId, parsedInput);
   const employee = await findOrCreateEmployee(
     parsedInput,
@@ -689,7 +694,11 @@ async function applyParsedAttendance(
     }
   }
 
-  return { attendanceId, eventLabel: eventLabelFromParsed(parsed) };
+  return {
+    attendanceId,
+    branchId: resolvedBranch.id,
+    eventLabel: eventLabelFromParsed(parsed),
+  };
 }
 
 async function closeOpenBreakSession(

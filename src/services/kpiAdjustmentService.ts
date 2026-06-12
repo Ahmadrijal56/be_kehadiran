@@ -5,6 +5,7 @@ import { hasPermission } from "./authService.js";
 import { userHasBranchAccess } from "./branchMembershipService.js";
 import { assertBranchAccess } from "./branchAccess.js";
 import { todayWorkDateWib, formatWibIso } from "../utils/format.js";
+import { invalidatePapanCaches } from "./papanCacheInvalidation.js";
 
 export async function adjustEmployeeKpi(
   manager: AuthUser,
@@ -63,6 +64,8 @@ export async function adjustEmployeeKpi(
     });
     return row;
   });
+
+  await invalidatePapanCaches();
 
   return {
     employee_id: employeeId,

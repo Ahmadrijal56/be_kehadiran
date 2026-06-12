@@ -6,12 +6,15 @@ import { businessError, validationError } from "../lib/errors.js";
 import { log } from "../lib/logger.js";
 import {
   deleteLocalStoredFile,
+  getSignedFileUrl,
   isLocalFilePath,
-  resolveStoredFileUrl,
+  localFileKey,
+  signLocalFileUrl,
   writeLocalBytes,
 } from "./storageService.js";
 import { deleteObject, objectKeyFromPublicUrl, putObject } from "../lib/s3Client.js";
 import { invalidateAuthUserCache } from "../lib/authUserCache.js";
+import { AVATAR_FORMAT_HINT, isAllowedAvatarUpload } from "../lib/avatarMime.js";
 import type { AuthUser } from "./authService.js";
 
 export const AVATAR_MAX_UPLOAD_BYTES = 2 * 1024 * 1024;
@@ -19,20 +22,60 @@ export const AVATAR_MAX_INPUT_DIMENSION = 4096;
 export const AVATAR_OUTPUT_SIZE = 256;
 export const AVATAR_MAX_OUTPUT_BYTES = 128 * 1024;
 
+const AVATAR_URL_TTL_SEC = 30 * 24 * 3600;
+
 export type AvatarProfileFields = {
   avatar_url: string | null;
   avatar_visibility: AvatarVisibility;
 };
 
-export function mapAvatarProfileFields(
+function isObjectStorageConfigured(): boolean {
+  return Boolean(
+    env.awsEndpoint?.trim() &&
+      env.awsAccessKeyId?.trim() &&
+      env.awsSecretAccessKey?.trim() &&
+      env.awsBucket?.trim()
+  );
+}
+
+/** URL tampilan untuk path tersimpan: local:, kunci S3, atau URL publik legacy. */
+export async function resolveAvatarDisplayUrl(
+  storedPath: string | null | undefined,
+  publicBaseUrl?: string,
+  expiresSec = AVATAR_URL_TTL_SEC
+): Promise<string | null> {
+  if (!storedPath?.trim()) return null;
+
+  if (isLocalFilePath(storedPath)) {
+    return signLocalFileUrl(localFileKey(storedPath), expiresSec, publicBaseUrl);
+  }
+
+  if (storedPath.startsWith("http://") || storedPath.startsWith("https://")) {
+    return storedPath;
+  }
+
+  if (!isObjectStorageConfigured()) return null;
+
+  try {
+    return await getSignedFileUrl(storedPath, expiresSec);
+  } catch (err) {
+    log("warn", "Failed to sign avatar object URL", {
+      storedPath,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
+export async function mapAvatarProfileFields(
   row: {
     avatarUrl: string | null;
     avatarVisibility: AvatarVisibility;
   },
   publicBaseUrl?: string
-): AvatarProfileFields {
+): Promise<AvatarProfileFields> {
   return {
-    avatar_url: resolveStoredFileUrl(row.avatarUrl, 30 * 24 * 3600, publicBaseUrl),
+    avatar_url: await resolveAvatarDisplayUrl(row.avatarUrl, publicBaseUrl),
     avatar_visibility: row.avatarVisibility,
   };
 }
@@ -63,7 +106,7 @@ function parseVisibility(raw: unknown): AvatarVisibility {
   throw validationError("avatar_visibility harus none, branch, atau global");
 }
 
-export function resolveVisibleAvatarUrl(
+export async function resolveVisibleAvatarUrl(
   target: {
     id: string;
     avatarUrl: string | null;
@@ -72,9 +115,9 @@ export function resolveVisibleAvatarUrl(
   },
   viewer: AuthUser,
   publicBaseUrl?: string
-): string | null {
+): Promise<string | null> {
   if (!target.avatarUrl) return null;
-  const displayUrl = resolveStoredFileUrl(target.avatarUrl, 30 * 24 * 3600, publicBaseUrl);
+  const displayUrl = await resolveAvatarDisplayUrl(target.avatarUrl, publicBaseUrl);
   if (!displayUrl) return null;
   if (viewer.id === target.id) return displayUrl;
   if (target.avatarVisibility === "none") return null;
@@ -86,7 +129,7 @@ export function resolveVisibleAvatarUrl(
 }
 
 /** Papan publik (tanpa login) — hormati visibility per cabang yang ditampilkan. */
-export function resolvePublicDisplayAvatarUrl(
+export async function resolvePublicDisplayAvatarUrl(
   target: {
     avatarUrl: string | null;
     avatarVisibility: AvatarVisibility;
@@ -94,13 +137,9 @@ export function resolvePublicDisplayAvatarUrl(
   },
   displayBranchId: string,
   publicBaseUrl?: string
-): string | null {
+): Promise<string | null> {
   if (!target.avatarUrl) return null;
-  const displayUrl = resolveStoredFileUrl(
-    target.avatarUrl,
-    30 * 24 * 3600,
-    publicBaseUrl
-  );
+  const displayUrl = await resolveAvatarDisplayUrl(target.avatarUrl, publicBaseUrl);
   if (!displayUrl) return null;
   if (target.avatarVisibility === "none") return null;
   if (target.avatarVisibility === "global") return displayUrl;
@@ -147,18 +186,20 @@ export async function attachPublicDisplayAvatars<T extends { nik: string }>(
     });
   }
 
-  return items.map((item) => {
-    const target = byNik.get(item.nik);
-    if (!target) return { ...item, avatar_url: null };
-    return {
-      ...item,
-      avatar_url: resolvePublicDisplayAvatarUrl(
-        target,
-        displayBranchId,
-        publicBaseUrl
-      ),
-    };
-  });
+  return Promise.all(
+    items.map(async (item) => {
+      const target = byNik.get(item.nik);
+      if (!target) return { ...item, avatar_url: null };
+      return {
+        ...item,
+        avatar_url: await resolvePublicDisplayAvatarUrl(
+          target,
+          displayBranchId,
+          publicBaseUrl
+        ),
+      };
+    })
+  );
 }
 
 export async function attachLeaderboardAvatars<
@@ -206,44 +247,58 @@ export async function attachLeaderboardAvatars<
     });
   }
 
-  return items.map((item) => {
-    const target = byNik.get(item.nik);
-    if (!target) return { ...item, avatar_url: null };
-    return {
-      ...item,
-      avatar_url: resolveVisibleAvatarUrl(target, viewer, publicBaseUrl),
-    };
-  });
+  return Promise.all(
+    items.map(async (item) => {
+      const target = byNik.get(item.nik);
+      if (!target) return { ...item, avatar_url: null };
+      return {
+        ...item,
+        avatar_url: await resolveVisibleAvatarUrl(target, viewer, publicBaseUrl),
+      };
+    })
+  );
 }
 
 async function processAvatarBuffer(buffer: Buffer): Promise<Buffer> {
-  const image = sharp(buffer, { failOn: "error", limitInputPixels: 16_000_000 });
-  const meta = await image.metadata();
-  if (!meta.width || !meta.height) {
-    throw validationError("File bukan gambar yang valid");
-  }
-  if (
-    meta.width > AVATAR_MAX_INPUT_DIMENSION ||
-    meta.height > AVATAR_MAX_INPUT_DIMENSION
-  ) {
+  try {
+    const image = sharp(buffer, { failOn: "error", limitInputPixels: 16_000_000 });
+    const meta = await image.metadata();
+    if (!meta.width || !meta.height) {
+      throw validationError("File bukan gambar yang valid");
+    }
+    if (
+      meta.width > AVATAR_MAX_INPUT_DIMENSION ||
+      meta.height > AVATAR_MAX_INPUT_DIMENSION
+    ) {
+      throw validationError(
+        `Gambar terlalu besar. Maks ${AVATAR_MAX_INPUT_DIMENSION}px per sisi.`
+      );
+    }
+
+    const processed = await image
+      .rotate()
+      .resize(AVATAR_OUTPUT_SIZE, AVATAR_OUTPUT_SIZE, {
+        fit: "cover",
+        position: "centre",
+      })
+      .webp({ quality: 82, effort: 4 })
+      .toBuffer();
+
+    if (processed.length > AVATAR_MAX_OUTPUT_BYTES) {
+      throw validationError("Gambar terlalu kompleks. Coba foto yang lebih sederhana.");
+    }
+    return processed;
+  } catch (err) {
+    if (err && typeof err === "object" && "statusCode" in err) {
+      throw err;
+    }
+    log("warn", "Avatar image processing failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
     throw validationError(
-      `Gambar terlalu besar. Maks ${AVATAR_MAX_INPUT_DIMENSION}px per sisi.`
+      `Format foto tidak bisa diproses. Gunakan ${AVATAR_FORMAT_HINT}.`
     );
   }
-
-  const processed = await image
-    .rotate()
-    .resize(AVATAR_OUTPUT_SIZE, AVATAR_OUTPUT_SIZE, {
-      fit: "cover",
-      position: "centre",
-    })
-    .webp({ quality: 82, effort: 4 })
-    .toBuffer();
-
-  if (processed.length > AVATAR_MAX_OUTPUT_BYTES) {
-    throw validationError("Gambar terlalu kompleks. Coba foto yang lebih sederhana.");
-  }
-  return processed;
 }
 
 async function persistAvatarBytes(
@@ -252,25 +307,30 @@ async function persistAvatarBytes(
 ): Promise<string> {
   const objectKey = avatarObjectKey(userId);
 
-  if (env.awsEndpoint && env.awsAccessKeyId) {
+  if (isObjectStorageConfigured()) {
     try {
-      return await putObject(objectKey, buffer, "image/webp");
+      await putObject(objectKey, buffer, "image/webp");
+      return objectKey;
     } catch (err) {
-      if (env.nodeEnv === "production") {
-        log("error", "Avatar S3 upload failed", {
-          userId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        throw businessError("Gagal menyimpan foto profil. Coba lagi nanti.");
-      }
-      log("warn", "Avatar S3 unavailable, using local storage", {
+      log("error", "Avatar object storage upload failed, falling back to local disk", {
         userId,
+        objectKey,
         error: err instanceof Error ? err.message : String(err),
       });
     }
   }
 
-  return writeLocalBytes(objectKey, buffer);
+  try {
+    return await writeLocalBytes(objectKey, buffer);
+  } catch (err) {
+    log("error", "Avatar local storage failed", {
+      userId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw businessError(
+      "Gagal menyimpan foto profil. Coba lagi nanti atau hubungi admin (penyimpanan server)."
+    );
+  }
 }
 
 async function removeStoredAvatar(storedPath: string | null): Promise<void> {
@@ -279,7 +339,10 @@ async function removeStoredAvatar(storedPath: string | null): Promise<void> {
     await deleteLocalStoredFile(storedPath);
     return;
   }
-  const objectKey = objectKeyFromPublicUrl(storedPath);
+
+  const legacyKey = objectKeyFromPublicUrl(storedPath);
+  const objectKey =
+    legacyKey ?? (storedPath.startsWith("http") ? null : storedPath);
   if (objectKey) {
     await deleteObject(objectKey);
   }
@@ -297,13 +360,8 @@ export async function uploadUserAvatar(
     throw validationError("Ukuran foto maksimal 2 MB");
   }
 
-  const mime = (file.mimetype ?? "").toLowerCase();
-  if (
-    mime &&
-    !mime.startsWith("image/") &&
-    mime !== "application/octet-stream"
-  ) {
-    throw validationError("Format foto harus JPEG, PNG, atau WebP");
+  if (!isAllowedAvatarUpload(file.mimetype, file.originalname)) {
+    throw validationError(`Format foto harus ${AVATAR_FORMAT_HINT}`);
   }
 
   const processed = await processAvatarBuffer(file.buffer);

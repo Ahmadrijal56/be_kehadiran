@@ -56,7 +56,7 @@ function resolveLocalPath(key: string): string {
   return fullPath;
 }
 
-function signLocalFileUrl(
+export function signLocalFileUrl(
   key: string,
   expiresSec: number,
   publicBaseUrl?: string
