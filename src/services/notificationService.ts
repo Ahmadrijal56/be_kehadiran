@@ -186,12 +186,16 @@ export async function notifyNewBranchAnnouncement(
   const employees = await prisma.user.findMany({
     where: {
       isActive: true,
-      userRoles: { some: { role: { code: "employee" } } },
       OR: [
         { branchId },
         { userBranches: { some: { branchId } } },
         { employee: { branchId } },
       ],
+      NOT: {
+        userRoles: {
+          some: { role: { code: { in: ["owner", "manager"] } } },
+        },
+      },
     },
     select: { id: true },
   });

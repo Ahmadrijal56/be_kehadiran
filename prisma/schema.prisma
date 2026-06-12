@@ -225,6 +225,7 @@ model User {
   approvalsReviewed   AttendanceApprovalRequest[] @relation("ApprovalReviewedBy")
   rewardsIssued       Reward[]     @relation("IssuedBy")
   announcementsCreated Announcement[]
+  announcementReads    AnnouncementRead[]
   notifications       Notification[]
   auditLogs              AuditLog[]
   attachmentsUploaded    Attachment[]
@@ -513,8 +514,22 @@ model Announcement {
 
   branch    Branch? @relation(fields: [branchId], references: [id])
   createdBy User    @relation(fields: [createdById], references: [id])
+  reads     AnnouncementRead[]
 
   @@map("announcements")
+}
+
+model AnnouncementRead {
+  userId         String   @map("user_id") @db.Uuid
+  announcementId String   @map("announcement_id") @db.Uuid
+  readAt         DateTime @default(now()) @map("read_at") @db.Timestamptz
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  announcement Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+
+  @@id([userId, announcementId])
+  @@index([userId], map: "idx_announcement_reads_user")
+  @@map("announcement_reads")
 }
 
 model Notification {

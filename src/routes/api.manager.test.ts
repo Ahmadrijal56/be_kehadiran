@@ -154,6 +154,49 @@ describe("API v1 — manager module", () => {
     expect(res.body.data.title).toBe("Briefing Pagi (Updated)");
   });
 
+  it("announcement read state is per employee user", async () => {
+    const employeeAToken = await loginEmployee();
+    const otherEmployee = await prisma.user.findFirst({
+      where: {
+        isActive: true,
+        id: { not: (await prisma.user.findFirst({ where: { nik: "100001" } }))!.id },
+        OR: [
+          { branchId },
+          { employee: { branchId } },
+        ],
+        userRoles: { some: { role: { code: "employee" } } },
+      },
+    });
+
+    const unreadBefore = await request(app)
+      .get("/api/v1/me/announcements/unread-count")
+      .set("Authorization", `Bearer ${employeeAToken}`);
+    expect(unreadBefore.status).toBe(200);
+    expect(unreadBefore.body.data.unread).toBeGreaterThan(0);
+
+    const readRes = await request(app)
+      .patch("/api/v1/me/announcements/read-all")
+      .set("Authorization", `Bearer ${employeeAToken}`);
+    expect(readRes.status).toBe(200);
+
+    const unreadAfterA = await request(app)
+      .get("/api/v1/me/announcements/unread-count")
+      .set("Authorization", `Bearer ${employeeAToken}`);
+    expect(unreadAfterA.body.data.unread).toBe(0);
+
+    if (otherEmployee) {
+      const loginB = await request(app)
+        .post("/api/v1/auth/login")
+        .send({ identifier: otherEmployee.nik, password: "password123" });
+      expect(loginB.status).toBe(200);
+      const unreadB = await request(app)
+        .get("/api/v1/me/announcements/unread-count")
+        .set("Authorization", `Bearer ${loginB.body.access_token}`);
+      expect(unreadB.status).toBe(200);
+      expect(unreadB.body.data.unread).toBeGreaterThan(0);
+    }
+  });
+
   it("GET branch users", async () => {
     const res = await request(app)
       .get(`/api/v1/branches/${branchId}/users`)
