@@ -36,7 +36,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "late_excuse.review",
   ],
   owner: PERMISSIONS.map((p) => p.code),
-  developer: [...PERMISSIONS.map((p) => p.code), "dev.load_test"],
+  developer: PERMISSIONS.map((p) => p.code),
   load_test: ["attendance.read.self", "kpi.read.self"],
 };
 
@@ -87,11 +87,14 @@ export async function seedDatabase(prisma = new PrismaClient()): Promise<void> {
     });
 
     await prisma.rolePermission.deleteMany({ where: { roleId: role.id } });
-    for (const permCode of ROLE_PERMISSIONS[code]) {
+    const permCodes = [...new Set(ROLE_PERMISSIONS[code] ?? [])];
+    for (const permCode of permCodes) {
+      const permissionId = permByCode[permCode];
+      if (!permissionId) continue;
       await prisma.rolePermission.create({
         data: {
           roleId: role.id,
-          permissionId: permByCode[permCode],
+          permissionId,
         },
       });
     }
