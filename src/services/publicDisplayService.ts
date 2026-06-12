@@ -1,15 +1,21 @@
 import { prisma } from "../lib/prisma.js";
 import { cacheGet, cacheSet } from "../lib/redis.js";
 import { currentYearMonthWib, todayWorkDateWib } from "../utils/format.js";
-import { getBranchStatsToday, listBranchAttendanceToday } from "./branchAttendanceService.js";
-import { attachPublicDisplayAvatars } from "./avatarService.js";
-import { computeBranchLeaderboard } from "./leaderboardService.js";
+import {
+  computeBranchStatsFromRows,
+  listBranchAttendanceToday,
+} from "./branchAttendanceService.js";
+import {
+  attachPublicDisplayAvatars,
+  attachPublicDisplayAvatarsToBoards,
+} from "./avatarService.js";
+import { getBranchLeaderboardBase } from "./leaderboardService.js";
 import {
   buildBranchScheduleToday,
   type PublicBranchSchedule,
 } from "./publicScheduleService.js";
 
-const CACHE_TTL = 30;
+const CACHE_TTL = 60;
 
 export type PublicRankingRow = {
   rank: number;
@@ -27,7 +33,7 @@ export type PublicBranchBoard = {
   branch_id: string;
   code: string;
   name: string;
-  summary_today: Awaited<ReturnType<typeof getBranchStatsToday>>;
+  summary_today: ReturnType<typeof computeBranchStatsFromRows>;
   rankings: PublicRankingRow[];
   schedule_today: PublicBranchSchedule;
 };
@@ -66,21 +72,21 @@ async function buildBranchBoard(
   todayPointsByEmployee: Map<string, number>
 ): Promise<PublicBranchBoard> {
   const { listBranchShiftDefs } = await import("./branchShiftConfigService.js");
-  const shiftDefs = await listBranchShiftDefs(b.id);
-  const [stats, attendance, rankings] = await Promise.all([
-    getBranchStatsToday(b.id),
+  const [shiftDefs, attendance, rankings] = await Promise.all([
+    listBranchShiftDefs(b.id),
     listBranchAttendanceToday(b.id),
-    computeBranchLeaderboard(b.id, ym),
+    getBranchLeaderboardBase(b.id, ym),
   ]);
   const attByEmployeeId = new Map(
     attendance.items.map((a) => [a.employee_id, a])
   );
+  const workDateStr = workDate.toISOString().slice(0, 10);
 
   return {
     branch_id: b.id,
     code: b.code,
     name: b.name,
-    summary_today: stats,
+    summary_today: computeBranchStatsFromRows(attendance.items, workDateStr),
     rankings: rankings.map((r) => {
       const att = attByEmployeeId.get(r.employee_id);
       const checkIn = att?.check_in_at;
@@ -127,7 +133,10 @@ export async function getPublicDisplayBranches() {
   const workDateStr = workDate.toISOString().slice(0, 10);
 
   const summaries = await Promise.all(
-    branches.map((b) => getBranchStatsToday(b.id))
+    branches.map(async (b) => {
+      const attendance = await listBranchAttendanceToday(b.id);
+      return computeBranchStatsFromRows(attendance.items, workDateStr);
+    })
   );
 
   const payload = {
@@ -210,8 +219,9 @@ export async function getPublicDisplay(
     branches: PublicBranchBoard[];
   }>(cacheKey);
   if (cached) {
-    const branches = await Promise.all(
-      cached.branches.map((b) => withBranchAvatars(b, publicBaseUrl))
+    const branches = await attachPublicDisplayAvatarsToBoards(
+      cached.branches,
+      publicBaseUrl
     );
     return { ...cached, branches, cached: true as const };
   }
@@ -239,8 +249,9 @@ export async function getPublicDisplay(
   };
 
   await cacheSet(cacheKey, payload, CACHE_TTL);
-  const branchesWithAvatars = await Promise.all(
-    branchBoards.map((b) => withBranchAvatars(b, publicBaseUrl))
+  const branchesWithAvatars = await attachPublicDisplayAvatarsToBoards(
+    branchBoards,
+    publicBaseUrl
   );
   return { ...payload, branches: branchesWithAvatars };
 }

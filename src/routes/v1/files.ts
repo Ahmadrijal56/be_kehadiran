@@ -20,9 +20,18 @@ filesRouter.get(
     const file = await readStoredFile(key);
     if (!file) throw notFound("File tidak ditemukan");
 
+    const etag = `"${key}:${file.buffer.length}"`;
+    if (req.headers["if-none-match"] === etag) {
+      res.status(304);
+      res.setHeader("ETag", etag);
+      res.setHeader("Cache-Control", "private, max-age=3600, stale-while-revalidate=86400");
+      res.end();
+      return;
+    }
+
     res.setHeader("Content-Type", file.mimeType);
     res.setHeader("Cache-Control", "private, max-age=3600, stale-while-revalidate=86400");
-    res.setHeader("ETag", `"${file.buffer.length}-${file.mimeType}"`);
+    res.setHeader("ETag", etag);
     res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
     const origin = req.get("origin");
     if (origin) {

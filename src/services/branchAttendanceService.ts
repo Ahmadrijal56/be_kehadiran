@@ -170,7 +170,7 @@ async function loadBranchRows(branchId: string): Promise<BranchEmployeeAttendanc
   });
 
   rowsMemCache.set(memKey, { at: Date.now(), rows });
-  await cacheSet(redisKey, { items: rows }, 25);
+  await cacheSet(redisKey, { items: rows }, 45);
 
   return rows;
 }
@@ -207,12 +207,14 @@ export async function listBranchAttendanceOnBreak(branchId: string) {
   };
 }
 
-export async function getBranchStatsToday(branchId: string) {
-  const rows = await loadBranchRows(branchId);
+export function computeBranchStatsFromRows(
+  rows: BranchEmployeeAttendance[],
+  workDateStr: string
+) {
   const count = (s: string) => rows.filter((i) => i.status === s).length;
 
   return {
-    work_date: todayWorkDateWib().toISOString().slice(0, 10),
+    work_date: workDateStr,
     total_employees: rows.filter((i) => i.status !== "off").length,
     present: count("present"),
     late: count("late"),
@@ -221,6 +223,14 @@ export async function getBranchStatsToday(branchId: string) {
     left: count("left"),
     off: count("off"),
   };
+}
+
+export async function getBranchStatsToday(branchId: string) {
+  const rows = await loadBranchRows(branchId);
+  return computeBranchStatsFromRows(
+    rows,
+    todayWorkDateWib().toISOString().slice(0, 10)
+  );
 }
 
 export function invalidateBranchAttendanceCache(branchId?: string): void {

@@ -146,7 +146,7 @@ export async function processCheckIn(
     update: {},
   });
 
-  await invalidatePapanCaches();
+  await invalidatePapanCaches(employee.branchId);
 
   return {
     attendanceId: attendance.id,

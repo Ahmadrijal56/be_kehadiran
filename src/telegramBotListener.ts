@@ -16,6 +16,7 @@ import type { Api } from "telegram";
 import { env } from "./config/env.js";
 import { enqueueProcessTelegramMessage } from "./lib/queue.js";
 import { log } from "./lib/logger.js";
+import { gramJsClientOptions } from "./lib/gramJsClientOptions.js";
 import {
   loadTelegramBotSession,
   saveTelegramBotSession,
@@ -64,16 +65,8 @@ async function ingestMessage(
     if (!duplicate) {
       await enqueueProcessTelegramMessage(id);
     }
-
-    log("info", "BioFinger message ingested", {
-      source,
-      telegramMessageDbId: id,
-      chatId: chatId.toString(),
-      duplicate,
-      preview: rawText.slice(0, 120),
-    });
   } catch (err) {
-    log("error", "BioFinger ingest failed", {
+    log("error", "Gagal terima pesan BioFinger", {
       source,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -83,7 +76,6 @@ async function ingestMessage(
 async function catchUpRecent(client: TelegramClient): Promise<void> {
   const adminId = env.telegramAdminUserId;
   if (!adminId) {
-    log("info", "Catch-up dilewati — set TELEGRAM_ADMIN_USER_ID opsional untuk sync pesan lama");
     return;
   }
 
@@ -98,9 +90,11 @@ async function catchUpRecent(client: TelegramClient): Promise<void> {
       await ingestMessage(apiMsg, "catchup");
       processed++;
     }
-    log("info", "Catch-up pesan bot selesai", { processed, adminId: adminId.toString() });
+    if (processed > 0) {
+      log("info", "Catch-up pesan BioFinger selesai", { jumlah: processed });
+    }
   } catch (err) {
-    log("warn", "Catch-up gagal (listener live tetap jalan)", {
+    log("debug", "Catch-up gagal (listener live tetap jalan)", {
       error: err instanceof Error ? err.message : String(err),
     });
   }
@@ -121,6 +115,7 @@ export async function startBiofingerBotListener(): Promise<void> {
   const sessionString = await loadTelegramBotSession();
   const client = new TelegramClient(botSession(sessionString), apiId, apiHash, {
     connectionRetries: 10,
+    ...gramJsClientOptions(),
   });
 
   try {
@@ -145,10 +140,9 @@ export async function startBiofingerBotListener(): Promise<void> {
   }
 
   const me = await client.getMe();
-  log("info", "MTProto bot listener aktif (tanpa login HP)", {
-    bot: me.username ? `@${me.username}` : me.id?.toString(),
-    apiId,
-    hint: "Memantau pesan absensi yang bot kirim ke chat pribadi",
+  log("info", "Telegram listener aktif", {
+    bot: me.username ? `@${me.username}` : String(me.id),
+    mode: "MTProto bot",
   });
 
   await catchUpRecent(client);
@@ -161,8 +155,6 @@ export async function startBiofingerBotListener(): Promise<void> {
     },
     new NewMessage({ outgoing: true })
   );
-
-  log("info", "Menunggu absensi baru dari BioFinger…");
 
   await new Promise(() => {});
 }

@@ -32,12 +32,12 @@ export type AvatarProfileFields = {
 };
 
 /** URL tampilan — selalu via API backend agar bisa diakses dari HP/LAN/papan publik. */
-export async function resolveAvatarDisplayUrl(
+export function resolveAvatarDisplayUrlSync(
   storedPath: string | null | undefined,
   publicBaseUrl?: string,
   expiresSec = AVATAR_URL_TTL_SEC,
   cacheBust?: string | number
-): Promise<string | null> {
+): string | null {
   if (!storedPath?.trim()) return null;
 
   if (
@@ -51,6 +51,15 @@ export async function resolveAvatarDisplayUrl(
   if (!objectKey) return null;
 
   return signLocalFileUrl(objectKey, expiresSec, publicBaseUrl, cacheBust);
+}
+
+export async function resolveAvatarDisplayUrl(
+  storedPath: string | null | undefined,
+  publicBaseUrl?: string,
+  expiresSec = AVATAR_URL_TTL_SEC,
+  cacheBust?: string | number
+): Promise<string | null> {
+  return resolveAvatarDisplayUrlSync(storedPath, publicBaseUrl, expiresSec, cacheBust);
 }
 
 function avatarCacheBust(updatedAt?: Date): string | number | undefined {
@@ -114,7 +123,7 @@ export async function resolveVisibleAvatarUrl(
   publicBaseUrl?: string
 ): Promise<string | null> {
   if (!target.avatarUrl) return null;
-  return resolveAvatarDisplayUrl(
+  return resolveAvatarDisplayUrlSync(
     target.avatarUrl,
     publicBaseUrl,
     AVATAR_URL_TTL_SEC,
@@ -134,7 +143,7 @@ export async function resolvePublicDisplayAvatarUrl(
   publicBaseUrl?: string
 ): Promise<string | null> {
   if (!target.avatarUrl) return null;
-  return resolveAvatarDisplayUrl(
+  return resolveAvatarDisplayUrlSync(
     target.avatarUrl,
     publicBaseUrl,
     AVATAR_URL_TTL_SEC,
@@ -142,14 +151,18 @@ export async function resolvePublicDisplayAvatarUrl(
   );
 }
 
-export async function attachPublicDisplayAvatars<T extends { nik: string }>(
-  items: T[],
-  displayBranchId: string,
-  publicBaseUrl?: string
-): Promise<Array<T & { avatar_url: string | null }>> {
-  if (items.length === 0) return [];
+type AvatarTargetRow = {
+  avatarUrl: string | null;
+  avatarVisibility: AvatarVisibility;
+  branchIds: string[];
+  updatedAt?: Date;
+};
 
-  const niks = [...new Set(items.map((item) => item.nik))];
+async function loadAvatarTargetsByNik(
+  niks: string[]
+): Promise<Map<string, AvatarTargetRow>> {
+  if (niks.length === 0) return new Map();
+
   const users = await prisma.user.findMany({
     where: { nik: { in: niks } },
     select: {
@@ -162,16 +175,7 @@ export async function attachPublicDisplayAvatars<T extends { nik: string }>(
     },
   });
 
-  const byNik = new Map<
-    string,
-    {
-      avatarUrl: string | null;
-      avatarVisibility: AvatarVisibility;
-      branchIds: string[];
-      updatedAt?: Date;
-    }
-  >();
-
+  const byNik = new Map<string, AvatarTargetRow>();
   for (const user of users) {
     const branchIds = [
       ...(user.branchId ? [user.branchId] : []),
@@ -184,81 +188,76 @@ export async function attachPublicDisplayAvatars<T extends { nik: string }>(
       updatedAt: user.updatedAt,
     });
   }
+  return byNik;
+}
 
-  return Promise.all(
-    items.map(async (item) => {
-      const target = byNik.get(item.nik);
-      if (!target) return { ...item, avatar_url: null };
-      return {
-        ...item,
-        avatar_url: await resolvePublicDisplayAvatarUrl(
-          target,
-          displayBranchId,
-          publicBaseUrl
-        ),
-      };
-    })
-  );
+function attachAvatarUrlsFromMap<T extends { nik: string }>(
+  items: T[],
+  byNik: Map<string, AvatarTargetRow>,
+  publicBaseUrl?: string
+): Array<T & { avatar_url: string | null }> {
+  return items.map((item) => {
+    const target = byNik.get(item.nik);
+    if (!target?.avatarUrl) return { ...item, avatar_url: null };
+    return {
+      ...item,
+      avatar_url: resolveAvatarDisplayUrlSync(
+        target.avatarUrl,
+        publicBaseUrl,
+        AVATAR_URL_TTL_SEC,
+        avatarCacheBust(target.updatedAt)
+      ),
+    };
+  });
+}
+
+export async function attachPublicDisplayAvatars<T extends { nik: string }>(
+  items: T[],
+  _displayBranchId: string,
+  publicBaseUrl?: string
+): Promise<Array<T & { avatar_url: string | null }>> {
+  if (items.length === 0) return [];
+  const niks = [...new Set(items.map((item) => item.nik))];
+  const byNik = await loadAvatarTargetsByNik(niks);
+  return attachAvatarUrlsFromMap(items, byNik, publicBaseUrl);
+}
+
+/** Satu query avatar untuk banyak cabang (papan publik multi-cabang). */
+export async function attachPublicDisplayAvatarsToBoards<
+  T extends { rankings: Array<{ nik: string }> },
+>(
+  boards: T[],
+  publicBaseUrl?: string
+): Promise<
+  Array<
+    T & {
+      rankings: Array<T["rankings"][number] & { avatar_url: string | null }>;
+    }
+  >
+> {
+  if (boards.length === 0) return [];
+  const niks = [
+    ...new Set(boards.flatMap((board) => board.rankings.map((row) => row.nik))),
+  ];
+  const byNik = await loadAvatarTargetsByNik(niks);
+  return boards.map((board) => ({
+    ...board,
+    rankings: attachAvatarUrlsFromMap(board.rankings, byNik, publicBaseUrl),
+  }));
 }
 
 export async function attachLeaderboardAvatars<
   T extends { nik: string },
 >(
   items: T[],
-  viewer: AuthUser,
+  _viewer: AuthUser,
   publicBaseUrl?: string
 ): Promise<Array<T & { avatar_url: string | null }>> {
   if (items.length === 0) return [];
 
   const niks = [...new Set(items.map((item) => item.nik))];
-  const users = await prisma.user.findMany({
-    where: { nik: { in: niks } },
-    select: {
-      id: true,
-      nik: true,
-      avatarUrl: true,
-      avatarVisibility: true,
-      updatedAt: true,
-      branchId: true,
-      userBranches: { select: { branchId: true } },
-    },
-  });
-
-  const byNik = new Map<
-    string,
-    {
-      id: string;
-      avatarUrl: string | null;
-      avatarVisibility: AvatarVisibility;
-      branchIds: string[];
-      updatedAt?: Date;
-    }
-  >();
-
-  for (const user of users) {
-    const branchIds = [
-      ...(user.branchId ? [user.branchId] : []),
-      ...user.userBranches.map((row) => row.branchId),
-    ];
-    byNik.set(user.nik, {
-      id: user.id,
-      avatarUrl: user.avatarUrl,
-      avatarVisibility: user.avatarVisibility,
-      branchIds,
-      updatedAt: user.updatedAt,
-    });
-  }
-
-  return Promise.all(
-    items.map(async (item) => {
-      const target = byNik.get(item.nik);
-      if (!target) return { ...item, avatar_url: null };
-      return {
-        ...item,
-        avatar_url: await resolveVisibleAvatarUrl(target, viewer, publicBaseUrl),
-      };
-    })
-  );
+  const byNik = await loadAvatarTargetsByNik(niks);
+  return attachAvatarUrlsFromMap(items, byNik, publicBaseUrl);
 }
 
 async function processAvatarBuffer(buffer: Buffer): Promise<Buffer> {

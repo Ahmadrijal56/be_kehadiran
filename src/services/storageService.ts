@@ -58,7 +58,10 @@ export function signLocalFileUrl(
   cacheBust?: string | number
 ): string {
   const base = (publicBaseUrl ?? env.appUrl).replace(/\/$/, "");
-  const expires = Math.floor(Date.now() / 1000) + expiresSec;
+  const nowSec = Math.floor(Date.now() / 1000);
+  /** Bucket per jam — URL stabil untuk cache browser/CDN tanpa ubah keamanan sig. */
+  const expires =
+    Math.ceil((nowSec + expiresSec) / 3600) * 3600;
   const sig = createHmac("sha256", env.jwtSecret)
     .update(`${key}:${expires}`)
     .digest("hex");

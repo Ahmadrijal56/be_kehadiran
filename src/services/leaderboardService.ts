@@ -1,25 +1,17 @@
 import { prisma } from "../lib/prisma.js";
-import { cacheDeleteByPrefix, cacheGet, cacheSet } from "../lib/redis.js";
+import { cacheDeleteByPrefix, cacheDel, cacheGet, cacheSet } from "../lib/redis.js";
 import { forbidden, notFound } from "../lib/errors.js";
 import type { AuthUser } from "./authService.js";
 import { hasPermission } from "./authService.js";
-import { sumDedupedMonthlyPoints } from "./kpiQueryService.js";
+import { sumDedupedMonthlyPointsForGroups } from "./kpiQueryService.js";
 import { attachLeaderboardAvatars } from "./avatarService.js";
 import { currentYearMonthWib } from "../utils/format.js";
 import { activeEmployeeUserWhere } from "./activeEmployeeFilter.js";
 
-const CACHE_TTL = 60;
+const CACHE_TTL = 90;
 const CACHE_VERSION = "v9";
 
-/** Hapus cache leaderboard & display publik (setelah hapus/nonaktifkan akun). */
-export async function invalidateLeaderboardCaches(): Promise<void> {
-  await Promise.all([
-    cacheDeleteByPrefix("leaderboard:"),
-    cacheDeleteByPrefix("public:display:"),
-  ]);
-}
-
-type LeaderboardEntry = {
+type LeaderboardEntryBase = {
   rank: number;
   employee_id: string;
   nik: string;
@@ -29,6 +21,9 @@ type LeaderboardEntry = {
   branch_name: string;
   total_points: number;
   total_late_count: number;
+};
+
+type LeaderboardEntry = LeaderboardEntryBase & {
   avatar_url?: string | null;
 };
 
@@ -45,17 +40,70 @@ function accountGroupKey(row: EmployeeRow): string {
   return row.accountCode ?? row.id;
 }
 
-async function resolveAccountEmployeeIds(
-  accountCode: string | null,
-  currentEmployeeId: string
-): Promise<string[]> {
-  if (!accountCode) return [currentEmployeeId];
-  const linked = await prisma.employee.findMany({
-    where: { accountCode, isActive: true },
-    select: { id: true },
-  });
-  const ids = linked.map((row) => row.id);
-  return ids.length > 0 ? ids : [currentEmployeeId];
+function branchLeaderboardCacheKey(branchId: string, yearMonth: string): string {
+  return `leaderboard:branch:${branchId}:${yearMonth}:${CACHE_VERSION}`;
+}
+
+function globalLeaderboardCacheKey(yearMonth: string): string {
+  return `leaderboard:global:${yearMonth}:${CACHE_VERSION}`;
+}
+
+/** Hapus semua cache leaderboard & papan publik (reset global / hapus akun). */
+export async function invalidateLeaderboardCaches(): Promise<void> {
+  await Promise.all([
+    cacheDeleteByPrefix("leaderboard:"),
+    cacheDeleteByPrefix("public:display:"),
+  ]);
+}
+
+/** Invalidasi selektif — cukup untuk absensi/KPI satu cabang. */
+export async function invalidateLeaderboardCachesForBranch(
+  branchId: string
+): Promise<void> {
+  const ym = currentYearMonthWib();
+  await Promise.all([
+    cacheDeleteByPrefix(`leaderboard:branch:${branchId}:`),
+    cacheDeleteByPrefix(`public:display:branch:${branchId}:`),
+    cacheDeleteByPrefix("public:display:branches:"),
+    cacheDel(`public:display:${ym}`),
+  ]);
+}
+
+async function resolveAccountEmployeeIdsBatch(
+  groups: Map<string, EmployeeRow>
+): Promise<Map<string, string[]>> {
+  const accountCodes = [
+    ...new Set(
+      [...groups.values()]
+        .map((row) => row.accountCode)
+        .filter((code): code is string => Boolean(code))
+    ),
+  ];
+
+  const linkedByCode = new Map<string, string[]>();
+  if (accountCodes.length > 0) {
+    const linked = await prisma.employee.findMany({
+      where: { accountCode: { in: accountCodes }, isActive: true },
+      select: { id: true, accountCode: true },
+    });
+    for (const row of linked) {
+      if (!row.accountCode) continue;
+      const list = linkedByCode.get(row.accountCode) ?? [];
+      list.push(row.id);
+      linkedByCode.set(row.accountCode, list);
+    }
+  }
+
+  const result = new Map<string, string[]>();
+  for (const [key, representative] of groups) {
+    if (!representative.accountCode) {
+      result.set(key, [representative.id]);
+      continue;
+    }
+    const ids = linkedByCode.get(representative.accountCode);
+    result.set(key, ids && ids.length > 0 ? ids : [representative.id]);
+  }
+  return result;
 }
 
 /**
@@ -145,38 +193,27 @@ async function loadParticipantsGlobal(): Promise<EmployeeRow[]> {
 async function buildLeaderboardEntries(
   employees: EmployeeRow[],
   yearMonth: string
-): Promise<LeaderboardEntry[]> {
+): Promise<LeaderboardEntryBase[]> {
   const groups = new Map<string, EmployeeRow>();
   for (const employee of employees) {
     const key = accountGroupKey(employee);
     if (!groups.has(key)) groups.set(key, employee);
   }
 
-  const pointsCache = new Map<
-    string,
-    {
-      total_points: number;
-      total_late_count: number;
-      total_present_days: number;
-    }
-  >();
-
-  for (const [key, representative] of groups) {
-    const ids = await resolveAccountEmployeeIds(
-      representative.accountCode,
-      representative.id
-    );
-    const summary = await sumDedupedMonthlyPoints(ids, yearMonth);
-    pointsCache.set(key, {
-      total_points: summary.total_points,
-      total_late_count: summary.total_late_count,
-      total_present_days: summary.total_present_days,
-    });
+  const employeeIdsByGroup = await resolveAccountEmployeeIdsBatch(groups);
+  const kpiGroups = new Map<string, string[]>();
+  for (const [key, ids] of employeeIdsByGroup) {
+    kpiGroups.set(key, ids);
   }
+  const pointsCache = await sumDedupedMonthlyPointsForGroups(kpiGroups, yearMonth);
 
   const ranked = [...groups.entries()]
     .map(([key, representative]) => {
-      const stats = pointsCache.get(key)!;
+      const stats = pointsCache.get(key) ?? {
+        total_points: 0,
+        total_late_count: 0,
+        total_present_days: 0,
+      };
       return {
         employee_id: representative.id,
         nik: representative.nik,
@@ -207,9 +244,23 @@ async function buildLeaderboardEntries(
 export async function computeBranchLeaderboard(
   branchId: string,
   yearMonth: string
-): Promise<LeaderboardEntry[]> {
+): Promise<LeaderboardEntryBase[]> {
   const participants = await loadParticipantsForBranch(branchId);
   return buildLeaderboardEntries(participants, yearMonth);
+}
+
+/** Ranking cabang tanpa avatar — pakai Redis (dipakai API & papan publik). */
+export async function getBranchLeaderboardBase(
+  branchId: string,
+  yearMonth: string
+): Promise<LeaderboardEntryBase[]> {
+  const cacheKey = branchLeaderboardCacheKey(branchId, yearMonth);
+  const cached = await cacheGet<LeaderboardEntryBase[]>(cacheKey);
+  if (cached) return cached;
+
+  const baseItems = await computeBranchLeaderboard(branchId, yearMonth);
+  await cacheSet(cacheKey, baseItems, CACHE_TTL);
+  return baseItems;
 }
 
 export async function getBranchLeaderboard(
@@ -233,10 +284,9 @@ export async function getBranchLeaderboard(
     throw forbidden();
   }
 
-  const cacheKey = `leaderboard:branch:${branchId}:${ym}:${CACHE_VERSION}`;
-  const cached = await cacheGet<Omit<LeaderboardEntry, "avatar_url">[]>(cacheKey);
-  const baseItems =
-    cached ?? (await computeBranchLeaderboard(branchId, ym));
+  const cacheKey = branchLeaderboardCacheKey(branchId, ym);
+  const cached = await cacheGet<LeaderboardEntryBase[]>(cacheKey);
+  const baseItems = cached ?? (await computeBranchLeaderboard(branchId, ym));
   if (!cached) {
     await cacheSet(cacheKey, baseItems, CACHE_TTL);
   }
@@ -250,8 +300,8 @@ export async function getGlobalLeaderboard(
   publicBaseUrl?: string
 ) {
   const ym = yearMonth ?? currentYearMonthWib();
-  const cacheKey = `leaderboard:global:${ym}:${CACHE_VERSION}`;
-  const cached = await cacheGet<Omit<LeaderboardEntry, "avatar_url">[]>(cacheKey);
+  const cacheKey = globalLeaderboardCacheKey(ym);
+  const cached = await cacheGet<LeaderboardEntryBase[]>(cacheKey);
   const baseItems =
     cached ??
     (await (async () => {

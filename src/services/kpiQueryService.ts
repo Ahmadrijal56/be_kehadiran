@@ -49,14 +49,62 @@ export async function sumDedupedMonthlyPoints(
   total_late_count: number;
   total_present_days: number;
 }> {
-  if (employeeIds.length === 0) {
-    return { total_points: 0, total_late_count: 0, total_present_days: 0 };
+  const batch = await sumDedupedMonthlyPointsForGroups(
+    new Map([["__single__", employeeIds]]),
+    yearMonth
+  );
+  return (
+    batch.get("__single__") ?? {
+      total_points: 0,
+      total_late_count: 0,
+      total_present_days: 0,
+    }
+  );
+}
+
+export type MonthlyPointsSummary = {
+  total_points: number;
+  total_late_count: number;
+  total_present_days: number;
+};
+
+function summarizeDedupedDailyRows(
+  rows: DailyScoreRow[]
+): MonthlyPointsSummary {
+  const deduped = dedupeDailyScoresByWorkDate(rows);
+  return {
+    total_points: deduped.reduce((sum, row) => sum + row.totalPoints, 0),
+    total_late_count: deduped.filter((row) => row.lateMinutes > 0).length,
+    total_present_days: deduped.length,
+  };
+}
+
+/** Satu query KPI untuk banyak grup akun — dipakai leaderboard. */
+export async function sumDedupedMonthlyPointsForGroups(
+  groups: Map<string, string[]>,
+  yearMonth: string
+): Promise<Map<string, MonthlyPointsSummary>> {
+  const result = new Map<string, MonthlyPointsSummary>();
+  if (groups.size === 0) return result;
+
+  const allEmployeeIds = [
+    ...new Set([...groups.values()].flat().filter(Boolean)),
+  ];
+  if (allEmployeeIds.length === 0) {
+    for (const key of groups.keys()) {
+      result.set(key, {
+        total_points: 0,
+        total_late_count: 0,
+        total_present_days: 0,
+      });
+    }
+    return result;
   }
 
   const { start, end } = monthRange(yearMonth);
   const daily = await prisma.kpiDailyScore.findMany({
     where: {
-      employeeId: employeeIds.length === 1 ? employeeIds[0]! : { in: employeeIds },
+      employeeId: { in: allEmployeeIds },
       workDate: { gte: start, lt: end },
     },
     select: {
@@ -67,20 +115,37 @@ export async function sumDedupedMonthlyPoints(
     },
   });
 
-  const deduped = dedupeDailyScoresByWorkDate(
-    daily.map((row) => ({
+  const byEmployee = new Map<string, DailyScoreRow[]>();
+  for (const row of daily) {
+    const mapped: DailyScoreRow = {
       workDate: row.workDate,
       totalPoints: row.totalPoints,
       lateMinutes: row.lateMinutes,
       employeeId: row.employeeId,
-    }))
-  );
+    };
+    const list = byEmployee.get(row.employeeId);
+    if (list) list.push(mapped);
+    else byEmployee.set(row.employeeId, [mapped]);
+  }
 
-  return {
-    total_points: deduped.reduce((sum, row) => sum + row.totalPoints, 0),
-    total_late_count: deduped.filter((row) => row.lateMinutes > 0).length,
-    total_present_days: deduped.length,
-  };
+  for (const [groupKey, employeeIds] of groups) {
+    if (employeeIds.length === 0) {
+      result.set(groupKey, {
+        total_points: 0,
+        total_late_count: 0,
+        total_present_days: 0,
+      });
+      continue;
+    }
+    const combined: DailyScoreRow[] = [];
+    for (const id of employeeIds) {
+      const rows = byEmployee.get(id);
+      if (rows) combined.push(...rows);
+    }
+    result.set(groupKey, summarizeDedupedDailyRows(combined));
+  }
+
+  return result;
 }
 
 /** Satu tanggal kerja = satu hitungan poin (lintas cabang). */

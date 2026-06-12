@@ -182,12 +182,6 @@ export async function saveTelegramWebhookMessage(
     },
   });
 
-  log("info", "Telegram message saved", {
-    telegramMessageDbId: record.id,
-    groupId: input.groupId.toString(),
-    messageId: input.messageId.toString(),
-  });
-
   return { id: record.id, duplicate: false };
 }
 
@@ -204,7 +198,6 @@ export async function processTelegramMessageById(
   }
 
   if (message.syncStatus === "processed" && !options?.force) {
-    log("info", "Message already processed", { telegramMessageDbId });
     return;
   }
 
@@ -241,10 +234,11 @@ export async function processTelegramMessageById(
       },
     });
 
-    log("info", "Telegram message processed", {
-      telegramMessageDbId,
-      attendanceId,
+    log("info", "Absensi BioFinger diproses", {
       nik: parsed.nik,
+      nama: parsed.nama ?? "-",
+      status: parsed.eventStatus ?? parsed.attendanceType ?? "-",
+      cabang: parsed.cabang ?? parsed.perusahaan ?? "-",
     });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
@@ -258,7 +252,7 @@ export async function processTelegramMessageById(
           errorMessage: "skipped_duplicate",
         },
       });
-      log("info", "Duplicate attendance skipped", { telegramMessageDbId, error: errorMessage });
+      log("debug", "Absensi duplikat dilewati", { messageId: telegramMessageDbId });
       return;
     }
 
@@ -271,8 +265,8 @@ export async function processTelegramMessageById(
       },
     });
 
-    log("error", "Telegram message processing failed", {
-      telegramMessageDbId,
+    log("error", "Gagal memproses absensi BioFinger", {
+      messageId: telegramMessageDbId,
       error: errorMessage,
     });
     throw err;

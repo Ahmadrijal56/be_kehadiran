@@ -10,7 +10,7 @@ import { changeOwnPassword } from "../../services/passwordService.js";
 import { isAllowedAvatarUpload } from "../../lib/avatarMime.js";
 import {
   AVATAR_MAX_UPLOAD_BYTES,
-  getAvatarProfile,
+  mapAvatarProfileFields,
   removeUserAvatar,
   updateAvatarVisibility,
   uploadUserAvatar,
@@ -38,27 +38,34 @@ meAccountRouter.get(
   asyncHandler(async (req, res) => {
     const user = req.user!;
     const publicBaseUrl = getRequestPublicBaseUrl(req);
-    const [branch, avatar] = await Promise.all([
-      user.branchId
-        ? prisma.branch.findUnique({
-            where: { id: user.branchId },
-            select: {
-              id: true,
-              code: true,
-              name: true,
-              breakAttendanceEnabled: true,
-            },
-          })
-        : Promise.resolve(null),
-      getAvatarProfile(user.id, publicBaseUrl),
-    ]);
 
-    const branchPayload = branch
+    const profile = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: {
+        avatarUrl: true,
+        avatarVisibility: true,
+        updatedAt: true,
+        branch: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+            breakAttendanceEnabled: true,
+          },
+        },
+      },
+    });
+
+    const avatar = profile
+      ? await mapAvatarProfileFields(profile, publicBaseUrl)
+      : { avatar_url: null as string | null, avatar_visibility: "branch" as const };
+
+    const branchPayload = profile?.branch
       ? {
-          id: branch.id,
-          code: branch.code,
-          name: branch.name,
-          break_attendance_enabled: branch.breakAttendanceEnabled,
+          id: profile.branch.id,
+          code: profile.branch.code,
+          name: profile.branch.name,
+          break_attendance_enabled: profile.branch.breakAttendanceEnabled,
         }
       : null;
 

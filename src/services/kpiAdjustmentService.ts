@@ -65,7 +65,7 @@ export async function adjustEmployeeKpi(
     return row;
   });
 
-  await invalidatePapanCaches();
+  await invalidatePapanCaches(employee.branchId);
 
   return {
     employee_id: employeeId,

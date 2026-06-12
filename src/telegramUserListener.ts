@@ -23,6 +23,7 @@ import { StringSession } from "telegram/sessions/index.js";
 import { NewMessage } from "telegram/events/index.js";
 import type { Api } from "telegram";
 import { env } from "./config/env.js";
+import { gramJsClientOptions } from "./lib/gramJsClientOptions.js";
 import { enqueueProcessTelegramMessage } from "./lib/queue.js";
 import { log } from "./lib/logger.js";
 import { saveTelegramWebhookMessage } from "./services/telegramIngestService.js";
@@ -113,6 +114,7 @@ export async function startUserMtprotoListener(): Promise<void> {
   const session = new StringSession(sessionString);
   const client = new TelegramClient(session, apiId, apiHash, {
     connectionRetries: 10,
+    ...gramJsClientOptions(),
   });
 
   await client.connect();
@@ -121,11 +123,10 @@ export async function startUserMtprotoListener(): Promise<void> {
   const bot = await client.getEntity(BOT_USERNAME);
   const botId = bot.id.toString();
 
-  log("info", "MTProto user listener aktif — chat pribadi bot", {
-    akun: me.username ? `@${me.username}` : me.id?.toString(),
+  log("info", "Telegram listener aktif", {
+    akun: me.username ? `@${me.username}` : String(me.id),
     bot: `@${BOT_USERNAME}`,
-    botId,
-    hint: "Pastikan absensi BioFinger masuk ke chat pribadi bot di akun Telegram yang sama",
+    mode: "MTProto user",
   });
 
   // Catch-up: process recent messages in case listener was down

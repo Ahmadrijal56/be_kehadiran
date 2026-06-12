@@ -43,7 +43,6 @@ export async function enqueueProcessTelegramMessage(
   telegramMessageDbId: string
 ): Promise<void> {
   if (!env.queueEnabled) {
-    log("info", "Queue disabled — processing inline", { telegramMessageDbId });
     await processTelegramMessageById(telegramMessageDbId);
     return;
   }
@@ -55,10 +54,8 @@ export async function enqueueProcessTelegramMessage(
       { telegramMessageDbId },
       { jobId: `tg-msg-${telegramMessageDbId}` }
     );
-    log("info", "Enqueued ProcessTelegramMessageJob", { telegramMessageDbId });
   } catch (err) {
-    log("warn", "Redis unavailable — fallback inline processing", {
-      telegramMessageDbId,
+    log("warn", "Redis queue gagal, proses inline", {
       error: err instanceof Error ? err.message : String(err),
     });
     await processTelegramMessageById(telegramMessageDbId);
@@ -66,10 +63,6 @@ export async function enqueueProcessTelegramMessage(
 }
 
 async function handleTelegramJob(job: Job<ProcessTelegramMessagePayload>): Promise<void> {
-  log("info", "Processing telegram job", {
-    jobId: job.id,
-    telegramMessageDbId: job.data.telegramMessageDbId,
-  });
   await processTelegramMessageById(job.data.telegramMessageDbId);
 }
 
@@ -83,13 +76,13 @@ export function startTelegramWorker(): Worker<ProcessTelegramMessagePayload> {
   );
 
   telegramWorker.on("failed", (job, err) => {
-    log("error", "Telegram job failed", {
+    log("error", "Job absensi Telegram gagal", {
       jobId: job?.id,
       error: err.message,
     });
   });
 
-  log("info", "Telegram queue worker started");
+  log("info", "Background service aktif", { queue: "telegram", backend: "redis" });
   return telegramWorker;
 }
 

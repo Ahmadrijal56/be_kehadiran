@@ -8,7 +8,7 @@ import { log } from "./lib/logger.js";
 
 async function main() {
   try {
-    log("info", "🚀 Kehadiran API starting...", { env: env.nodeEnv });
+    log("info", "Memulai Kehadiran API", { env: env.nodeEnv, timezone: env.timezone });
 
     // Validate DATABASE_URL is set in production
     if (env.nodeEnv === "production") {
@@ -17,7 +17,7 @@ async function main() {
           "DATABASE_URL environment variable is not set in production"
         );
       }
-      log("info", "✅ DATABASE_URL configured", {
+      log("info", "DATABASE_URL terkonfigurasi", {
         host: process.env.DATABASE_URL?.split("@")[1]?.split("/")[0] || "unknown",
       });
     }
@@ -58,15 +58,14 @@ async function main() {
     }
 
     app.listen(env.port, () => {
-      log("info", "✅ Server listening", {
+      log("info", "Server siap", {
         port: env.port,
-        timezone: env.timezone,
         url: `http://localhost:${env.port}`,
       });
       void startBackgroundServices();
     });
   } catch (err) {
-    log("error", "❌ Failed to start server", {
+    log("error", "Gagal memulai server", {
       error: err instanceof Error ? err.message : String(err),
       stack: err instanceof Error ? err.stack : undefined,
     });
