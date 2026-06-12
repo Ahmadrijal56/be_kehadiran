@@ -12,7 +12,7 @@ import {
   signLocalFileUrl,
   writeLocalBytes,
 } from "./storageService.js";
-import { deleteObject, objectKeyFromPublicUrl, putObject } from "../lib/s3Client.js";
+import { deleteObject, isObjectStorageConfigured, objectKeyFromPublicUrl, putObject } from "../lib/s3Client.js";
 import { invalidateAuthUserCache } from "../lib/authUserCache.js";
 import { AVATAR_FORMAT_HINT, isAllowedAvatarUpload } from "../lib/avatarMime.js";
 import type { AuthUser } from "./authService.js";
@@ -31,15 +31,6 @@ export type AvatarProfileFields = {
   avatar_url: string | null;
   avatar_visibility: AvatarVisibility;
 };
-
-function isObjectStorageConfigured(): boolean {
-  return Boolean(
-    env.awsEndpoint?.trim() &&
-      env.awsAccessKeyId?.trim() &&
-      env.awsSecretAccessKey?.trim() &&
-      env.awsBucket?.trim()
-  );
-}
 
 /** URL tampilan untuk path tersimpan: local:, kunci S3, atau URL publik legacy. */
 export async function resolveAvatarDisplayUrl(

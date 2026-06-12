@@ -1,24 +1,7 @@
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { PutObjectCommand } from "@aws-sdk/client-s3";
 import { env } from "../config/env.js";
 import { log } from "../lib/logger.js";
-
-let s3Client: S3Client | null = null;
-
-function getS3Client(): S3Client | null {
-  if (!env.awsEndpoint || !env.awsAccessKeyId) return null;
-  if (!s3Client) {
-    s3Client = new S3Client({
-      region: env.awsRegion,
-      endpoint: env.awsEndpoint,
-      forcePathStyle: env.awsUsePathStyle,
-      credentials: {
-        accessKeyId: env.awsAccessKeyId,
-        secretAccessKey: env.awsSecretAccessKey,
-      },
-    });
-  }
-  return s3Client;
-}
+import { buildPublicObjectUrl, getS3Client } from "../lib/s3Client.js";
 
 /** Unduh foto dari Telegram Bot API dan simpan ke S3/MinIO. */
 export async function downloadAndStoreTelegramPhoto(
@@ -65,9 +48,7 @@ export async function downloadAndStoreTelegramPhoto(
       })
     );
 
-    const photoUrl = env.awsUsePathStyle
-      ? `${env.awsEndpoint}/${env.awsBucket}/${objectKey}`
-      : `${env.awsEndpoint}/${objectKey}`;
+    const photoUrl = buildPublicObjectUrl(objectKey);
 
     log("info", "Telegram photo stored", { fileId, objectKey });
     return photoUrl;

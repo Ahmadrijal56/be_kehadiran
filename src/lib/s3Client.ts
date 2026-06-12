@@ -1,28 +1,89 @@
-import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import {
+  DeleteObjectCommand,
+  HeadBucketCommand,
+  PutObjectCommand,
+  S3Client,
+  type S3ClientConfig,
+} from "@aws-sdk/client-s3";
 import { env } from "../config/env.js";
 
 let s3Client: S3Client | null = null;
 
+export function normalizeAwsEndpoint(raw: string): string {
+  return raw.trim().replace(/\/+$/, "");
+}
+
+export function isObjectStorageConfigured(): boolean {
+  return Boolean(
+    env.awsEndpoint?.trim() &&
+      env.awsAccessKeyId?.trim() &&
+      env.awsSecretAccessKey?.trim() &&
+      env.awsBucket?.trim()
+  );
+}
+
+function resolveAwsRegion(endpoint: string): string {
+  const configured = env.awsRegion?.trim();
+  if (configured && configured !== "us-east-1") return configured;
+  if (endpoint.includes(".r2.cloudflarestorage.com")) return "auto";
+  return configured || "us-east-1";
+}
+
+/** Konfigurasi S3/R2 — kompatibel AWS SDK v3.729+ (checksum WHEN_REQUIRED). */
+export function buildS3ClientConfig(): S3ClientConfig | null {
+  if (!isObjectStorageConfigured()) return null;
+
+  const endpoint = normalizeAwsEndpoint(env.awsEndpoint);
+  return {
+    region: resolveAwsRegion(endpoint),
+    endpoint,
+    forcePathStyle: env.awsUsePathStyle,
+    credentials: {
+      accessKeyId: env.awsAccessKeyId.trim(),
+      secretAccessKey: env.awsSecretAccessKey.trim(),
+    },
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED",
+  };
+}
+
+export function getNormalizedAwsEndpoint(): string {
+  return normalizeAwsEndpoint(env.awsEndpoint);
+}
+
 export function getS3Client(): S3Client | null {
-  if (!env.awsEndpoint || !env.awsAccessKeyId) return null;
+  const config = buildS3ClientConfig();
+  if (!config) return null;
   if (!s3Client) {
-    s3Client = new S3Client({
-      region: env.awsRegion,
-      endpoint: env.awsEndpoint,
-      forcePathStyle: env.awsUsePathStyle,
-      credentials: {
-        accessKeyId: env.awsAccessKeyId,
-        secretAccessKey: env.awsSecretAccessKey,
-      },
-    });
+    s3Client = new S3Client(config);
   }
   return s3Client;
 }
 
 export function buildPublicObjectUrl(objectKey: string): string {
+  const endpoint = getNormalizedAwsEndpoint();
   return env.awsUsePathStyle
-    ? `${env.awsEndpoint}/${env.awsBucket}/${objectKey}`
-    : `${env.awsEndpoint}/${objectKey}`;
+    ? `${endpoint}/${env.awsBucket}/${objectKey}`
+    : `${endpoint}/${objectKey}`;
+}
+
+export async function verifyObjectStorageConnection(): Promise<{
+  ok: boolean;
+  error?: string;
+}> {
+  const client = getS3Client();
+  if (!client) {
+    return { ok: false, error: "AWS_* belum lengkap" };
+  }
+  try {
+    await client.send(new HeadBucketCommand({ Bucket: env.awsBucket }));
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 export async function putObject(
@@ -63,11 +124,12 @@ export async function deleteObject(objectKey: string): Promise<void> {
 
 export function objectKeyFromPublicUrl(url: string | null | undefined): string | null {
   if (!url?.trim()) return null;
-  const bucketPrefix = `${env.awsEndpoint}/${env.awsBucket}/`;
+  const endpoint = getNormalizedAwsEndpoint();
+  const bucketPrefix = `${endpoint}/${env.awsBucket}/`;
   if (url.startsWith(bucketPrefix)) {
     return url.slice(bucketPrefix.length);
   }
-  const endpointPrefix = `${env.awsEndpoint}/`;
+  const endpointPrefix = `${endpoint}/`;
   if (url.startsWith(endpointPrefix)) {
     return url.slice(endpointPrefix.length);
   }

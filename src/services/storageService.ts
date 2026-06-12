@@ -1,4 +1,4 @@
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import fs from "node:fs/promises";
@@ -6,6 +6,7 @@ import path from "node:path";
 import { env } from "../config/env.js";
 import { businessError } from "../lib/errors.js";
 import { log } from "../lib/logger.js";
+import { getS3Client, isObjectStorageConfigured } from "../lib/s3Client.js";
 
 const MAX_BYTES = 5 * 1024 * 1024;
 const ALLOWED_MIME = new Set(["image/jpeg", "image/png", "image/jpg"]);
@@ -13,22 +14,10 @@ const LOCAL_PREFIX = "local:";
 
 const UPLOAD_ROOT = path.join(process.cwd(), "storage", "uploads");
 
-let s3: S3Client | null = null;
-
-function getS3(): S3Client {
-  if (!s3) {
-    if (!env.awsEndpoint) throw businessError("Storage belum dikonfigurasi");
-    s3 = new S3Client({
-      region: env.awsRegion,
-      endpoint: env.awsEndpoint,
-      forcePathStyle: env.awsUsePathStyle,
-      credentials: {
-        accessKeyId: env.awsAccessKeyId,
-        secretAccessKey: env.awsSecretAccessKey,
-      },
-    });
-  }
-  return s3;
+function requireS3() {
+  const client = getS3Client();
+  if (!client) throw businessError("Storage belum dikonfigurasi");
+  return client;
 }
 
 function normalizeMime(mimetype: string): string {
@@ -120,7 +109,7 @@ async function uploadToS3(
   const mimeType = normalizeMime(file.mimetype);
   const ext = fileExtension(mimeType);
   const key = `${prefix}/${randomUUID()}.${ext}`;
-  await getS3().send(
+  await requireS3().send(
     new PutObjectCommand({
       Bucket: env.awsBucket,
       Key: key,
@@ -137,7 +126,7 @@ export async function uploadPrivateFile(
 ): Promise<{ filePath: string; mimeType: string; sizeBytes: number }> {
   validateUpload(file);
 
-  if (!env.awsEndpoint) {
+  if (!isObjectStorageConfigured()) {
     return uploadToLocal(file, prefix);
   }
 
@@ -160,7 +149,7 @@ export async function getSignedFileUrl(filePath: string, expiresSec = 3600): Pro
   }
 
   const url = await getSignedUrl(
-    getS3(),
+    requireS3(),
     new GetObjectCommand({ Bucket: env.awsBucket, Key: filePath }),
     { expiresIn: expiresSec }
   );

@@ -1,5 +1,6 @@
 import { prisma } from "./prisma.js";
 import { getRedis } from "./redis.js";
+import { isObjectStorageConfigured, verifyObjectStorageConnection } from "./s3Client.js";
 import { log } from "./logger.js";
 
 export async function checkStartupHealth(): Promise<void> {
@@ -32,6 +33,18 @@ export async function checkStartupHealth(): Promise<void> {
       error: err instanceof Error ? err.message : String(err),
     });
     // Don't throw - Redis is optional for cache
+  }
+
+  if (isObjectStorageConfigured()) {
+    const storage = await verifyObjectStorageConnection();
+    if (storage.ok) {
+      log("info", "✅ Object storage (S3/R2) connected", {});
+    } else {
+      log("warn", "⚠️  Object storage gagal — avatar pakai disk lokal", {
+        error: storage.error,
+        hint: "Periksa AWS_ENDPOINT, AWS_BUCKET, credentials R2; region R2 = auto",
+      });
+    }
   }
 
   // Check if database is seeded (has tables)

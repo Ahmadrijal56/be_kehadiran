@@ -1,6 +1,9 @@
 [phases.setup]
 nixPkgs = ["openssl"]
 
+[variables]
+NIXPACKS_NODE_VERSION = "22"
+
 [phases.build]
 cmd = "npm run build"
 

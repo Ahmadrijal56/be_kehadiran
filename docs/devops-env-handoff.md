@@ -39,7 +39,7 @@ Tanpa ini, upload avatar disimpan di disk container (hilang saat redeploy).
 |----------|------------|
 | `AWS_ACCESS_KEY_ID` | Cloudflare R2 atau S3 |
 | `AWS_SECRET_ACCESS_KEY` | |
-| `AWS_DEFAULT_REGION` | `auto` untuk R2 |
+| `AWS_DEFAULT_REGION` | `auto` untuk R2 (wajib, jangan `us-east-1`) |
 | `AWS_BUCKET` | `kehadiran` |
 | `AWS_ENDPOINT` | URL R2/S3 |
 | `AWS_USE_PATH_STYLE_ENDPOINT` | `true` |
