@@ -12,7 +12,7 @@ import {
   signLocalFileUrl,
   writeLocalBytes,
 } from "./storageService.js";
-import { deleteObject, isObjectStorageConfigured, objectKeyFromPublicUrl, putObject } from "../lib/s3Client.js";
+import { deleteObject, isObjectStorageConfigured, objectKeyFromPublicUrl, putObject, shouldUseObjectStorage, formatStorageError } from "../lib/s3Client.js";
 import { invalidateAuthUserCache } from "../lib/authUserCache.js";
 import { AVATAR_FORMAT_HINT, isAllowedAvatarUpload } from "../lib/avatarMime.js";
 import type { AuthUser } from "./authService.js";
@@ -301,15 +301,19 @@ async function persistAvatarBytes(
 ): Promise<string> {
   const objectKey = avatarObjectKey(userId);
 
-  if (isObjectStorageConfigured()) {
+  if (shouldUseObjectStorage()) {
     try {
       await putObject(objectKey, buffer, "image/webp");
       return objectKey;
     } catch (err) {
-      log("warn", "Avatar S3/R2 gagal — pakai disk lokal (atur AWS_* di Railway untuk persisten)", {
+      log("warn", "Avatar S3/R2 gagal — pakai disk lokal", {
         userId,
         objectKey,
-        error: err instanceof Error ? err.message : String(err),
+        error: formatStorageError(err),
+        hint:
+          env.nodeEnv === "production"
+            ? "Set AWS_ENDPOINT ke R2 + credentials di Railway (bukan localhost:9000)"
+            : "Jalankan MinIO lokal atau kosongkan AWS_ENDPOINT untuk disk lokal",
       });
     }
   }

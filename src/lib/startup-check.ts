@@ -38,11 +38,18 @@ export async function checkStartupHealth(): Promise<void> {
   if (isObjectStorageConfigured()) {
     const storage = await verifyObjectStorageConnection();
     if (storage.ok) {
-      log("info", "✅ Object storage (S3/R2) connected", {});
+      log("info", "✅ Object storage (S3/R2) connected", {
+        provider: storage.provider,
+        bucket: process.env.AWS_BUCKET,
+      });
     } else {
       log("warn", "⚠️  Object storage gagal — avatar pakai disk lokal", {
+        provider: storage.provider,
         error: storage.error,
-        hint: "Periksa AWS_ENDPOINT, AWS_BUCKET, credentials R2; region R2 = auto",
+        hint:
+          storage.provider === "local"
+            ? "AWS_ENDPOINT localhost tidak bisa dipakai di production Railway"
+            : "Periksa AWS_ENDPOINT (R2), AWS_BUCKET, dan API token R2",
       });
     }
   }

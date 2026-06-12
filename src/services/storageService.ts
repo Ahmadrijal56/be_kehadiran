@@ -6,7 +6,7 @@ import path from "node:path";
 import { env } from "../config/env.js";
 import { businessError } from "../lib/errors.js";
 import { log } from "../lib/logger.js";
-import { getS3Client, isObjectStorageConfigured } from "../lib/s3Client.js";
+import { getS3Client, isObjectStorageConfigured, shouldUseObjectStorage } from "../lib/s3Client.js";
 
 const MAX_BYTES = 5 * 1024 * 1024;
 const ALLOWED_MIME = new Set(["image/jpeg", "image/png", "image/jpg"]);
@@ -126,7 +126,7 @@ export async function uploadPrivateFile(
 ): Promise<{ filePath: string; mimeType: string; sizeBytes: number }> {
   validateUpload(file);
 
-  if (!isObjectStorageConfigured()) {
+  if (!shouldUseObjectStorage()) {
     return uploadToLocal(file, prefix);
   }
 

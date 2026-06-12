@@ -1,6 +1,6 @@
 import {
   DeleteObjectCommand,
-  HeadBucketCommand,
+  ListBucketsCommand,
   PutObjectCommand,
   S3Client,
   type S3ClientConfig,
@@ -13,6 +13,14 @@ export function normalizeAwsEndpoint(raw: string): string {
   return raw.trim().replace(/\/+$/, "");
 }
 
+export function isR2Endpoint(endpoint: string): boolean {
+  return endpoint.includes(".r2.cloudflarestorage.com");
+}
+
+export function isLocalStorageEndpoint(endpoint: string): boolean {
+  return /localhost|127\.0\.0\.1/i.test(endpoint);
+}
+
 export function isObjectStorageConfigured(): boolean {
   return Boolean(
     env.awsEndpoint?.trim() &&
@@ -22,11 +30,49 @@ export function isObjectStorageConfigured(): boolean {
   );
 }
 
+/** Endpoint localhost di production tidak bisa dijangkau — pakai disk + signed URL. */
+export function shouldUseObjectStorage(): boolean {
+  if (!isObjectStorageConfigured()) return false;
+  const endpoint = normalizeAwsEndpoint(env.awsEndpoint);
+  if (env.nodeEnv === "production" && isLocalStorageEndpoint(endpoint)) {
+    return false;
+  }
+  return true;
+}
+
 function resolveAwsRegion(endpoint: string): string {
+  if (isR2Endpoint(endpoint)) return "auto";
   const configured = env.awsRegion?.trim();
-  if (configured && configured !== "us-east-1") return configured;
-  if (endpoint.includes(".r2.cloudflarestorage.com")) return "auto";
   return configured || "us-east-1";
+}
+
+function resolveForcePathStyle(endpoint: string): boolean {
+  if (env.awsUsePathStyle) return true;
+  return isR2Endpoint(endpoint) || isLocalStorageEndpoint(endpoint);
+}
+
+export function formatStorageError(err: unknown): string {
+  if (!err) return "Unknown error";
+  if (err instanceof Error) {
+    const e = err as Error & {
+      Code?: string;
+      code?: string;
+      errno?: number;
+      $metadata?: { httpStatusCode?: number };
+      cause?: unknown;
+    };
+    const parts: string[] = [];
+    if (e.message) parts.push(e.message);
+    if (e.Code) parts.push(`Code=${e.Code}`);
+    if (e.code) parts.push(`code=${e.code}`);
+    if (e.$metadata?.httpStatusCode) parts.push(`HTTP ${e.$metadata.httpStatusCode}`);
+    if (e.cause instanceof Error && e.cause.message) {
+      parts.push(`cause=${e.cause.message}`);
+    }
+    if (parts.length) return parts.join("; ");
+    return e.name || "Storage error";
+  }
+  return String(err);
 }
 
 /** Konfigurasi S3/R2 — kompatibel AWS SDK v3.729+ (checksum WHEN_REQUIRED). */
@@ -37,7 +83,7 @@ export function buildS3ClientConfig(): S3ClientConfig | null {
   return {
     region: resolveAwsRegion(endpoint),
     endpoint,
-    forcePathStyle: env.awsUsePathStyle,
+    forcePathStyle: resolveForcePathStyle(endpoint),
     credentials: {
       accessKeyId: env.awsAccessKeyId.trim(),
       secretAccessKey: env.awsSecretAccessKey.trim(),
@@ -51,7 +97,13 @@ export function getNormalizedAwsEndpoint(): string {
   return normalizeAwsEndpoint(env.awsEndpoint);
 }
 
+export function usesPathStyleUrls(): boolean {
+  if (!isObjectStorageConfigured()) return false;
+  return resolveForcePathStyle(getNormalizedAwsEndpoint());
+}
+
 export function getS3Client(): S3Client | null {
+  if (!shouldUseObjectStorage()) return null;
   const config = buildS3ClientConfig();
   if (!config) return null;
   if (!s3Client) {
@@ -62,7 +114,7 @@ export function getS3Client(): S3Client | null {
 
 export function buildPublicObjectUrl(objectKey: string): string {
   const endpoint = getNormalizedAwsEndpoint();
-  return env.awsUsePathStyle
+  return usesPathStyleUrls()
     ? `${endpoint}/${env.awsBucket}/${objectKey}`
     : `${endpoint}/${objectKey}`;
 }
@@ -70,19 +122,61 @@ export function buildPublicObjectUrl(objectKey: string): string {
 export async function verifyObjectStorageConnection(): Promise<{
   ok: boolean;
   error?: string;
+  provider?: "r2" | "s3" | "local";
 }> {
-  const client = getS3Client();
-  if (!client) {
+  if (!isObjectStorageConfigured()) {
     return { ok: false, error: "AWS_* belum lengkap" };
   }
-  try {
-    await client.send(new HeadBucketCommand({ Bucket: env.awsBucket }));
-    return { ok: true };
-  } catch (err) {
+
+  const endpoint = getNormalizedAwsEndpoint();
+  const provider = isR2Endpoint(endpoint)
+    ? "r2"
+    : isLocalStorageEndpoint(endpoint)
+      ? "local"
+      : "s3";
+
+  if (!shouldUseObjectStorage()) {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : String(err),
+      provider,
+      error:
+        "AWS_ENDPOINT localhost di production — ganti ke URL R2 (https://<account>.r2.cloudflarestorage.com)",
     };
+  }
+
+  const client = getS3Client();
+  if (!client) {
+    return { ok: false, provider, error: "S3 client tidak bisa dibuat" };
+  }
+
+  const probeKey = `.healthcheck/${Date.now()}.txt`;
+  try {
+    await client.send(
+      new PutObjectCommand({
+        Bucket: env.awsBucket,
+        Key: probeKey,
+        Body: Buffer.from("ok"),
+        ContentType: "text/plain",
+      })
+    );
+    await client.send(
+      new DeleteObjectCommand({
+        Bucket: env.awsBucket,
+        Key: probeKey,
+      })
+    );
+    return { ok: true, provider };
+  } catch (putErr) {
+    try {
+      await client.send(new ListBucketsCommand({}));
+      return { ok: true, provider };
+    } catch (listErr) {
+      return {
+        ok: false,
+        provider,
+        error: formatStorageError(putErr) || formatStorageError(listErr),
+      };
+    }
   }
 }
 

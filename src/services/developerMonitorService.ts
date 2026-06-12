@@ -1,6 +1,7 @@
 import os from "node:os";
 import { prisma } from "../lib/prisma.js";
 import { env } from "../config/env.js";
+import { isObjectStorageConfigured, verifyObjectStorageConnection } from "../lib/s3Client.js";
 import { getRedis } from "../lib/redis.js";
 import { todayWorkDateWib } from "../utils/format.js";
 import { getLoadTestAvatarStatus } from "./developerLoadTestService.js";
@@ -53,6 +54,8 @@ export type DeveloperMonitorSnapshot = {
     database_ok: boolean;
     redis_ms: number | null;
     redis_ok: boolean;
+    object_storage_ok: boolean;
+    object_storage_provider: string | null;
     queue_enabled: boolean;
   };
   developer: {
@@ -139,6 +142,14 @@ function buildProductionEnvChecklist(): DeveloperMonitorSnapshot["production_env
   const hasCors = env.corsOrigins.some((o) => o.startsWith("https://"));
   const devEnabled = env.developerAccountEnabled;
   const devPassword = env.developerPassword.length >= 8;
+  const endpoint = env.awsEndpoint.trim();
+  const hasR2Endpoint =
+    Boolean(endpoint) &&
+    endpoint.includes(".r2.cloudflarestorage.com") &&
+    !/localhost|127\.0\.0\.1/i.test(endpoint);
+  const hasAwsKeys =
+    Boolean(env.awsAccessKeyId.trim()) && Boolean(env.awsSecretAccessKey.trim());
+  const hasBucket = Boolean(env.awsBucket.trim());
 
   return [
     {
@@ -180,6 +191,21 @@ function buildProductionEnvChecklist(): DeveloperMonitorSnapshot["production_env
       key: "DEVELOPER_PASSWORD",
       configured: devPassword,
       hint: "min 8 karakter",
+    },
+    {
+      key: "AWS_ENDPOINT (R2)",
+      configured: hasR2Endpoint,
+      hint: "https://<account_id>.r2.cloudflarestorage.com (bukan localhost)",
+    },
+    {
+      key: "AWS_ACCESS_KEY_ID",
+      configured: hasAwsKeys,
+      hint: "R2 API token — Object Read & Write",
+    },
+    {
+      key: "AWS_BUCKET",
+      configured: hasBucket,
+      hint: "nama bucket R2, mis. kehadiran",
     },
   ];
 }
@@ -262,10 +288,17 @@ function resolveHealth(
 }
 
 export async function getDeveloperMonitorSnapshot(): Promise<DeveloperMonitorSnapshot> {
-  const [db, redis, loadTestStatus] = await Promise.all([
+  const [db, redis, loadTestStatus, objectStorage] = await Promise.all([
     pingDatabase(),
     pingRedis(),
     getLoadTestAvatarStatus(),
+    isObjectStorageConfigured()
+      ? verifyObjectStorageConnection()
+      : Promise.resolve({
+          ok: false as const,
+          error: "AWS_* belum di-set",
+          provider: undefined,
+        }),
   ]);
 
   const attendance_today = await loadTestAttendanceToday(
@@ -304,6 +337,13 @@ export async function getDeveloperMonitorSnapshot(): Promise<DeveloperMonitorSna
 
   if (!db.ok) hints.push("Database tidak merespons.");
   if (!redis.ok) hints.push("Redis offline — cache leaderboard mungkin lambat.");
+  if (!objectStorage.ok && isObjectStorageConfigured()) {
+    hints.push(
+      `Object storage gagal: ${objectStorage.error ?? "unknown"} — avatar tidak persisten antar deploy.`
+    );
+  } else if (!isObjectStorageConfigured() && deploy.runtime === "production") {
+    hints.push("AWS_* belum di-set — avatar disimpan di disk container (hilang saat redeploy).");
+  }
 
   if (deploy.replica_id) {
     hints.push(
@@ -344,6 +384,8 @@ export async function getDeveloperMonitorSnapshot(): Promise<DeveloperMonitorSna
       database_ok: db.ok,
       redis_ms: redis.ms,
       redis_ok: redis.ok,
+      object_storage_ok: objectStorage.ok,
+      object_storage_provider: objectStorage.provider ?? null,
       queue_enabled: env.queueEnabled,
     },
     developer: {
