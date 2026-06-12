@@ -17,10 +17,13 @@ import { invalidateAuthUserCache } from "../lib/authUserCache.js";
 import { AVATAR_FORMAT_HINT, isAllowedAvatarUpload } from "../lib/avatarMime.js";
 import type { AuthUser } from "./authService.js";
 
-export const AVATAR_MAX_UPLOAD_BYTES = 2 * 1024 * 1024;
+export const AVATAR_MAX_UPLOAD_BYTES = 1 * 1024 * 1024;
 export const AVATAR_MAX_INPUT_DIMENSION = 4096;
 export const AVATAR_OUTPUT_SIZE = 256;
-export const AVATAR_MAX_OUTPUT_BYTES = 128 * 1024;
+/** Target hasil kompres (tim QA): ideal di bawah 100 KB. */
+export const AVATAR_TARGET_OUTPUT_BYTES = 100 * 1024;
+/** Batas keras hasil kompres setelah resize WebP. */
+export const AVATAR_MAX_OUTPUT_BYTES = 200 * 1024;
 
 const AVATAR_URL_TTL_SEC = 30 * 24 * 3600;
 
@@ -113,37 +116,25 @@ export async function resolveVisibleAvatarUrl(
     avatarVisibility: AvatarVisibility;
     branchIds: string[];
   },
-  viewer: AuthUser,
+  _viewer: AuthUser,
   publicBaseUrl?: string
 ): Promise<string | null> {
   if (!target.avatarUrl) return null;
-  const displayUrl = await resolveAvatarDisplayUrl(target.avatarUrl, publicBaseUrl);
-  if (!displayUrl) return null;
-  if (viewer.id === target.id) return displayUrl;
-  if (target.avatarVisibility === "none") return null;
-  if (target.avatarVisibility === "global") return displayUrl;
-  const shared = viewer.branchIds.some((branchId) =>
-    target.branchIds.includes(branchId)
-  );
-  return shared ? displayUrl : null;
+  return resolveAvatarDisplayUrl(target.avatarUrl, publicBaseUrl);
 }
 
-/** Papan publik (tanpa login) — hormati visibility per cabang yang ditampilkan. */
+/** Papan publik (tanpa login) — foto profil tampil untuk semua cabang. */
 export async function resolvePublicDisplayAvatarUrl(
   target: {
     avatarUrl: string | null;
     avatarVisibility: AvatarVisibility;
     branchIds: string[];
   },
-  displayBranchId: string,
+  _displayBranchId: string,
   publicBaseUrl?: string
 ): Promise<string | null> {
   if (!target.avatarUrl) return null;
-  const displayUrl = await resolveAvatarDisplayUrl(target.avatarUrl, publicBaseUrl);
-  if (!displayUrl) return null;
-  if (target.avatarVisibility === "none") return null;
-  if (target.avatarVisibility === "global") return displayUrl;
-  return target.branchIds.includes(displayBranchId) ? displayUrl : null;
+  return resolveAvatarDisplayUrl(target.avatarUrl, publicBaseUrl);
 }
 
 export async function attachPublicDisplayAvatars<T extends { nik: string }>(
@@ -275,19 +266,31 @@ async function processAvatarBuffer(buffer: Buffer): Promise<Buffer> {
       );
     }
 
-    const processed = await image
-      .rotate()
-      .resize(AVATAR_OUTPUT_SIZE, AVATAR_OUTPUT_SIZE, {
-        fit: "cover",
-        position: "centre",
-      })
-      .webp({ quality: 82, effort: 4 })
-      .toBuffer();
+    const pipeline = image.rotate().resize(AVATAR_OUTPUT_SIZE, AVATAR_OUTPUT_SIZE, {
+      fit: "cover",
+      position: "centre",
+    });
 
-    if (processed.length > AVATAR_MAX_OUTPUT_BYTES) {
-      throw validationError("Gambar terlalu kompleks. Coba foto yang lebih sederhana.");
+    const qualitySteps = [80, 72, 64, 56, 48, 40, 32];
+    let smallestUnderMax: Buffer | null = null;
+
+    for (const quality of qualitySteps) {
+      const processed = await pipeline
+        .clone()
+        .webp({ quality, effort: 4 })
+        .toBuffer();
+      if (processed.length > AVATAR_MAX_OUTPUT_BYTES) continue;
+      smallestUnderMax = processed;
+      if (processed.length <= AVATAR_TARGET_OUTPUT_BYTES) {
+        return processed;
+      }
     }
-    return processed;
+
+    if (smallestUnderMax) return smallestUnderMax;
+
+    throw validationError(
+      "Gambar terlalu kompleks. Coba foto yang lebih sederhana (hasil kompres maks. 200 KB)."
+    );
   } catch (err) {
     if (err && typeof err === "object" && "statusCode" in err) {
       throw err;
@@ -333,7 +336,7 @@ async function persistAvatarBytes(
   }
 }
 
-async function removeStoredAvatar(storedPath: string | null): Promise<void> {
+export async function removeStoredAvatar(storedPath: string | null): Promise<void> {
   if (!storedPath) return;
   if (isLocalFilePath(storedPath)) {
     await deleteLocalStoredFile(storedPath);
@@ -348,6 +351,32 @@ async function removeStoredAvatar(storedPath: string | null): Promise<void> {
   }
 }
 
+/** Simpan & kompres avatar dari buffer (developer load test / skrip uji). */
+export async function assignAvatarFromBuffer(
+  userId: string,
+  sourceBuffer: Buffer
+): Promise<{ storedBytes: number }> {
+  const processed = await processAvatarBuffer(sourceBuffer);
+  const storedPath = await persistAvatarBytes(userId, processed);
+
+  const previous = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { avatarUrl: true },
+  });
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: { avatarUrl: storedPath, avatarVisibility: "global" },
+  });
+
+  if (previous?.avatarUrl && previous.avatarUrl !== storedPath) {
+    await removeStoredAvatar(previous.avatarUrl);
+  }
+
+  invalidateAuthUserCache(userId);
+  return { storedBytes: processed.length };
+}
+
 export async function uploadUserAvatar(
   userId: string,
   file: Express.Multer.File,
@@ -357,7 +386,7 @@ export async function uploadUserAvatar(
     throw validationError("File foto wajib");
   }
   if (file.size > AVATAR_MAX_UPLOAD_BYTES) {
-    throw validationError("Ukuran foto maksimal 2 MB");
+    throw validationError("Ukuran foto maksimal 1 MB");
   }
 
   if (!isAllowedAvatarUpload(file.mimetype, file.originalname)) {

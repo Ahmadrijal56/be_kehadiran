@@ -82,6 +82,23 @@ export const env = {
 
   /** Izinkan reset pabrik di production (POST /owner/factory-reset). */
   allowFactoryReset: process.env.ALLOW_FACTORY_RESET === "true",
+
+  /** Akun developer tersembunyi untuk QA production (on/off). */
+  developerAccountEnabled: process.env.DEVELOPER_ACCOUNT_ENABLED === "true",
+  developerNik: process.env.DEVELOPER_NIK ?? "DEV0001",
+  developerPassword: process.env.DEVELOPER_PASSWORD ?? "",
+  developerFullName: process.env.DEVELOPER_FULL_NAME ?? "Developer QA",
+
+  /** Jumlah akun uji avatar (bulk upload dari profil developer). */
+  loadTestAccountCount: Math.min(
+    50,
+    Math.max(1, Number(process.env.LOAD_TEST_ACCOUNT_COUNT ?? 20))
+  ),
+  loadTestNikPrefix: process.env.LOAD_TEST_NIK_PREFIX ?? "TST",
+  loadTestAccountPassword:
+    process.env.LOAD_TEST_ACCOUNT_PASSWORD ??
+    process.env.DEFAULT_EMPLOYEE_PASSWORD ??
+    "password123",
 } as const;
 
 if (env.nodeEnv === "production" && env.jwtSecret === "dev-only-change-in-production") {

@@ -23,6 +23,10 @@ import {
 import { invalidateLeaderboardCaches } from "./leaderboardService.js";
 import { purgeEmployeeOperationalData } from "./branchPurgeService.js";
 import { invalidateBranchAttendanceCache } from "./branchAttendanceService.js";
+import {
+  userHasHiddenDirectoryRole,
+  userHiddenFromDirectoryWhere,
+} from "../constants/directoryVisibility.js";
 
 export type BranchUserRole = "employee" | "manager";
 
@@ -125,7 +129,7 @@ export async function listBranchUsers(branchId: string) {
   const users = await prisma.user.findMany({
     where: {
       userBranches: { some: { branchId } },
-      userRoles: { none: { role: { code: "owner" } } },
+      ...userHiddenFromDirectoryWhere(),
     },
     include: userInclude,
     orderBy: { fullName: "asc" },
@@ -135,9 +139,10 @@ export async function listBranchUsers(branchId: string) {
 
 export async function listAllUsers(branchId?: string) {
   const users = await prisma.user.findMany({
-    where: branchId
-      ? { userBranches: { some: { branchId } } }
-      : {},
+    where: {
+      ...userHiddenFromDirectoryWhere(),
+      ...(branchId ? { userBranches: { some: { branchId } } } : {}),
+    },
     include: userInclude,
     orderBy: [{ branch: { name: "asc" } }, { fullName: "asc" }],
   });
@@ -444,6 +449,10 @@ export async function updateBranchUser(
     throw forbidden();
   }
 
+  if (userHasHiddenDirectoryRole(user.userRoles)) {
+    throw forbidden("Akun sistem tidak dapat diubah dari sini");
+  }
+
   const isOwnerRole = user.userRoles.some((ur) => ur.role.code === "owner");
   const isManager = user.userRoles.some((ur) => ur.role.code === "manager");
   if (isOwnerRole || (isManager && actor.id !== user.id && !actor.roles.includes("owner"))) {
@@ -566,6 +575,10 @@ async function assertCanManageUser(actor: AuthUser, userId: string) {
 
   if (!actorSharesBranchWith(actor, targetBranchIds)) {
     throw forbidden();
+  }
+
+  if (userHasHiddenDirectoryRole(user.userRoles)) {
+    throw forbidden("Akun sistem tidak dapat diubah dari sini");
   }
 
   const isOwnerRole = user.userRoles.some((ur) => ur.role.code === "owner");

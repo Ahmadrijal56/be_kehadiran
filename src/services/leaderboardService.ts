@@ -6,7 +6,7 @@ import { hasPermission } from "./authService.js";
 import { sumDedupedMonthlyPoints } from "./kpiQueryService.js";
 import { attachLeaderboardAvatars } from "./avatarService.js";
 import { currentYearMonthWib } from "../utils/format.js";
-import { ACTIVE_EMPLOYEE_USER_WHERE } from "./activeEmployeeFilter.js";
+import { activeEmployeeUserWhere } from "./activeEmployeeFilter.js";
 
 const CACHE_TTL = 60;
 const CACHE_VERSION = "v9";
@@ -73,7 +73,7 @@ async function loadParticipantsForBranch(
 
   const users = await prisma.user.findMany({
     where: {
-      ...ACTIVE_EMPLOYEE_USER_WHERE,
+      ...activeEmployeeUserWhere(),
       OR: [{ branchId }, { userBranches: { some: { branchId } } }],
     },
     select: {
@@ -101,7 +101,7 @@ async function loadParticipantsForBranch(
 
 async function loadParticipantsGlobal(): Promise<EmployeeRow[]> {
   const users = await prisma.user.findMany({
-    where: ACTIVE_EMPLOYEE_USER_WHERE,
+    where: activeEmployeeUserWhere(),
     select: {
       nik: true,
       fullName: true,

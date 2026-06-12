@@ -6,7 +6,15 @@ import {
 } from "../lib/errors.js";
 import { writeAuditLog } from "./auditService.js";
 
-const SYSTEM_ROLES = new Set(["employee", "manager", "owner"]);
+const SYSTEM_ROLES = new Set([
+  "employee",
+  "manager",
+  "owner",
+  "developer",
+  "load_test",
+]);
+
+const HIDDEN_ROLES = new Set(["developer", "load_test"]);
 
 function mapRole(role: {
   id: string;
@@ -30,6 +38,7 @@ function mapRole(role: {
 
 export async function listRoles() {
   const roles = await prisma.role.findMany({
+    where: { code: { notIn: [...HIDDEN_ROLES] } },
     include: {
       rolePermissions: { include: { permission: true } },
     },

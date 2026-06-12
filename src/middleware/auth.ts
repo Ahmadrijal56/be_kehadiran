@@ -21,6 +21,23 @@ export async function authenticate(
   }
 }
 
+export function requireDeveloper(
+  req: Request,
+  _res: Response,
+  next: NextFunction
+): void {
+  try {
+    const user = req.user;
+    if (!user) throw unauthorized();
+    if (!user.roles.includes("developer")) {
+      throw forbidden("Hanya akun developer yang dapat akses");
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
 export function requireOwner(
   req: Request,
   _res: Response,
@@ -41,7 +58,9 @@ export function requirePermission(...codes: string[]) {
     try {
       const user = req.user;
       if (!user) throw unauthorized();
-      if (user.roles.includes("owner")) return next();
+      if (user.roles.includes("owner") || user.roles.includes("developer")) {
+        return next();
+      }
       const ok = codes.some((c) => user.permissions.includes(c));
       if (!ok) throw forbidden();
       next();

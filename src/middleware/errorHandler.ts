@@ -16,7 +16,7 @@ export function errorHandler(
   if (err instanceof multer.MulterError) {
     const message =
       err.code === "LIMIT_FILE_SIZE"
-        ? "Ukuran foto maksimal 2 MB"
+        ? "Ukuran foto maksimal 1 MB"
         : err.message;
     const appErr = validationError(message);
     res.status(appErr.statusCode).json({

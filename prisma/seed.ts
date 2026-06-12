@@ -14,6 +14,7 @@ const PERMISSIONS = [
   { code: "reports.export", module: "reports", description: "Export laporan" },
   { code: "announcements.create", module: "announcements", description: "Buat pengumuman" },
   { code: "late_excuse.review", module: "late_excuse", description: "Review keterlambatan" },
+  { code: "dev.load_test", module: "dev", description: "Alat uji beban avatar (developer)" },
 ] as const;
 
 const SHIFTS = [
@@ -41,6 +42,8 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "late_excuse.review",
   ],
   owner: PERMISSIONS.map((p) => p.code),
+  developer: [...PERMISSIONS.map((p) => p.code), "dev.load_test"],
+  load_test: ["attendance.read.self", "kpi.read.self"],
 };
 
 async function main() {
@@ -74,7 +77,7 @@ async function main() {
     permissionRecords.map((p) => [p.code, p.id])
   );
 
-  const roles = ["employee", "manager", "owner"] as const;
+  const roles = ["employee", "manager", "owner", "developer", "load_test"] as const;
   const roleRecords: Record<string, string> = {};
 
   for (const code of roles) {
@@ -103,7 +106,7 @@ async function main() {
   console.log("✓ Seed selesai:");
   console.log(`  Shifts: ${SHIFTS.length}`);
   console.log(`  Permissions: ${PERMISSIONS.length}`);
-  console.log(`  Roles: 3 (employee, manager, owner)`);
+  console.log(`  Roles: ${roles.length} (employee, manager, owner, developer, load_test)`);
 }
 
 main()

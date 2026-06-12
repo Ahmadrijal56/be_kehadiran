@@ -374,7 +374,11 @@ export async function verifyAccessToken(token: string): Promise<string> {
 }
 
 export function hasPermission(user: AuthUser, code: string): boolean {
-  return user.permissions.includes(code) || user.roles.includes("owner");
+  return (
+    user.permissions.includes(code) ||
+    user.roles.includes("owner") ||
+    user.roles.includes("developer")
+  );
 }
 
 export function requireEmployeeProfile(user: AuthUser): string {

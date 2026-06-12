@@ -39,7 +39,7 @@ export async function getBranchIdsForUser(
   userId: string,
   roles: string[]
 ): Promise<string[]> {
-  if (roles.includes("owner")) {
+  if (roles.includes("owner") || roles.includes("developer")) {
     return listActiveBranchIds();
   }
 

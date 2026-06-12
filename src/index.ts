@@ -44,6 +44,19 @@ async function main() {
       });
     }
 
+    if (env.developerAccountEnabled) {
+      try {
+        const { ensureDeveloperAccount } = await import(
+          "./services/developerAccountService.js"
+        );
+        await ensureDeveloperAccount();
+      } catch (devErr) {
+        log("warn", "Developer account setup skipped", {
+          error: devErr instanceof Error ? devErr.message : String(devErr),
+        });
+      }
+    }
+
     app.listen(env.port, () => {
       log("info", "✅ Server listening", {
         port: env.port,

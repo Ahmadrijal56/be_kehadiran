@@ -33,7 +33,8 @@
     "telegram:biofinger": "tsx src/telegramBotListener.ts",
     "telegram:poll": "tsx src/telegramListener.ts",
     "telegram:listen": "tsx src/telegramListener.ts",
-    "telegram:user-listen": "tsx src/telegramUserListener.ts"
+    "telegram:user-listen": "tsx src/telegramUserListener.ts",
+    "test:avatar-upload": "tsx scripts/avatar-load-test.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

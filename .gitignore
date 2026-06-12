@@ -8,6 +8,7 @@ dist/
 .env
 .env.local
 .env.*.local
+.env.avatar-test
 
 # Telegram MTProto session file
 .telegram-session
@@ -36,3 +37,6 @@ coverage/
 
 # User uploads
 storage/
+
+# Generated avatar load-test source (>500 KB)
+scripts/fixtures/avatar-test-source.jpg

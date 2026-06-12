@@ -41,7 +41,17 @@ app.use(
     crossOriginResourcePolicy: { policy: "cross-origin" },
   })
 );
-app.use(compression());
+app.use(
+  compression({
+    filter(req, res) {
+      const path = req.path ?? "";
+      if (path.includes("/monitor/stream")) {
+        return false;
+      }
+      return compression.filter(req, res);
+    },
+  })
+);
 app.use(requestIdMiddleware);
 app.use(
   cors({

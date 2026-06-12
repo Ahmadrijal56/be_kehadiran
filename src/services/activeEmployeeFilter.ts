@@ -1,15 +1,21 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 
-/** User karyawan yang masih aktif dan terhubung ke record HR aktif. */
-export const ACTIVE_EMPLOYEE_USER_WHERE = {
-  isActive: true,
-  employeeId: { not: null },
-  employee: { is: { isActive: true } },
-  userRoles: {
-    some: { role: { code: "employee" } },
-    none: { role: { code: "owner" } },
-  },
-} as const;
+/** User karyawan / load test yang masih aktif dan terhubung ke record HR aktif. */
+export function activeEmployeeUserWhere(): Prisma.UserWhereInput {
+  return {
+    isActive: true,
+    employeeId: { not: null },
+    employee: { is: { isActive: true } },
+    userRoles: {
+      some: { role: { code: { in: ["employee", "load_test"] } } },
+      none: { role: { code: { in: ["owner", "developer"] } } },
+    },
+  };
+}
+
+/** @deprecated gunakan activeEmployeeUserWhere() */
+export const ACTIVE_EMPLOYEE_USER_WHERE = activeEmployeeUserWhere();
 
 /** Employee ID yang punya akun login karyawan aktif di cabang ini. */
 export async function listActiveEmployeeIdsForBranch(
@@ -17,7 +23,7 @@ export async function listActiveEmployeeIdsForBranch(
 ): Promise<string[]> {
   const users = await prisma.user.findMany({
     where: {
-      ...ACTIVE_EMPLOYEE_USER_WHERE,
+      ...activeEmployeeUserWhere(),
       OR: [{ branchId }, { userBranches: { some: { branchId } } }],
     },
     select: { employeeId: true },
