@@ -21,7 +21,13 @@ filesRouter.get(
     if (!file) throw notFound("File tidak ditemukan");
 
     res.setHeader("Content-Type", file.mimeType);
-    res.setHeader("Cache-Control", "private, max-age=3600");
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    const origin = req.get("origin");
+    if (origin) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+    }
     res.send(file.buffer);
   })
 );

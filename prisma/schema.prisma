@@ -202,6 +202,12 @@ model Employee {
   @@map("employees")
 }
 
+enum AvatarVisibility {
+  none
+  branch
+  global
+}
+
 model User {
   id           String    @id @default(uuid()) @db.Uuid
   accountCode  String?   @unique @map("account_code") @db.VarChar(20)
@@ -210,6 +216,8 @@ model User {
   passwordHash String    @map("password_hash") @db.VarChar(255)
   fullName     String    @map("full_name") @db.VarChar(150)
   phone        String?   @db.VarChar(20)
+  avatarUrl          String?           @map("avatar_url") @db.VarChar(512)
+  avatarVisibility   AvatarVisibility  @default(branch) @map("avatar_visibility")
   branchId     String?   @map("branch_id") @db.Uuid
   employeeId   String?   @unique @map("employee_id") @db.Uuid
   isActive     Boolean   @default(true) @map("is_active")

@@ -56,7 +56,12 @@ function resolveLocalPath(key: string): string {
   return fullPath;
 }
 
-function signLocalFileUrl(key: string, expiresSec: number): string {
+function signLocalFileUrl(
+  key: string,
+  expiresSec: number,
+  publicBaseUrl?: string
+): string {
+  const base = (publicBaseUrl ?? env.appUrl).replace(/\/$/, "");
   const expires = Math.floor(Date.now() / 1000) + expiresSec;
   const sig = createHmac("sha256", env.jwtSecret)
     .update(`${key}:${expires}`)
@@ -65,7 +70,7 @@ function signLocalFileUrl(key: string, expiresSec: number): string {
     .split("/")
     .map((segment) => encodeURIComponent(segment))
     .join("/");
-  return `${env.appUrl}/api/v1/files/${encodedKey}?expires=${expires}&sig=${sig}`;
+  return `${base}/api/v1/files/${encodedKey}?expires=${expires}&sig=${sig}`;
 }
 
 export function verifyLocalFileSignature(
@@ -169,9 +174,44 @@ export async function readLocalFile(
   try {
     const buffer = await fs.readFile(fullPath);
     const ext = path.extname(fullPath).toLowerCase();
-    const mimeType = ext === ".png" ? "image/png" : "image/jpeg";
+    const mimeType =
+      ext === ".png"
+        ? "image/png"
+        : ext === ".webp"
+          ? "image/webp"
+          : "image/jpeg";
     return { buffer, mimeType };
   } catch {
     return null;
   }
+}
+
+/** Simpan bytes ke disk lokal; return path `local:...` untuk disimpan di DB. */
+export async function writeLocalBytes(
+  key: string,
+  buffer: Buffer
+): Promise<string> {
+  const fullPath = resolveLocalPath(key);
+  await fs.mkdir(path.dirname(fullPath), { recursive: true });
+  await fs.writeFile(fullPath, buffer);
+  return `${LOCAL_PREFIX}${key}`;
+}
+
+export async function deleteLocalStoredFile(storedPath: string): Promise<void> {
+  if (!isLocalFilePath(storedPath)) return;
+  const fullPath = resolveLocalPath(localFileKey(storedPath));
+  await fs.unlink(fullPath).catch(() => {});
+}
+
+/** Ubah path tersimpan (local: atau URL S3) jadi URL yang bisa dibuka browser. */
+export function resolveStoredFileUrl(
+  storedPath: string | null | undefined,
+  expiresSec = 30 * 24 * 3600,
+  publicBaseUrl?: string
+): string | null {
+  if (!storedPath?.trim()) return null;
+  if (isLocalFilePath(storedPath)) {
+    return signLocalFileUrl(localFileKey(storedPath), expiresSec, publicBaseUrl);
+  }
+  return storedPath;
 }

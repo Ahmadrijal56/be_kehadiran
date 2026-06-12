@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { asyncHandler } from "../../middleware/asyncHandler.js";
 import { publicDisplayRateLimit } from "../../middleware/rateLimit.js";
+import { getRequestPublicBaseUrl } from "../../lib/requestBaseUrl.js";
 import { getPublicDisplay, getPublicDisplayBranch, getPublicDisplayBranches } from "../../services/publicDisplayService.js";
 import { getPublicRulesCached } from "../../services/organizationConfigService.js";
 
@@ -23,8 +24,10 @@ publicRouter.get(
     const month = req.query.month as string | undefined;
     const branchId = req.query.branch_id as string | undefined;
 
+    const publicBaseUrl = getRequestPublicBaseUrl(req);
+
     if (branchId) {
-      const data = await getPublicDisplayBranch(branchId, month);
+      const data = await getPublicDisplayBranch(branchId, month, publicBaseUrl);
       if (!data) {
         res.status(404).json({
           error: { code: "BRANCH_NOT_FOUND", message: "Cabang tidak ditemukan" },
@@ -36,7 +39,7 @@ publicRouter.get(
       return;
     }
 
-    const data = await getPublicDisplay(month);
+    const data = await getPublicDisplay(month, publicBaseUrl);
     res.json({ data });
   })
 );

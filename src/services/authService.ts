@@ -23,6 +23,7 @@ import {
   ensureUserAccountCode,
   resolveEmployeeAccountScope,
 } from "./accountIdentityService.js";
+import { getAvatarProfile } from "./avatarService.js";
 import {
   getBranchIdsForUser,
   listBranchesForUser,
@@ -50,7 +51,11 @@ type TokenPayload = {
 const ACCESS_TTL_SEC = 900;
 const REFRESH_TTL_SEC = 7 * 24 * 3600;
 
-export async function login(identifier: string, password: string) {
+export async function login(
+  identifier: string,
+  password: string,
+  publicBaseUrl?: string
+) {
   if (await isLoginLocked(identifier)) {
     throw unauthorized(
       "Akun terkunci sementara setelah percobaan gagal. Coba lagi dalam 15 menit."
@@ -143,12 +148,15 @@ export async function login(identifier: string, password: string) {
       })
     : Promise.resolve(null);
 
-  const [, branch] = await Promise.all([
+  const avatarPromise = getAvatarProfile(user.id, publicBaseUrl);
+
+  const [, branch, avatar] = await Promise.all([
     prisma.user.update({
       where: { id: user.id },
       data: { lastLoginAt: new Date() },
     }),
     branchPromise,
+    avatarPromise,
     writeAuditLog({
       userId: user.id,
       action: "auth.login.success",
@@ -164,6 +172,7 @@ export async function login(identifier: string, password: string) {
     expires_in: ACCESS_TTL_SEC,
     user: {
       ...mapAuthUserResponse(authUser),
+      ...avatar,
       branch: branch
         ? { id: branch.id, code: branch.code, name: branch.name }
         : null,
@@ -185,17 +194,23 @@ export function mapAuthUserResponse(user: AuthUser) {
   };
 }
 
-export async function enrichAuthUserResponse(user: AuthUser) {
+export async function enrichAuthUserResponse(
+  user: AuthUser,
+  publicBaseUrl?: string
+) {
   const base = mapAuthUserResponse(user);
-  if (!user.branchId) {
-    return { ...base, branch: null };
-  }
-  const branch = await prisma.branch.findUnique({
-    where: { id: user.branchId },
-    select: { id: true, code: true, name: true },
-  });
+  const [branch, avatar] = await Promise.all([
+    user.branchId
+      ? prisma.branch.findUnique({
+          where: { id: user.branchId },
+          select: { id: true, code: true, name: true },
+        })
+      : Promise.resolve(null),
+    getAvatarProfile(user.id, publicBaseUrl),
+  ]);
   return {
     ...base,
+    ...avatar,
     branch: branch
       ? { id: branch.id, code: branch.code, name: branch.name }
       : null,
@@ -223,7 +238,10 @@ async function issueTokenPair(userId: string) {
   };
 }
 
-export async function refreshAccessToken(refreshToken: string) {
+export async function refreshAccessToken(
+  refreshToken: string,
+  publicBaseUrl?: string
+) {
   let payload: TokenPayload & { exp?: number };
   try {
     payload = jwt.verify(refreshToken, env.jwtSecret) as TokenPayload & { exp?: number };
@@ -261,7 +279,7 @@ export async function refreshAccessToken(refreshToken: string) {
     access_token: tokens.access_token,
     refresh_token: tokens.refresh_token,
     expires_in: ACCESS_TTL_SEC,
-    user: await enrichAuthUserResponse(authUser),
+    user: await enrichAuthUserResponse(authUser, publicBaseUrl),
   };
 }
 

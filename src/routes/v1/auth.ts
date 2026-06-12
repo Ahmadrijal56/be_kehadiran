@@ -3,6 +3,7 @@ import { asyncHandler } from "../../middleware/asyncHandler.js";
 import { validationError } from "../../lib/errors.js";
 import { authenticate } from "../../middleware/auth.js";
 import { loginRateLimit } from "../../middleware/rateLimit.js";
+import { getRequestPublicBaseUrl } from "../../lib/requestBaseUrl.js";
 import { login, logout, refreshAccessToken } from "../../services/authService.js";
 import {
   getBootstrapStatus,
@@ -45,7 +46,11 @@ authRouter.post(
         { field: "password", issue: "required" },
       ]);
     }
-    const result = await login(String(identifier), String(password));
+    const result = await login(
+      String(identifier),
+      String(password),
+      getRequestPublicBaseUrl(req)
+    );
     res.json(result);
   })
 );
@@ -57,7 +62,10 @@ authRouter.post(
     if (!refresh_token) {
       throw validationError("refresh_token wajib");
     }
-    const result = await refreshAccessToken(String(refresh_token));
+    const result = await refreshAccessToken(
+      String(refresh_token),
+      getRequestPublicBaseUrl(req)
+    );
     res.json(result);
   })
 );

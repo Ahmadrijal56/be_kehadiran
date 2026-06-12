@@ -3,6 +3,7 @@ import multer from "multer";
 import { authenticate, requireOwner } from "../../middleware/auth.js";
 import { asyncHandler } from "../../middleware/asyncHandler.js";
 import { validationError } from "../../lib/errors.js";
+import { getRequestPublicBaseUrl } from "../../lib/requestBaseUrl.js";
 import {
   getOwnerBranchesComparison,
   getOwnerDashboardSummary,
@@ -119,7 +120,13 @@ ownerRouter.get(
 
 ownerRouter.get(
   "/rankings/global-leaderboard",
-  asyncHandler(async (_req, res) => {
-    res.json({ data: await getGlobalLeaderboard() });
+  asyncHandler(async (req, res) => {
+    res.json({
+      data: await getGlobalLeaderboard(
+        req.user!,
+        undefined,
+        getRequestPublicBaseUrl(req)
+      ),
+    });
   })
 );

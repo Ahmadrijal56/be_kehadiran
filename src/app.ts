@@ -14,9 +14,20 @@ import {
 import { v1Router } from "./routes/v1/index.js";
 import { globalApiRateLimit, publicDisplayRateLimit } from "./middleware/rateLimit.js";
 import { asyncHandler } from "./middleware/asyncHandler.js";
+import { getRequestPublicBaseUrl } from "./lib/requestBaseUrl.js";
 import { getPublicDisplay } from "./services/publicDisplayService.js";
 
 export const app = express();
+
+/** Dev: frontend dari HP/LAN (mis. http://192.168.0.x:3000). */
+function isDevLocalOrigin(origin: string): boolean {
+  return (
+    /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ||
+    /^https?:\/\/(?:192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$/.test(
+      origin
+    )
+  );
+}
 
 // Railway (dan PaaS lain) mem-proxy request lewat satu hop.
 // `true` ditolak express-rate-limit v8; `1` = percaya hop pertama saja.
@@ -39,10 +50,7 @@ app.use(
         callback(null, true);
         return;
       }
-      if (
-        env.nodeEnv !== "production" &&
-        /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
-      ) {
+      if (env.nodeEnv !== "production" && isDevLocalOrigin(origin)) {
         callback(null, true);
         return;
       }
@@ -86,7 +94,7 @@ legacyPublicRouter.get(
       return;
     }
     
-    const data = await getPublicDisplay(month);
+    const data = await getPublicDisplay(month, getRequestPublicBaseUrl(req));
     res.json({ data });
   })
 );

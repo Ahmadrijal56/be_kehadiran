@@ -2,6 +2,7 @@ import { prisma } from "../lib/prisma.js";
 import { cacheGet, cacheSet } from "../lib/redis.js";
 import { currentYearMonthWib, todayWorkDateWib } from "../utils/format.js";
 import { getBranchStatsToday, listBranchAttendanceToday } from "./branchAttendanceService.js";
+import { attachPublicDisplayAvatars } from "./avatarService.js";
 import { computeBranchLeaderboard } from "./leaderboardService.js";
 import {
   buildBranchScheduleToday,
@@ -19,6 +20,7 @@ export type PublicRankingRow = {
   today_status: string;
   today_check_in: string | null;
   today_points: number | null;
+  avatar_url: string | null;
 };
 
 export type PublicBranchBoard = {
@@ -43,6 +45,18 @@ async function loadTodayPointsByEmployee(workDate: Date) {
     select: { employeeId: true, totalPoints: true },
   });
   return new Map(todayScores.map((s) => [s.employeeId, s.totalPoints]));
+}
+
+async function withBranchAvatars(
+  board: PublicBranchBoard,
+  publicBaseUrl?: string
+): Promise<PublicBranchBoard> {
+  const rankings = await attachPublicDisplayAvatars(
+    board.rankings,
+    board.branch_id,
+    publicBaseUrl
+  );
+  return { ...board, rankings };
 }
 
 async function buildBranchBoard(
@@ -82,6 +96,7 @@ async function buildBranchBoard(
         today_status: status,
         today_check_in: checkIn ? checkIn.slice(11, 16) : null,
         today_points,
+        avatar_url: null,
       };
     }),
     schedule_today: buildBranchScheduleToday(attendance.items, shiftDefs),
@@ -131,7 +146,11 @@ export async function getPublicDisplayBranches() {
 }
 
 /** Satu cabang lengkap — ranking + jadwal (saat user pilih cabang). */
-export async function getPublicDisplayBranch(branchId: string, yearMonth?: string) {
+export async function getPublicDisplayBranch(
+  branchId: string,
+  yearMonth?: string,
+  publicBaseUrl?: string
+) {
   const ym = yearMonth ?? currentYearMonthWib();
   const cacheKey = `public:display:branch:${branchId}:${ym}`;
   const cached = await cacheGet<{
@@ -140,20 +159,28 @@ export async function getPublicDisplayBranch(branchId: string, yearMonth?: strin
     generated_at: string;
     branch: PublicBranchBoard;
   }>(cacheKey);
-  if (cached) return { ...cached, cached: true as const };
+  if (cached) {
+    const branchBoard = await withBranchAvatars(cached.branch, publicBaseUrl);
+    return { ...cached, branch: branchBoard, cached: true as const };
+  }
 
-  const branch = await prisma.branch.findFirst({
+  const branchRow = await prisma.branch.findFirst({
     where: { id: branchId, isActive: true },
     select: { id: true, code: true, name: true },
   });
-  if (!branch) {
+  if (!branchRow) {
     return null;
   }
 
   const workDate = todayWorkDateWib();
   const workDateStr = workDate.toISOString().slice(0, 10);
   const todayPointsByEmployee = await loadTodayPointsByEmployee(workDate);
-  const board = await buildBranchBoard(branch, ym, workDate, todayPointsByEmployee);
+  const board = await buildBranchBoard(
+    branchRow,
+    ym,
+    workDate,
+    todayPointsByEmployee
+  );
 
   const payload = {
     year_month: ym,
@@ -164,10 +191,14 @@ export async function getPublicDisplayBranch(branchId: string, yearMonth?: strin
   };
 
   await cacheSet(cacheKey, payload, CACHE_TTL);
-  return payload;
+  const branchBoard = await withBranchAvatars(board, publicBaseUrl);
+  return { ...payload, branch: branchBoard };
 }
 
-export async function getPublicDisplay(yearMonth?: string) {
+export async function getPublicDisplay(
+  yearMonth?: string,
+  publicBaseUrl?: string
+) {
   const ym = yearMonth ?? currentYearMonthWib();
   const cacheKey = `public:display:${ym}`;
   const cached = await cacheGet<{
@@ -176,7 +207,12 @@ export async function getPublicDisplay(yearMonth?: string) {
     generated_at: string;
     branches: PublicBranchBoard[];
   }>(cacheKey);
-  if (cached) return { ...cached, cached: true as const };
+  if (cached) {
+    const branches = await Promise.all(
+      cached.branches.map((b) => withBranchAvatars(b, publicBaseUrl))
+    );
+    return { ...cached, branches, cached: true as const };
+  }
 
   const branches = await prisma.branch.findMany({
     where: { isActive: true },
@@ -201,5 +237,8 @@ export async function getPublicDisplay(yearMonth?: string) {
   };
 
   await cacheSet(cacheKey, payload, CACHE_TTL);
-  return payload;
+  const branchesWithAvatars = await Promise.all(
+    branchBoards.map((b) => withBranchAvatars(b, publicBaseUrl))
+  );
+  return { ...payload, branches: branchesWithAvatars };
 }

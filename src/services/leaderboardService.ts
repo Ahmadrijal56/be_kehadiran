@@ -3,12 +3,13 @@ import { cacheDeleteByPrefix, cacheGet, cacheSet } from "../lib/redis.js";
 import { forbidden, notFound } from "../lib/errors.js";
 import type { AuthUser } from "./authService.js";
 import { hasPermission } from "./authService.js";
-import { currentYearMonthWib } from "../utils/format.js";
 import { sumDedupedMonthlyPoints } from "./kpiQueryService.js";
+import { attachLeaderboardAvatars } from "./avatarService.js";
+import { currentYearMonthWib } from "../utils/format.js";
 import { ACTIVE_EMPLOYEE_USER_WHERE } from "./activeEmployeeFilter.js";
 
 const CACHE_TTL = 60;
-const CACHE_VERSION = "v7";
+const CACHE_VERSION = "v8";
 
 /** Hapus cache leaderboard & display publik (setelah hapus/nonaktifkan akun). */
 export async function invalidateLeaderboardCaches(): Promise<void> {
@@ -28,6 +29,7 @@ type LeaderboardEntry = {
   branch_name: string;
   total_points: number;
   total_late_count: number;
+  avatar_url?: string | null;
 };
 
 type EmployeeRow = {
@@ -204,7 +206,8 @@ export async function computeBranchLeaderboard(
 export async function getBranchLeaderboard(
   branchId: string,
   user: AuthUser,
-  yearMonth?: string
+  yearMonth?: string,
+  publicBaseUrl?: string
 ) {
   const ym = yearMonth ?? currentYearMonthWib();
   const branch = await prisma.branch.findUnique({ where: { id: branchId } });
@@ -222,26 +225,33 @@ export async function getBranchLeaderboard(
   }
 
   const cacheKey = `leaderboard:branch:${branchId}:${ym}:${CACHE_VERSION}`;
-  const cached = await cacheGet<LeaderboardEntry[]>(cacheKey);
-  if (cached) {
-    return { year_month: ym, branch_id: branchId, items: cached, cached: true };
+  const cached = await cacheGet<Omit<LeaderboardEntry, "avatar_url">[]>(cacheKey);
+  const baseItems =
+    cached ?? (await computeBranchLeaderboard(branchId, ym));
+  if (!cached) {
+    await cacheSet(cacheKey, baseItems, CACHE_TTL);
   }
-
-  const items = await computeBranchLeaderboard(branchId, ym);
-  await cacheSet(cacheKey, items, CACHE_TTL);
-  return { year_month: ym, branch_id: branchId, items, cached: false };
+  const items = await attachLeaderboardAvatars(baseItems, user, publicBaseUrl);
+  return { year_month: ym, branch_id: branchId, items, cached: Boolean(cached) };
 }
 
-export async function getGlobalLeaderboard(yearMonth?: string) {
+export async function getGlobalLeaderboard(
+  user: AuthUser,
+  yearMonth?: string,
+  publicBaseUrl?: string
+) {
   const ym = yearMonth ?? currentYearMonthWib();
   const cacheKey = `leaderboard:global:${ym}:${CACHE_VERSION}`;
-  const cached = await cacheGet<LeaderboardEntry[]>(cacheKey);
-  if (cached) {
-    return { year_month: ym, items: cached, cached: true };
+  const cached = await cacheGet<Omit<LeaderboardEntry, "avatar_url">[]>(cacheKey);
+  const baseItems =
+    cached ??
+    (await (async () => {
+      const participants = await loadParticipantsGlobal();
+      return buildLeaderboardEntries(participants, ym);
+    })());
+  if (!cached) {
+    await cacheSet(cacheKey, baseItems, CACHE_TTL);
   }
-
-  const participants = await loadParticipantsGlobal();
-  const items = await buildLeaderboardEntries(participants, ym);
-  await cacheSet(cacheKey, items, CACHE_TTL);
-  return { year_month: ym, items, cached: false };
+  const items = await attachLeaderboardAvatars(baseItems, user, publicBaseUrl);
+  return { year_month: ym, items, cached: Boolean(cached) };
 }
