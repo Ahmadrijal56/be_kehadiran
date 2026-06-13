@@ -42,8 +42,11 @@ describe("createBranchUser — akun baru mulai dari 0 poin", () => {
     const actorRoles = actorUser.userRoles.map((ur) => ur.role.code);
     actor = {
       id: actorUser.id,
+      accountCode: actorUser.accountCode,
       nik: actorUser.nik,
       fullName: actorUser.fullName,
+      email: actorUser.email,
+      branchId: actorUser.branchId,
       roles: actorRoles,
       permissions: [],
       branchIds: actorRoles.includes("owner") ? [] : [branchId],
