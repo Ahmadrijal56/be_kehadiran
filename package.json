@@ -35,7 +35,8 @@
     "telegram:poll": "tsx src/telegramListener.ts",
     "telegram:listen": "tsx src/telegramListener.ts",
     "telegram:user-listen": "tsx src/telegramUserListener.ts",
-    "test:avatar-upload": "tsx scripts/avatar-load-test.ts"
+    "test:avatar-upload": "tsx scripts/avatar-load-test.ts",
+    "fix:new-account-points": "tsx scripts/reset-new-account-points.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

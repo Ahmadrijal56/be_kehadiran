@@ -37,7 +37,8 @@ export async function ensureUserAccountCode(userId: string): Promise<string> {
 /** Tandai record employee sebagai milik kode akun (riwayat lintas cabang). */
 export async function attachEmployeeToAccount(
   employeeId: string,
-  accountCode: string
+  accountCode: string,
+  options?: { overwrite?: boolean }
 ): Promise<void> {
   const employee = await prisma.employee.findUnique({
     where: { id: employeeId },
@@ -45,7 +46,13 @@ export async function attachEmployeeToAccount(
   });
   if (!employee) return;
   if (employee.accountCode === accountCode) return;
-  if (employee.accountCode && employee.accountCode !== accountCode) return;
+  if (
+    employee.accountCode &&
+    employee.accountCode !== accountCode &&
+    !options?.overwrite
+  ) {
+    return;
+  }
 
   await prisma.employee.update({
     where: { id: employeeId },
@@ -58,7 +65,7 @@ export async function attachEmployeeToUserAccount(
   employeeId: string
 ): Promise<void> {
   const accountCode = await ensureUserAccountCode(userId);
-  await attachEmployeeToAccount(employeeId, accountCode);
+  await attachEmployeeToAccount(employeeId, accountCode, { overwrite: true });
 }
 
 /** Semua employee record yang termasuk satu akun (riwayat semua cabang). */

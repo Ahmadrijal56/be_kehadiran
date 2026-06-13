@@ -17,17 +17,34 @@ export function formatWibIso(date: Date | null | undefined): string | null {
     .concat("+07:00");
 }
 
-export function todayWorkDateWib(): Date {
+function wibYmdParts(date: Date) {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: WIB,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).formatToParts(new Date());
-  const y = parts.find((p) => p.type === "year")?.value;
-  const m = parts.find((p) => p.type === "month")?.value;
-  const d = parts.find((p) => p.type === "day")?.value;
+  }).formatToParts(date);
+  return {
+    y: parts.find((p) => p.type === "year")?.value ?? "1970",
+    m: parts.find((p) => p.type === "month")?.value ?? "01",
+    d: parts.find((p) => p.type === "day")?.value ?? "01",
+  };
+}
+
+/** Tanggal kerja (YYYY-MM-DD) menurut zona WIB. */
+export function toWorkDateStrWib(date: Date): string {
+  const { y, m, d } = wibYmdParts(date);
+  return `${y}-${m}-${d}`;
+}
+
+export function todayWorkDateWib(): Date {
+  const { y, m, d } = wibYmdParts(new Date());
   return new Date(`${y}-${m}-${d}T00:00:00.000Z`);
+}
+
+/** True jika momen `instant` jatuh pada tanggal kerja `workDate` (UTC date-only). */
+export function isInstantOnWorkDateWib(instant: Date, workDate: Date): boolean {
+  return toWorkDateStrWib(instant) === workDate.toISOString().slice(0, 10);
 }
 
 export function currentYearMonthWib(): string {

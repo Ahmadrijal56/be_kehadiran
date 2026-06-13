@@ -340,10 +340,20 @@ export async function createBranchUser(
     primaryBranchId: branchId,
   });
   if (employeeId) {
+    await prisma.$transaction(async (tx) => {
+      await purgeEmployeeOperationalData(tx, [employeeId!]);
+      await tx.employee.update({
+        where: { id: employeeId! },
+        data: { accountCode: null },
+      });
+    });
+    invalidateBranchAttendanceCache(branchId);
     await attachEmployeeToUserAccount(user.id, employeeId);
   } else {
     await ensureUserAccountCode(user.id);
   }
+
+  await invalidateLeaderboardCaches();
 
   const refreshed = await prisma.user.findUniqueOrThrow({
     where: { id: user.id },

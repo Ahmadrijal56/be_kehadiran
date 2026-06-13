@@ -1,5 +1,5 @@
 import { prisma } from "../lib/prisma.js";
-import { todayWorkDateWib } from "../utils/format.js";
+import { isInstantOnWorkDateWib, todayWorkDateWib } from "../utils/format.js";
 import { timeFromDbTime } from "../utils/time.js";
 import { getBranchShiftWindow } from "./branchShiftConfigService.js";
 import {
@@ -82,14 +82,25 @@ export async function syncAttendanceRemindersForUser(
   userId: string,
   employeeId: string
 ): Promise<void> {
-  const employee = await prisma.employee.findUnique({
-    where: { id: employeeId, isActive: true },
-    select: { branchId: true },
-  });
-  if (!employee) return;
+  const [employee, user] = await Promise.all([
+    prisma.employee.findUnique({
+      where: { id: employeeId, isActive: true },
+      select: { branchId: true },
+    }),
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: { createdAt: true },
+    }),
+  ]);
+  if (!employee || !user) return;
 
   const workDate = todayWorkDateWib();
   const workDateStr = workDate.toISOString().slice(0, 10);
+
+  // Akun baru di hari yang sama — jangan kirim notif belum absen / telat.
+  if (isInstantOnWorkDateWib(user.createdAt, workDate)) {
+    return;
+  }
 
   const shift = await resolveShiftContext(
     employeeId,
