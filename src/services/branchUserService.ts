@@ -1,4 +1,5 @@
 import bcrypt from "bcrypt";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import {
   businessError,
@@ -34,6 +35,34 @@ export type BranchUserRole = "employee" | "manager";
 function trimStr(value: unknown): string {
   if (value == null) return "";
   return String(value).trim();
+}
+
+/** Sinkronkan nama karyawan dengan akun user — huruf besar/kecil persis seperti input kelola user. */
+async function syncLinkedEmployeeFullNames(
+  tx: Prisma.TransactionClient,
+  params: {
+    employeeId: string | null;
+    accountCode: string | null;
+    fullName: string;
+  }
+): Promise<void> {
+  const fullName = params.fullName.trim();
+  if (!fullName) return;
+
+  if (params.accountCode) {
+    await tx.employee.updateMany({
+      where: { accountCode: params.accountCode },
+      data: { fullName },
+    });
+    return;
+  }
+
+  if (params.employeeId) {
+    await tx.employee.update({
+      where: { id: params.employeeId },
+      data: { fullName },
+    });
+  }
 }
 
 const userInclude = {
@@ -283,6 +312,10 @@ export async function createBranchUser(
       data.employee_id,
       data.employee_type_code
     );
+    await prisma.employee.update({
+      where: { id: employeeId },
+      data: { fullName },
+    });
   }
 
   const roleRecord = await prisma.role.findUnique({ where: { code: role } });
@@ -725,6 +758,13 @@ export async function updateBranchUser(
         data: { isActive: data.is_active },
       });
     }
+    if (data.full_name !== undefined) {
+      await syncLinkedEmployeeFullNames(tx, {
+        employeeId: user.employeeId,
+        accountCode: user.accountCode,
+        fullName: trimStr(data.full_name),
+      });
+    }
     return tx.user.update({
       where: { id: userId },
       data: update,
@@ -747,7 +787,15 @@ export async function updateBranchUser(
     },
   });
 
-  if (data.is_active !== undefined) {
+  const nameChanged =
+    data.full_name !== undefined &&
+    trimStr(data.full_name) !== user.fullName;
+
+  if (nameChanged) {
+    invalidateAuthUserCache(userId);
+  }
+
+  if (nameChanged || data.is_active !== undefined) {
     const branchIds = branchIdsForUser(updated);
     for (const branchId of branchIds) {
       invalidateBranchAttendanceCache(branchId);
