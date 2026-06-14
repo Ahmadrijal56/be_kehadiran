@@ -4,9 +4,15 @@ import { currentYearMonthWib, todayWorkDateWib } from "../utils/format.js";
 
 const RULE_LABELS: Record<string, string> = {
   [KPI_RULE_CODES.ON_TIME]: "Tepat waktu (dalam toleransi shift)",
+  [KPI_RULE_CODES.EARLY_OVER_10]: "Datang lebih dari 10 menit sebelum shift",
+  [KPI_RULE_CODES.EARLY_5_10]: "Datang 5–9,99 menit sebelum shift",
+  [KPI_RULE_CODES.EARLY_2_5]: "Datang 2–4,99 menit sebelum shift",
+  [KPI_RULE_CODES.EARLY_0_2]: "Datang 0–1,99 menit sebelum shift",
+  [KPI_RULE_CODES.LATE_0_2]: "Terlambat 0–1,99 menit",
+  [KPI_RULE_CODES.LATE_2_5]: "Terlambat 2–4,99 menit",
+  [KPI_RULE_CODES.LATE_OVER_5]: "Terlambat lebih dari 5 menit",
   [KPI_RULE_CODES.EARLY_10_5]: "Datang 10–5 menit sebelum shift",
   [KPI_RULE_CODES.EARLY_5_0]: "Datang 5–0 menit sebelum shift",
-  [KPI_RULE_CODES.EARLY_OVER_10]: "Datang lebih dari 10 menit sebelum shift",
   [KPI_RULE_CODES.LATE_0_5]: "Terlambat 0–5 menit",
   [KPI_RULE_CODES.LATE_5_10]: "Terlambat 5–10 menit",
   [KPI_RULE_CODES.LATE_OVER_10]: "Terlambat lebih dari 10 menit",

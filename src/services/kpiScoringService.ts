@@ -16,14 +16,35 @@ export type KpiScoreResult = {
  * @param deltaMinutes positif = terlambat, negatif = lebih awal
  */
 export function calculateKpiScore(deltaMinutes: number): KpiScoreResult {
-  if (
-    deltaMinutes >= KPI_DELTA.EARLY_BONUS_MAX &&
-    deltaMinutes <= KPI_DELTA.EARLY_BONUS_MIN
-  ) {
+  if (deltaMinutes <= KPI_DELTA.EARLY_TIER4_MAX) {
     return {
-      points: KPI_POINTS.EARLY_BONUS,
-      ruleCode: KPI_RULE_CODES.EARLY_10_5,
-      label: "Datang 10–5 menit sebelum shift",
+      points: KPI_POINTS.EARLY_TIER4,
+      ruleCode: KPI_RULE_CODES.EARLY_OVER_10,
+      label: "Datang lebih dari 10 menit sebelum shift",
+    };
+  }
+
+  if (deltaMinutes <= -5 && deltaMinutes >= -9) {
+    return {
+      points: KPI_POINTS.EARLY_TIER3,
+      ruleCode: KPI_RULE_CODES.EARLY_5_10,
+      label: "Datang 5–9,99 menit sebelum shift",
+    };
+  }
+
+  if (deltaMinutes <= -2 && deltaMinutes >= -4) {
+    return {
+      points: KPI_POINTS.EARLY_TIER2,
+      ruleCode: KPI_RULE_CODES.EARLY_2_5,
+      label: "Datang 2–4,99 menit sebelum shift",
+    };
+  }
+
+  if (deltaMinutes <= 0 && deltaMinutes >= -1) {
+    return {
+      points: KPI_POINTS.ON_TIME,
+      ruleCode: KPI_RULE_CODES.EARLY_0_2,
+      label: "Datang 0–1,99 menit sebelum shift",
     };
   }
 
@@ -35,48 +56,26 @@ export function calculateKpiScore(deltaMinutes: number): KpiScoreResult {
     };
   }
 
-  if (
-    deltaMinutes > KPI_DELTA.EARLY_BONUS_MIN &&
-    deltaMinutes < KPI_DELTA.ON_TIME
-  ) {
-    return {
-      points: KPI_POINTS.EARLY_OK,
-      ruleCode: KPI_RULE_CODES.EARLY_5_0,
-      label: "Datang 5–0 menit sebelum shift",
-    };
-  }
-
-  if (deltaMinutes < KPI_DELTA.EARLY_BONUS_MAX) {
-    return {
-      points: KPI_POINTS.EARLY_BONUS,
-      ruleCode: KPI_RULE_CODES.EARLY_OVER_10,
-      label: "Datang lebih dari 10 menit sebelum shift",
-    };
-  }
-
-  if (deltaMinutes > KPI_DELTA.ON_TIME && deltaMinutes <= KPI_DELTA.LATE_MILD_MAX) {
+  if (deltaMinutes === 1) {
     return {
       points: KPI_POINTS.LATE_MILD,
-      ruleCode: KPI_RULE_CODES.LATE_0_5,
-      label: "Terlambat 0–5 menit",
+      ruleCode: KPI_RULE_CODES.LATE_0_2,
+      label: "Terlambat 0–1,99 menit",
     };
   }
 
-  if (
-    deltaMinutes > KPI_DELTA.LATE_MILD_MAX &&
-    deltaMinutes <= KPI_DELTA.LATE_MODERATE_MAX
-  ) {
+  if (deltaMinutes >= 2 && deltaMinutes <= KPI_DELTA.LATE_MODERATE_MAX) {
     return {
       points: KPI_POINTS.LATE_MODERATE,
-      ruleCode: KPI_RULE_CODES.LATE_5_10,
-      label: "Terlambat 5–10 menit",
+      ruleCode: KPI_RULE_CODES.LATE_2_5,
+      label: "Terlambat 2–4,99 menit",
     };
   }
 
   return {
     points: KPI_POINTS.LATE_SEVERE,
-    ruleCode: KPI_RULE_CODES.LATE_OVER_10,
-    label: "Terlambat lebih dari 10 menit",
+    ruleCode: KPI_RULE_CODES.LATE_OVER_5,
+    label: "Terlambat lebih dari 5 menit",
   };
 }
 

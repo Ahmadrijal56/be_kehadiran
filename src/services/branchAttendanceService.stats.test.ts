@@ -3,8 +3,10 @@ import {
   attendanceHasCheckedIn,
   attendanceIsLate,
   computeBranchStatsFromRows,
-  rowHasCheckedIn,
+  rowHasLeft,
+  rowIsActiveAtWork,
   rowIsLate,
+  rowIsOff,
   type BranchEmployeeAttendance,
 } from "./branchAttendanceService.js";
 
@@ -49,22 +51,27 @@ describe("branch attendance stats", () => {
   ];
 
   it("statistik bulletin selaras dengan filter tab", () => {
-    const active = rows.filter((r) => r.status !== "off");
     const stats = computeBranchStatsFromRows(rows, "2026-06-25");
 
-    const presentItems = active.filter(rowHasCheckedIn);
-    const lateItems = active.filter(rowIsLate);
-    const absentItems = active.filter((r) => r.status === "absent");
-    const breakItems = active.filter((r) => r.status === "on_break");
+    const presentItems = rows.filter(rowIsActiveAtWork);
+    const lateItems = rows.filter(
+      (r) => r.status !== "off" && rowIsLate(r)
+    );
+    const absentItems = rows.filter((r) => r.status === "absent");
+    const breakItems = rows.filter((r) => r.status === "on_break");
+    const leftItems = rows.filter(rowHasLeft);
+    const offItems = rows.filter(rowIsOff);
 
     expect(stats.present).toBe(presentItems.length);
     expect(stats.late).toBe(lateItems.length);
     expect(stats.absent).toBe(absentItems.length);
     expect(stats.on_break).toBe(breakItems.length);
-    expect(stats.total_employees).toBe(active.length);
+    expect(stats.left).toBe(leftItems.length);
+    expect(stats.off).toBe(offItems.length);
+    expect(stats.total_employees).toBe(rows.length);
   });
 
-  it("Hadir — termasuk left & on_break yang sudah scan masuk", () => {
+  it("Hadir — hanya yang masih aktif di toko (belum pulang)", () => {
     const rows = [
       row({ status: "absent" }),
       row({
@@ -76,7 +83,8 @@ describe("branch attendance stats", () => {
       row({ status: "present", check_in_at: "2026-06-25T07:00:00+07:00" }),
     ];
     const stats = computeBranchStatsFromRows(rows, "2026-06-25");
-    expect(stats.present).toBe(3);
+    expect(stats.present).toBe(2);
+    expect(stats.left).toBe(1);
     expect(stats.absent).toBe(1);
   });
 
@@ -96,7 +104,8 @@ describe("branch attendance stats", () => {
     ];
     const stats = computeBranchStatsFromRows(rows, "2026-06-25");
     expect(stats.late).toBe(2);
-    expect(stats.present).toBe(3);
+    expect(stats.present).toBe(1);
+    expect(stats.left).toBe(2);
   });
 
   it("attendanceIsLate — status left + late_minutes", () => {

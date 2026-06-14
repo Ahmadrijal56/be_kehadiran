@@ -19,6 +19,8 @@ import {
   getBranchStatsToday,
   listBranchAttendanceAbsent,
   listBranchAttendanceLate,
+  listBranchAttendanceLeft,
+  listBranchAttendanceOff,
   listBranchAttendanceOnBreak,
   listBranchAttendancePresent,
   listBranchAttendanceToday,
@@ -191,6 +193,26 @@ branchesRouter.get(
     const branchId = branchIdParam(req);
     assertBranchAccess(req.user!, branchId);
     res.json({ data: await listBranchAttendanceOnBreak(branchId) });
+  })
+);
+
+branchesRouter.get(
+  "/:branchId/attendance/left",
+  requirePermission("attendance.read.branch"),
+  asyncHandler(async (req, res) => {
+    const branchId = branchIdParam(req);
+    assertBranchAccess(req.user!, branchId);
+    res.json({ data: await listBranchAttendanceLeft(branchId) });
+  })
+);
+
+branchesRouter.get(
+  "/:branchId/attendance/off",
+  requirePermission("attendance.read.branch"),
+  asyncHandler(async (req, res) => {
+    const branchId = branchIdParam(req);
+    assertBranchAccess(req.user!, branchId);
+    res.json({ data: await listBranchAttendanceOff(branchId) });
   })
 );
 

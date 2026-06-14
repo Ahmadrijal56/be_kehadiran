@@ -55,6 +55,23 @@ export function rowHasCheckedIn(row: BranchEmployeeAttendance): boolean {
   return attendanceHasCheckedIn(row.status, row.check_in_at);
 }
 
+/** Masih aktif di toko (belum pulang). */
+export function rowIsActiveAtWork(row: BranchEmployeeAttendance): boolean {
+  return (
+    row.status === "present" ||
+    row.status === "late" ||
+    row.status === "on_break"
+  );
+}
+
+export function rowHasLeft(row: BranchEmployeeAttendance): boolean {
+  return row.status === "left" || row.status === "forgot_checkout";
+}
+
+export function rowIsOff(row: BranchEmployeeAttendance): boolean {
+  return row.status === "off";
+}
+
 export function rowIsLate(row: BranchEmployeeAttendance): boolean {
   return attendanceIsLate(row.status, row.late_minutes);
 }
@@ -231,7 +248,7 @@ export async function listBranchAttendanceToday(branchId: string) {
   const rows = await loadBranchRows(branchId);
   return {
     work_date: todayWorkDateWib().toISOString().slice(0, 10),
-    items: rows.filter((r) => r.status !== "off"),
+    items: rows,
   };
 }
 
@@ -239,7 +256,7 @@ export async function listBranchAttendancePresent(branchId: string) {
   const rows = await loadBranchRows(branchId);
   return {
     work_date: todayWorkDateWib().toISOString().slice(0, 10),
-    items: rows.filter(rowHasCheckedIn),
+    items: rows.filter(rowIsActiveAtWork),
   };
 }
 
@@ -267,6 +284,22 @@ export async function listBranchAttendanceOnBreak(branchId: string) {
   };
 }
 
+export async function listBranchAttendanceLeft(branchId: string) {
+  const rows = await loadBranchRows(branchId);
+  return {
+    work_date: todayWorkDateWib().toISOString().slice(0, 10),
+    items: rows.filter(rowHasLeft),
+  };
+}
+
+export async function listBranchAttendanceOff(branchId: string) {
+  const rows = await loadBranchRows(branchId);
+  return {
+    work_date: todayWorkDateWib().toISOString().slice(0, 10),
+    items: rows.filter(rowIsOff),
+  };
+}
+
 export function computeBranchStatsFromRows(
   rows: BranchEmployeeAttendance[],
   workDateStr: string
@@ -275,15 +308,13 @@ export function computeBranchStatsFromRows(
 
   return {
     work_date: workDateStr,
-    total_employees: active.length,
-    present: active.filter(rowHasCheckedIn).length,
+    total_employees: rows.length,
+    present: active.filter(rowIsActiveAtWork).length,
     late: active.filter(rowIsLate).length,
     absent: active.filter((i) => i.status === "absent").length,
     on_break: active.filter((i) => i.status === "on_break").length,
-    left: active.filter(
-      (i) => i.status === "left" || i.status === "forgot_checkout"
-    ).length,
-    off: rows.filter((i) => i.status === "off").length,
+    left: rows.filter(rowHasLeft).length,
+    off: rows.filter(rowIsOff).length,
   };
 }
 
