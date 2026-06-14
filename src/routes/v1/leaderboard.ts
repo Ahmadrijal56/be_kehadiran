@@ -6,6 +6,7 @@ import {
   getBranchLeaderboard,
   getGlobalLeaderboard,
 } from "../../services/leaderboardService.js";
+import { assertOrgWideRankingEnabled } from "../../services/organizationConfigService.js";
 
 export const leaderboardRouter = Router();
 leaderboardRouter.use(authenticate);
@@ -28,6 +29,7 @@ leaderboardRouter.get(
   "/global",
   requirePermission("attendance.read.self", "attendance.read.all"),
   asyncHandler(async (req, res) => {
+    await assertOrgWideRankingEnabled();
     const data = await getGlobalLeaderboard(
       req.user!,
       req.query.month as string | undefined,

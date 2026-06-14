@@ -8,6 +8,7 @@ import { todayWorkDateWib } from "../utils/format.js";
 import { getLoadTestAvatarStatus } from "./developerLoadTestService.js";
 import { getStressTestStatus } from "./developerStressTestService.js";
 import { loadTestUserWhere } from "./developerLoadTestService.js";
+import { isOrgWideRankingEnabled } from "./organizationConfigService.js";
 
 export type MonitorRuntimeKind = "local" | "production";
 
@@ -73,6 +74,10 @@ export type DeveloperMonitorSnapshot = {
       late: number;
       absent: number;
     };
+  };
+  /** Fitur yang bisa di-toggle developer (runtime DB). */
+  features: {
+    org_wide_ranking_enabled: boolean;
   };
   /** Env wajib untuk QA production — checklist */
   production_env: Array<{
@@ -366,6 +371,7 @@ export async function getDeveloperMonitorSnapshot(): Promise<DeveloperMonitorSna
 
   const heapTotal = mem.heapTotal || 1;
   const heapUsedPct = Math.round((mem.heapUsed / heapTotal) * 100);
+  const orgWideRankingEnabled = await isOrgWideRankingEnabled();
 
   return {
     generated_at: new Date().toISOString(),
@@ -399,6 +405,9 @@ export async function getDeveloperMonitorSnapshot(): Promise<DeveloperMonitorSna
       stress,
       load_test: loadTestStatus,
       attendance_today,
+    },
+    features: {
+      org_wide_ranking_enabled: orgWideRankingEnabled,
     },
     production_env,
     hints,

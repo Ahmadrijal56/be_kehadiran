@@ -11,6 +11,7 @@ import {
   getOwnerTopEmployees,
 } from "../../services/ownerDashboardService.js";
 import { getGlobalLeaderboard } from "../../services/leaderboardService.js";
+import { assertOrgWideRankingEnabled } from "../../services/organizationConfigService.js";
 import { listAllUsers } from "../../services/branchUserService.js";
 import {
   buildUserImportTemplateExcel,
@@ -84,6 +85,7 @@ ownerRouter.get(
 ownerRouter.get(
   "/rankings/employees",
   asyncHandler(async (req, res) => {
+    await assertOrgWideRankingEnabled();
     const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 10));
     res.json({ data: await getOwnerTopEmployees(limit) });
   })
@@ -92,6 +94,7 @@ ownerRouter.get(
 ownerRouter.get(
   "/rankings/branches",
   asyncHandler(async (_req, res) => {
+    await assertOrgWideRankingEnabled();
     const comparison = await getOwnerBranchesComparison();
     const ranked = [...comparison.items]
       .sort((a, b) => b.present_pct - a.present_pct)
@@ -103,6 +106,7 @@ ownerRouter.get(
 ownerRouter.get(
   "/rankings/global-leaderboard",
   asyncHandler(async (req, res) => {
+    await assertOrgWideRankingEnabled();
     res.json({
       data: await getGlobalLeaderboard(
         req.user!,

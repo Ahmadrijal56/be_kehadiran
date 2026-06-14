@@ -41,6 +41,7 @@ export type KpiPointRuleRow = {
 export type GamificationSettingsRow = {
   late_threshold_seconds: number;
   monthly_rewards_enabled: boolean;
+  org_wide_ranking_enabled: boolean;
   top1_amount_idr: number;
   top1_reward_label: string;
   top2_amount_idr: number;
@@ -67,6 +68,9 @@ export type PublicRulesPayload = {
       1 | 2 | 3,
       { amount: string; amount_idr: number; label: string }
     >;
+  };
+  features: {
+    org_wide_ranking_enabled: boolean;
   };
 };
 
@@ -145,6 +149,7 @@ export async function ensureOrganizationDefaults(): Promise<void> {
       id: "default",
       lateThresholdSeconds: DEFAULT_GAMIFICATION_SETTINGS.late_threshold_seconds,
       monthlyRewardsEnabled: DEFAULT_GAMIFICATION_SETTINGS.monthly_rewards_enabled,
+      orgWideRankingEnabled: DEFAULT_GAMIFICATION_SETTINGS.org_wide_ranking_enabled,
       top1AmountIdr: DEFAULT_GAMIFICATION_SETTINGS.top1_amount_idr,
       top1RewardLabel: DEFAULT_GAMIFICATION_SETTINGS.top1_reward_label,
       top2AmountIdr: DEFAULT_GAMIFICATION_SETTINGS.top2_amount_idr,
@@ -347,6 +352,7 @@ export async function getGamificationSettings(): Promise<GamificationSettingsRow
   return {
     late_threshold_seconds: row.lateThresholdSeconds,
     monthly_rewards_enabled: row.monthlyRewardsEnabled,
+    org_wide_ranking_enabled: row.orgWideRankingEnabled,
     top1_amount_idr: row.top1AmountIdr,
     top1_reward_label: row.top1RewardLabel,
     top2_amount_idr: row.top2AmountIdr,
@@ -406,6 +412,43 @@ export async function getGamificationSettingsCached(): Promise<GamificationSetti
   settingsCache = await getGamificationSettings();
   settingsCacheAt = now;
   return settingsCache;
+}
+
+export async function isOrgWideRankingEnabled(): Promise<boolean> {
+  const settings = await getGamificationSettingsCached();
+  return settings.org_wide_ranking_enabled;
+}
+
+export async function assertOrgWideRankingEnabled(): Promise<void> {
+  if (!(await isOrgWideRankingEnabled())) {
+    throw forbidden(
+      "Ranking seluruh cabang nonaktif. Aktifkan lewat panel developer jika diperlukan."
+    );
+  }
+}
+
+export async function setOrgWideRankingEnabled(
+  actor: AuthUser,
+  enabled: boolean
+): Promise<GamificationSettingsRow> {
+  if (!actor.roles.includes("developer")) throw forbidden();
+
+  await ensureOrganizationDefaults();
+  await prisma.gamificationSettings.update({
+    where: { id: "default" },
+    data: { orgWideRankingEnabled: Boolean(enabled) },
+  });
+  invalidateConfigCache();
+
+  await writeAuditLog({
+    userId: actor.id,
+    action: "org_wide_ranking.update",
+    entityType: "gamification_settings",
+    entityId: "default",
+    newValues: { org_wide_ranking_enabled: Boolean(enabled) },
+  });
+
+  return getGamificationSettings();
 }
 
 export function invalidateConfigCache() {
@@ -593,6 +636,9 @@ async function buildPublicRules(): Promise<PublicRulesPayload> {
           label: settings.top3_reward_label,
         },
       },
+    },
+    features: {
+      org_wide_ranking_enabled: settings.org_wide_ranking_enabled,
     },
   };
 }

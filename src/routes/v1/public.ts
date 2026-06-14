@@ -3,7 +3,7 @@ import { asyncHandler } from "../../middleware/asyncHandler.js";
 import { publicDisplayRateLimit } from "../../middleware/rateLimit.js";
 import { getRequestPublicBaseUrl } from "../../lib/requestBaseUrl.js";
 import { getPublicDisplay, getPublicDisplayBranch, getPublicDisplayBranches } from "../../services/publicDisplayService.js";
-import { getPublicRulesCached } from "../../services/organizationConfigService.js";
+import { assertOrgWideRankingEnabled, getPublicRulesCached } from "../../services/organizationConfigService.js";
 
 export const publicRouter = Router();
 
@@ -11,6 +11,7 @@ publicRouter.get(
   "/display/branches",
   publicDisplayRateLimit,
   asyncHandler(async (_req, res) => {
+    await assertOrgWideRankingEnabled();
     res.set("Cache-Control", "public, max-age=30, stale-while-revalidate=60");
     const data = await getPublicDisplayBranches();
     res.json({ data });
@@ -39,6 +40,7 @@ publicRouter.get(
       return;
     }
 
+    await assertOrgWideRankingEnabled();
     const data = await getPublicDisplay(month, publicBaseUrl);
     res.json({ data });
   })
