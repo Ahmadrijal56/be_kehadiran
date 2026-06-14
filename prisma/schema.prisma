@@ -181,8 +181,9 @@ model Employee {
   branchId         String    @map("branch_id") @db.Uuid
   defaultShiftId   Int       @map("default_shift_id") @db.SmallInt
   employeeTypeCode String?   @map("employee_type_code") @db.VarChar(8)
-  hireDate         DateTime? @map("hire_date") @db.Date
-  isActive         Boolean   @default(true) @map("is_active")
+  hireDate               DateTime? @map("hire_date") @db.Date
+  isActive               Boolean   @default(true) @map("is_active")
+  shiftScheduleAssigned  Boolean   @default(true) @map("shift_schedule_assigned")
 
   branch              Branch              @relation(fields: [branchId], references: [id])
   defaultShift        Shift               @relation(fields: [defaultShiftId], references: [id])

@@ -196,6 +196,7 @@ async function loadBranchRows(branchId: string): Promise<BranchEmployeeAttendanc
     employees.map((emp) => ({
       id: emp.id,
       defaultShiftId: emp.defaultShiftId,
+      shiftScheduleAssigned: emp.shiftScheduleAssigned,
     })),
     workDate
   );

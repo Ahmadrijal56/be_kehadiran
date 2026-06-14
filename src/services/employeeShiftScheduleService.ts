@@ -100,6 +100,7 @@ export async function getBranchShiftSchedule(branchId: string, yearMonth: string
         nik: true,
         fullName: true,
         defaultShiftId: true,
+        shiftScheduleAssigned: true,
       },
     }),
     prisma.employeeShift.findMany({
@@ -124,6 +125,18 @@ export async function getBranchShiftSchedule(branchId: string, yearMonth: string
     days,
     shifts: shiftOptions,
     employees: employees.map((emp) => {
+      if (!emp.shiftScheduleAssigned) {
+        return {
+          employee_id: emp.id,
+          nik: emp.nik,
+          full_name: emp.fullName,
+          default_shift_id: emp.defaultShiftId,
+          shift_schedule_assigned: false,
+          schedule: {},
+          overrides: {},
+        };
+      }
+
       const schedule: Record<string, number> = {};
       const overridesByDate: Record<string, number> = {};
       for (const day of days) {
@@ -141,6 +154,7 @@ export async function getBranchShiftSchedule(branchId: string, yearMonth: string
         nik: emp.nik,
         full_name: emp.fullName,
         default_shift_id: emp.defaultShiftId,
+        shift_schedule_assigned: true,
         schedule,
         overrides: overridesByDate,
       };
@@ -239,6 +253,14 @@ export async function saveBranchShiftSchedule(
     await invalidatePapanCaches(branchId);
   }
 
+  const assignedEmployeeIds = [...new Set(changes.map((ch) => ch.employee_id))];
+  if (assignedEmployeeIds.length > 0) {
+    await prisma.employee.updateMany({
+      where: { id: { in: assignedEmployeeIds }, branchId },
+      data: { shiftScheduleAssigned: true },
+    });
+  }
+
   await writeAuditLog({
     userId: actor.id,
     action: "shift_schedule.update",
@@ -295,24 +317,32 @@ export async function resolveEffectiveShiftId(
   employeeId: string,
   workDate: Date
 ): Promise<number> {
-  const map = await resolveEffectiveShiftIdsForEmployees(
-    [{ id: employeeId, defaultShiftId: 0 }],
-    workDate,
-    true
-  );
-  const resolved = map.get(employeeId);
-  if (resolved !== undefined) return resolved;
-
   const employee = await prisma.employee.findUniqueOrThrow({
     where: { id: employeeId },
-    select: { defaultShiftId: true },
+    select: { defaultShiftId: true, shiftScheduleAssigned: true },
   });
-  return employee.defaultShiftId;
+  if (!employee.shiftScheduleAssigned) return OFF_SHIFT_ID;
+
+  const map = await resolveEffectiveShiftIdsForEmployees(
+    [
+      {
+        id: employeeId,
+        defaultShiftId: employee.defaultShiftId,
+        shiftScheduleAssigned: true,
+      },
+    ],
+    workDate
+  );
+  return map.get(employeeId) ?? employee.defaultShiftId;
 }
 
 /** Batch: satu query override untuk banyak karyawan. */
 export async function resolveEffectiveShiftIdsForEmployees(
-  employees: Array<{ id: string; defaultShiftId: number }>,
+  employees: Array<{
+    id: string;
+    defaultShiftId: number;
+    shiftScheduleAssigned?: boolean;
+  }>,
   workDate: Date,
   skipMissingDefault = false
 ): Promise<Map<string, number>> {
@@ -332,6 +362,10 @@ export async function resolveEffectiveShiftIdsForEmployees(
   );
 
   for (const emp of employees) {
+    if (emp.shiftScheduleAssigned === false) {
+      result.set(emp.id, OFF_SHIFT_ID);
+      continue;
+    }
     const override = overrideMap.get(emp.id);
     if (override !== undefined) {
       result.set(emp.id, override);
@@ -360,6 +394,7 @@ export type EmployeeMonthlyShiftSchedule = {
   days: string[];
   shifts: ShiftOption[];
   default_shift_id: number;
+  shift_schedule_assigned?: boolean;
   schedule: Record<string, EmployeeDayShift>;
   summary: Array<{
     shift_id: number;
@@ -383,7 +418,11 @@ export async function getEmployeeMonthlyShiftSchedule(
 
   const employee = await prisma.employee.findUniqueOrThrow({
     where: { id: employeeId },
-    select: { defaultShiftId: true, branchId: true },
+    select: {
+      defaultShiftId: true,
+      branchId: true,
+      shiftScheduleAssigned: true,
+    },
   });
 
   const [overrides, shiftOptions] = await Promise.all([
@@ -400,6 +439,18 @@ export async function getEmployeeMonthlyShiftSchedule(
   const overrideByDay = new Map(
     overrides.map((o) => [o.workDate.toISOString().slice(0, 10), o.shiftId])
   );
+
+  if (!employee.shiftScheduleAssigned) {
+    return {
+      year_month: yearMonth,
+      days,
+      shifts: shiftOptions,
+      default_shift_id: employee.defaultShiftId,
+      shift_schedule_assigned: false,
+      schedule: {},
+      summary: [],
+    };
+  }
 
   const schedule: Record<string, EmployeeDayShift> = {};
   const summaryCount = new Map<number, number>();
@@ -436,6 +487,7 @@ export async function getEmployeeMonthlyShiftSchedule(
     days,
     shifts: shiftOptions,
     default_shift_id: employee.defaultShiftId,
+    shift_schedule_assigned: true,
     schedule,
     summary,
   };
