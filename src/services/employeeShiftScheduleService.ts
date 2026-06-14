@@ -145,8 +145,6 @@ export async function getBranchShiftSchedule(branchId: string, yearMonth: string
         if (override !== undefined) {
           overridesByDate[day] = override;
           schedule[day] = override;
-        } else {
-          schedule[day] = emp.defaultShiftId;
         }
       }
       return {
@@ -181,12 +179,9 @@ export async function saveBranchShiftSchedule(
   const validDays = new Set(daysInMonth(yearMonth));
   const employees = await prisma.employee.findMany({
     where: { branchId, isActive: true },
-    select: { id: true, defaultShiftId: true },
+    select: { id: true },
   });
   const empIds = new Set(employees.map((e) => e.id));
-  const empDefault = Object.fromEntries(
-    employees.map((e) => [e.id, e.defaultShiftId])
-  );
 
   const allowedShiftIds = new Set(
     (await listShiftOptions(branchId)).map((s) => s.id)
@@ -213,8 +208,7 @@ export async function saveBranchShiftSchedule(
       };
 
       if (
-        ch.shift_id === null ||
-        ch.shift_id === empDefault[ch.employee_id]
+        ch.shift_id === null
       ) {
         await tx.employeeShift.deleteMany({
           where: { employeeId: ch.employee_id, workDate },
@@ -238,9 +232,7 @@ export async function saveBranchShiftSchedule(
   for (const ch of changes) {
     const workDate = toDateOnly(new Date(`${ch.work_date}T00:00:00.000Z`));
     const newShiftId =
-      ch.shift_id === null || ch.shift_id === empDefault[ch.employee_id]
-        ? empDefault[ch.employee_id]
-        : ch.shift_id;
+      ch.shift_id === null ? OFF_SHIFT_ID : ch.shift_id;
     const updated = await syncAttendanceShiftFromSchedule({
       employeeId: ch.employee_id,
       workDate,
@@ -294,19 +286,21 @@ export async function copyShiftScheduleFromPreviousMonth(
       const prevDay = prev.days[i];
       const targetDay = targetDays[i];
       if (!prevDay || !targetDay) continue;
-      const override = emp.overrides[prevDay];
-      if (override !== undefined) {
+      const shiftId = emp.schedule[prevDay];
+      if (shiftId !== undefined) {
         changes.push({
           employee_id: emp.employee_id,
           work_date: targetDay,
-          shift_id: override,
+          shift_id: shiftId,
         });
       }
     }
   }
 
   if (changes.length === 0) {
-    throw businessError(`Tidak ada jadwal override di bulan ${prevMonth} untuk disalin`);
+    throw businessError(
+      `Tidak ada jadwal di bulan ${prevMonth} untuk disalin ke ${yearMonth}`
+    );
   }
 
   return saveBranchShiftSchedule(actor, branchId, yearMonth, changes);
@@ -333,7 +327,7 @@ export async function resolveEffectiveShiftId(
     ],
     workDate
   );
-  return map.get(employeeId) ?? employee.defaultShiftId;
+  return map.get(employeeId) ?? OFF_SHIFT_ID;
 }
 
 /** Batch: satu query override untuk banyak karyawan. */
@@ -343,8 +337,7 @@ export async function resolveEffectiveShiftIdsForEmployees(
     defaultShiftId: number;
     shiftScheduleAssigned?: boolean;
   }>,
-  workDate: Date,
-  skipMissingDefault = false
+  workDate: Date
 ): Promise<Map<string, number>> {
   const result = new Map<string, number>();
   if (employees.length === 0) return result;
@@ -369,8 +362,8 @@ export async function resolveEffectiveShiftIdsForEmployees(
     const override = overrideMap.get(emp.id);
     if (override !== undefined) {
       result.set(emp.id, override);
-    } else if (!skipMissingDefault || emp.defaultShiftId > 0) {
-      result.set(emp.id, emp.defaultShiftId);
+    } else {
+      result.set(emp.id, OFF_SHIFT_ID);
     }
   }
   return result;
@@ -457,7 +450,8 @@ export async function getEmployeeMonthlyShiftSchedule(
 
   for (const day of days) {
     const override = overrideByDay.get(day);
-    const shiftId = override ?? employee.defaultShiftId;
+    if (override === undefined) continue;
+    const shiftId = override;
     const meta = shiftById.get(shiftId);
     schedule[day] = {
       shift_id: shiftId,
@@ -465,7 +459,7 @@ export async function getEmployeeMonthlyShiftSchedule(
       shift_name: meta?.name ?? `Shift ${shiftId}`,
       time_range: meta?.time_range ?? null,
       is_off: meta?.is_off ?? shiftId === OFF_SHIFT_ID,
-      is_override: override !== undefined,
+      is_override: true,
     };
     summaryCount.set(shiftId, (summaryCount.get(shiftId) ?? 0) + 1);
   }

@@ -22,16 +22,43 @@ function shiftToCellValue(shiftId: number): string {
   return String(shiftId);
 }
 
-function parseShiftCell(raw: unknown): number | null {
-  if (raw === null || raw === undefined || raw === "") return null;
-  const s = String(raw).trim().toUpperCase();
-  if (s === "L" || s === "LIBUR" || s === "OFF" || s === "0") return OFF_SHIFT_ID;
+/** Normalisasi nilai sel Excel (angka, formula, rich text). */
+export function excelCellText(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") {
+    if ("result" in value) {
+      return excelCellText((value as { result: unknown }).result);
+    }
+    if ("richText" in value) {
+      const parts = (value as { richText: Array<{ text: string }> }).richText;
+      return parts.map((p) => p.text).join("").trim();
+    }
+    if ("text" in value) {
+      return String((value as { text: string }).text).trim();
+    }
+  }
+  return String(value).trim();
+}
+
+export function isBlankShiftCell(raw: unknown): boolean {
+  const text = excelCellText(raw);
+  return text === "" || text === "-" || text === "—";
+}
+
+/** Parse sel jadwal: 1–5, L/libur, atau null jika kosong. */
+export function parseShiftScheduleCell(raw: unknown): number | null {
+  if (isBlankShiftCell(raw)) return null;
+  if (typeof raw === "number" && Number.isInteger(raw) && raw >= 1 && raw <= 5) {
+    return raw;
+  }
+  const s = excelCellText(raw).toUpperCase();
+  if (s === "L" || s === "LIBUR" || s === "OFF") return OFF_SHIFT_ID;
   const sMatch = /^S?(\d)$/.exec(s);
   if (sMatch) {
     const n = Number(sMatch[1]);
     if (n >= 1 && n <= 5) return n;
   }
-  throw validationError(`Nilai shift tidak valid: ${raw} (gunakan 1-5 atau L)`);
+  throw validationError(`Nilai shift tidak valid: ${excelCellText(raw)} (gunakan 1-5 atau L)`);
 }
 
 function dDay(iso: string): number {
@@ -40,6 +67,11 @@ function dDay(iso: string): number {
 
 function normalizeName(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function parseHeaderWorkDate(raw: unknown, validDays: Set<string>): string | null {
+  const text = excelCellText(raw).split("\n")[0]?.trim() ?? "";
+  return validDays.has(text) ? text : null;
 }
 
 export async function buildShiftScheduleTemplateExcel(
@@ -74,7 +106,7 @@ export async function buildShiftScheduleTemplateExcel(
   sheet.getCell(2, 3).value = "branch_id";
   sheet.getCell(2, 4).value = branchId;
   sheet.getCell(2, 5).value =
-    "Petunjuk: isi 1–5 (shift) atau L (libur). Jangan ubah employee_id / ID.";
+    "Petunjuk: isi 1–5 (shift) atau L (libur). Kosongkan sel untuk hapus jadwal hari itu. Jangan ubah employee_id / ID.";
 
   const headers = [
     "employee_id",
@@ -111,17 +143,17 @@ export async function buildShiftScheduleTemplateExcel(
 
     schedule.days.forEach((day, dayIdx) => {
       const col = 5 + dayIdx;
-      const shiftId = emp.schedule[day] ?? emp.default_shift_id;
+      const shiftId = emp.schedule[day];
       const cell = row.getCell(col);
-      cell.value = shiftToCellValue(shiftId);
+      cell.value = shiftId === undefined ? "" : shiftToCellValue(shiftId);
       cell.alignment = { horizontal: "center" };
       cell.dataValidation = {
         type: "list",
-        allowBlank: false,
+        allowBlank: true,
         formulae: ['"1,2,3,4,5,L"'],
         showErrorMessage: true,
         errorTitle: "Shift tidak valid",
-        error: "Gunakan angka 1–5 atau L (libur)",
+        error: "Gunakan angka 1–5, L (libur), atau kosongkan sel",
       };
     });
   });
@@ -137,6 +169,9 @@ export async function buildShiftScheduleTemplateExcel(
   const legend = workbook.addWorksheet("Keterangan");
   legend.getCell(1, 1).value = "Kode shift";
   legend.getCell(1, 1).font = { bold: true };
+  legend.getCell(2, 1).value = "(kosong)";
+  legend.getCell(2, 2).value = "Hapus jadwal / belum diatur";
+  legend.getCell(2, 3).value = "—";
   for (const s of schedule.shifts) {
     const row = legend.addRow([
       shiftToCellValue(s.id),
@@ -145,7 +180,7 @@ export async function buildShiftScheduleTemplateExcel(
     ]);
     row.getCell(1).alignment = { horizontal: "center" };
   }
-  legend.getColumn(1).width = 8;
+  legend.getColumn(1).width = 10;
   legend.getColumn(2).width = 16;
   legend.getColumn(3).width = 22;
 
@@ -159,6 +194,7 @@ export async function buildShiftScheduleTemplateExcel(
 export type ImportShiftScheduleResult = {
   year_month: string;
   applied: number;
+  cleared: number;
   skipped_rows: number;
   errors: Array<{ row: number; message: string }>;
   schedule: Awaited<ReturnType<typeof getBranchShiftSchedule>>;
@@ -177,6 +213,7 @@ export async function importShiftScheduleTemplateExcel(
   const byId = new Map(employees.map((e) => [e.employee_id, e]));
   const byNik = new Map(employees.map((e) => [e.nik.toLowerCase(), e]));
   const byName = new Map(employees.map((e) => [normalizeName(e.full_name), e]));
+  const validDays = new Set(schedule.days);
 
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(fileBuffer as any);
@@ -184,10 +221,17 @@ export async function importShiftScheduleTemplateExcel(
   if (!sheet) throw validationError("File Excel tidak berisi sheet");
 
   const headerRowNum = 4;
-  const metaYm = sheet.getCell(2, 2).value;
-  if (metaYm && String(metaYm) !== yearMonth) {
+  const metaYm = excelCellText(sheet.getCell(2, 2).value);
+  if (metaYm && metaYm !== yearMonth) {
     throw businessError(
       `File untuk bulan ${metaYm}, sedangkan upload untuk ${yearMonth}`
+    );
+  }
+
+  const metaBranchId = excelCellText(sheet.getCell(2, 4).value);
+  if (metaBranchId && metaBranchId !== branchId) {
+    throw businessError(
+      "File Excel ini untuk cabang lain. Unduh ulang template cabang yang aktif."
     );
   }
 
@@ -195,10 +239,8 @@ export async function importShiftScheduleTemplateExcel(
   const dateColumns: Array<{ col: number; workDate: string }> = [];
   headerRow.eachCell({ includeEmpty: false }, (cell, colNumber) => {
     if (colNumber <= 4) return;
-    const raw = String(cell.value ?? "").split("\n")[0]?.trim() ?? "";
-    if (/^\d{4}-\d{2}-\d{2}$/.test(raw) && schedule.days.includes(raw)) {
-      dateColumns.push({ col: colNumber, workDate: raw });
-    }
+    const workDate = parseHeaderWorkDate(cell.value, validDays);
+    if (workDate) dateColumns.push({ col: colNumber, workDate });
   });
 
   if (dateColumns.length === 0) {
@@ -208,6 +250,7 @@ export async function importShiftScheduleTemplateExcel(
   const changes: ScheduleChange[] = [];
   const errors: ImportShiftScheduleResult["errors"] = [];
   let skippedRows = 0;
+  let cleared = 0;
 
   sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
     if (rowNumber <= headerRowNum) return;
@@ -216,44 +259,64 @@ export async function importShiftScheduleTemplateExcel(
     const nikRaw = row.getCell(2).value;
     const nameRaw = row.getCell(3).value;
 
-    if (!employeeIdRaw && !nikRaw && !nameRaw) {
+    if (
+      isBlankShiftCell(employeeIdRaw) &&
+      isBlankShiftCell(nikRaw) &&
+      isBlankShiftCell(nameRaw)
+    ) {
       skippedRows++;
       return;
     }
 
     const emp =
-      (employeeIdRaw
-        ? byId.get(String(employeeIdRaw).trim())
+      (!isBlankShiftCell(employeeIdRaw)
+        ? byId.get(excelCellText(employeeIdRaw))
         : undefined) ??
-      (nikRaw ? byNik.get(String(nikRaw).trim().toLowerCase()) : undefined) ??
-      (nameRaw ? byName.get(normalizeName(String(nameRaw))) : undefined);
+      (!isBlankShiftCell(nikRaw)
+        ? byNik.get(excelCellText(nikRaw).toLowerCase())
+        : undefined) ??
+      (!isBlankShiftCell(nameRaw)
+        ? byName.get(normalizeName(excelCellText(nameRaw)))
+        : undefined);
 
     if (!emp) {
       errors.push({
         row: rowNumber,
-        message: `Karyawan tidak ditemukan: ${nikRaw ?? nameRaw ?? employeeIdRaw}`,
+        message: `Karyawan tidak ditemukan: ${
+          excelCellText(nikRaw) ||
+          excelCellText(nameRaw) ||
+          excelCellText(employeeIdRaw)
+        }`,
       });
       return;
     }
 
     for (const { col, workDate } of dateColumns) {
       const cellVal = row.getCell(col).value;
-      if (cellVal === null || cellVal === undefined || cellVal === "") continue;
+      const serverEffective = emp.schedule[workDate];
 
       try {
-        const shiftId = parseShiftCell(cellVal);
+        if (isBlankShiftCell(cellVal)) {
+          if (serverEffective !== undefined) {
+            changes.push({
+              employee_id: emp.employee_id,
+              work_date: workDate,
+              shift_id: null,
+            });
+            cleared += 1;
+          }
+          continue;
+        }
+
+        const shiftId = parseShiftScheduleCell(cellVal);
         if (shiftId === null) continue;
 
-        const serverEffective =
-          emp.overrides[workDate] ?? emp.default_shift_id;
-        const newEffective = shiftId;
-
-        if (newEffective === serverEffective) continue;
+        if (serverEffective !== undefined && shiftId === serverEffective) continue;
 
         changes.push({
           employee_id: emp.employee_id,
           work_date: workDate,
-          shift_id: newEffective === emp.default_shift_id ? null : newEffective,
+          shift_id: shiftId,
         });
       } catch (err) {
         errors.push({
@@ -281,6 +344,7 @@ export async function importShiftScheduleTemplateExcel(
   return {
     year_month: yearMonth,
     applied: changes.length,
+    cleared,
     skipped_rows: skippedRows,
     errors,
     schedule: updatedSchedule,

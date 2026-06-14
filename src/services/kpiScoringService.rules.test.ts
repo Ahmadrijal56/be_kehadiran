@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_KPI_POINT_RULES } from "../constants/defaultKpiRules.js";
 import { calculateKpiScoreFromRules } from "./kpiScoringService.js";
 import type { KpiPointRuleRow } from "./organizationConfigService.js";
 
@@ -102,5 +103,31 @@ describe("calculateKpiScoreFromRules", () => {
     expect(calculateKpiScoreFromRules(-90, 1, custom).points).toBe(0);
     expect(calculateKpiScoreFromRules(0, 1, custom).points).toBe(0);
     expect(calculateKpiScoreFromRules(60, 1, custom).points).toBe(-1);
+  });
+
+  it("aturan default: datang 90 detik sebelum shift → 0 poin (rentang 2–0 menit)", () => {
+    const defaults: KpiPointRuleRow[] = DEFAULT_KPI_POINT_RULES.map((r, i) => ({
+      id: String(i + 1),
+      points: r.points,
+      min_seconds: r.min_seconds,
+      max_seconds: r.max_seconds,
+      label: r.label,
+      sort_order: r.sort_order,
+      is_active: true,
+    }));
+    expect(calculateKpiScoreFromRules(-90, 1, defaults).points).toBe(0);
+  });
+
+  it("aturan default: datang 3 menit sebelum shift → +1 poin (rentang 5–2 menit)", () => {
+    const defaults: KpiPointRuleRow[] = DEFAULT_KPI_POINT_RULES.map((r, i) => ({
+      id: String(i + 1),
+      points: r.points,
+      min_seconds: r.min_seconds,
+      max_seconds: r.max_seconds,
+      label: r.label,
+      sort_order: r.sort_order,
+      is_active: true,
+    }));
+    expect(calculateKpiScoreFromRules(-180, 1, defaults).points).toBe(1);
   });
 });

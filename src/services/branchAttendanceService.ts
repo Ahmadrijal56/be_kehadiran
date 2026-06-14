@@ -203,7 +203,7 @@ async function loadBranchRows(branchId: string): Promise<BranchEmployeeAttendanc
 
   const rows = employees.map((emp) => {
     const att = emp.attendanceRecords[0];
-    const effectiveShiftId = shiftMap.get(emp.id) ?? emp.defaultShiftId;
+    const effectiveShiftId = shiftMap.get(emp.id) ?? OFF_SHIFT_ID;
     const scheduledOff = effectiveShiftId === OFF_SHIFT_ID;
     const timeRange = scheduledOff
       ? null
