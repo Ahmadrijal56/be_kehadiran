@@ -2,6 +2,7 @@ import os from "node:os";
 import { prisma } from "../lib/prisma.js";
 import { env } from "../config/env.js";
 import { isObjectStorageConfigured, verifyObjectStorageConnection } from "../lib/s3Client.js";
+import { resolveUploadBackend } from "./storageService.js";
 import { getRedis } from "../lib/redis.js";
 import { todayWorkDateWib } from "../utils/format.js";
 import { getLoadTestAvatarStatus } from "./developerLoadTestService.js";
@@ -339,10 +340,15 @@ export async function getDeveloperMonitorSnapshot(): Promise<DeveloperMonitorSna
   if (!redis.ok) hints.push("Redis offline — cache leaderboard mungkin lambat.");
   if (!objectStorage.ok && isObjectStorageConfigured()) {
     hints.push(
-      `Object storage gagal: ${objectStorage.error ?? "unknown"} — avatar tidak persisten antar deploy.`
+      `Object storage gagal: ${objectStorage.error ?? "unknown"} — periksa AWS_* di Railway.`
     );
-  } else if (!isObjectStorageConfigured() && deploy.runtime === "production") {
-    hints.push("AWS_* belum di-set — avatar disimpan di disk container (hilang saat redeploy).");
+  } else if (deploy.runtime === "production") {
+    const backend = resolveUploadBackend();
+    if (backend === "database") {
+      hints.push("Upload avatar/lampiran disimpan di PostgreSQL (persisten antar deploy).");
+    } else if (backend === "volume") {
+      hints.push("Upload avatar/lampiran disimpan di volume Railway.");
+    }
   }
 
   if (deploy.replica_id) {

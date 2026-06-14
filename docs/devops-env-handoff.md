@@ -31,9 +31,9 @@ Tidak ada env rahasia lain di frontend untuk fitur ini.
 | `CORS_ORIGINS` | `https://fe-kehadiran.vercel.app` (tambah domain custom jika ada) |
 | `QUEUE_ENABLED` | `true` |
 
-### Disarankan (foto profil persisten)
+### Opsional (foto profil — object storage)
 
-Tanpa ini, upload avatar disimpan di disk container (hilang saat redeploy).
+Tanpa R2, upload otomatis disimpan di **PostgreSQL** (`stored_blobs`) — persisten antar deploy.
 
 | Variable | Keterangan |
 |----------|------------|
