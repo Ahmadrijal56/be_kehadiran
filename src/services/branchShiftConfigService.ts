@@ -6,6 +6,9 @@ import { hasPermission } from "./authService.js";
 import { assertBranchAccess } from "./branchAccess.js";
 import { writeAuditLog } from "./auditService.js";
 import { timeFromDbTime } from "../utils/time.js";
+import { todayWorkDateWib } from "../utils/format.js";
+import { invalidatePapanCaches } from "./papanCacheInvalidation.js";
+import { recalculateAttendanceKpiForShiftChange } from "./attendanceKpiRecalcService.js";
 export type BranchShiftOption = {
   id: number;
   code: string;
@@ -246,7 +249,34 @@ export async function saveBranchShiftSettings(
     newValues: { shift_count: items.length },
   });
 
+  await recalculateBranchKpiAfterShiftSettingsSave(branchId);
+  await invalidatePapanCaches(branchId);
+
   return getBranchShiftSettings(branchId);
+}
+
+/** Setelah jam shift cabang diubah, hitung ulang KPI absensi hari ini di cabang tersebut. */
+async function recalculateBranchKpiAfterShiftSettingsSave(
+  branchId: string
+): Promise<void> {
+  const workDate = todayWorkDateWib();
+  const records = await prisma.attendanceRecord.findMany({
+    where: {
+      branchId,
+      workDate,
+      checkInAt: { not: null },
+    },
+    select: { employeeId: true, shiftId: true },
+  });
+
+  for (const row of records) {
+    await recalculateAttendanceKpiForShiftChange({
+      employeeId: row.employeeId,
+      workDate,
+      newShiftId: row.shiftId,
+      invalidateCache: false,
+    });
+  }
 }
 
 export async function listBranchShiftOptions(

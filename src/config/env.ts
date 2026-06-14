@@ -69,6 +69,12 @@ export const env = {
   awsEndpoint: process.env.AWS_ENDPOINT ?? "",
   awsUsePathStyle: process.env.AWS_USE_PATH_STYLE_ENDPOINT === "true",
 
+  /**
+   * Folder persisten untuk upload lokal (Railway volume mount).
+   * Contoh: /data/uploads — tanpa R2, production fallback ke PostgreSQL (stored_blobs).
+   */
+  uploadStorageDir: process.env.UPLOAD_STORAGE_DIR?.trim() ?? "",
+
   queueEnabled: process.env.QUEUE_ENABLED !== "false",
   /** Password default akun karyawan yang dibuat otomatis dari BioFinger/Telegram. */
   defaultEmployeePassword: process.env.DEFAULT_EMPLOYEE_PASSWORD ?? "password123",

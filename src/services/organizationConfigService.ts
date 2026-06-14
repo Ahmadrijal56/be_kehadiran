@@ -218,10 +218,10 @@ export async function saveEmployeeTypes(
     if (!label) {
       throw validationError(`Detail jabatan baris ${i + 1} wajib diisi`);
     }
-    if (!Array.isArray(item.shift_ids) || item.shift_ids.length === 0) {
-      throw validationError(`Shift untuk "${label}" wajib dipilih minimal satu`);
-    }
-    for (const sid of item.shift_ids) {
+    const shiftIds = Array.isArray(item.shift_ids)
+      ? [...new Set(item.shift_ids.filter((sid) => Number.isInteger(sid)))]
+      : [];
+    for (const sid of shiftIds) {
       if (!validShiftIds.has(sid)) {
         throw validationError(`Shift ${sid} tidak valid untuk "${label}"`);
       }
@@ -247,7 +247,7 @@ export async function saveEmployeeTypes(
       code,
       original_code,
       label,
-      shift_ids: item.shift_ids,
+      shift_ids: shiftIds,
       sort_order: item.sort_order ?? i + 1,
       is_active: item.is_active ?? true,
     });
@@ -563,7 +563,10 @@ async function buildPublicRules(): Promise<PublicRulesPayload> {
       .map((t) => ({
         type: t.code,
         label: t.label,
-        shifts: t.shift_ids.map((id) => shiftName(id)).join(" & "),
+        shifts:
+          t.shift_ids.length > 0
+            ? t.shift_ids.map((id) => shiftName(id)).join(" & ")
+            : "Tidak pakai shift",
       })),
     late_rule: `Karyawan dianggap telat bila scan Face ID lebih dari +${settings.late_threshold_seconds} detik setelah jam mulai shift.`,
     point_rules: rules.map((r) => ({
@@ -667,12 +670,16 @@ export async function updateEmployeeType(
     });
     if (!typeConfig) throw validationError("Tipe karyawan tidak dikenal");
 
-    const defaultShiftId = typeConfig.shiftIds[0] ?? employee.defaultShiftId;
     await prisma.employee.update({
       where: { id: employeeId },
       data: {
         employeeTypeCode,
-        defaultShiftId,
+        ...(typeConfig.shiftIds.length > 0
+          ? {
+              defaultShiftId:
+                typeConfig.shiftIds[0] ?? employee.defaultShiftId,
+            }
+          : {}),
       },
     });
   } else {
@@ -697,5 +704,10 @@ export function shiftAllowedForType(
   shiftIds: number[],
   shiftId: number
 ): boolean {
+  if (shiftIds.length === 0) return true;
   return shiftIds.includes(shiftId);
+}
+
+export function employeeTypeUsesShift(shiftIds: number[]): boolean {
+  return shiftIds.length > 0;
 }

@@ -5,13 +5,14 @@ import { prisma } from "../lib/prisma.js";
 import { businessError, validationError } from "../lib/errors.js";
 import { log } from "../lib/logger.js";
 import {
-  deleteLocalStoredFile,
+  deleteStoredFile,
+  isDbFilePath,
   isLocalFilePath,
   resolveStoredObjectKey,
   signLocalFileUrl,
-  writeLocalBytes,
+  writeStoredBytes,
 } from "./storageService.js";
-import { deleteObject, objectKeyFromPublicUrl, putObject, shouldUseObjectStorage, formatStorageError } from "../lib/s3Client.js";
+import { deleteObject, objectKeyFromPublicUrl, shouldUseObjectStorage, formatStorageError } from "../lib/s3Client.js";
 import { invalidateAuthUserCache } from "../lib/authUserCache.js";
 import { AVATAR_FORMAT_HINT, isAllowedAvatarUpload } from "../lib/avatarMime.js";
 import type { AuthUser } from "./authService.js";
@@ -29,6 +30,8 @@ const AVATAR_URL_TTL_SEC = 30 * 24 * 3600;
 export type AvatarProfileFields = {
   avatar_url: string | null;
   avatar_visibility: AvatarVisibility;
+  /** True jika DB masih punya file avatar (meski URL sementara gagal di-generate). */
+  has_avatar: boolean;
 };
 
 /** URL tampilan — selalu via API backend agar bisa diakses dari HP/LAN/papan publik. */
@@ -82,6 +85,7 @@ export async function mapAvatarProfileFields(
       avatarCacheBust(row.updatedAt)
     ),
     avatar_visibility: row.avatarVisibility,
+    has_avatar: Boolean(row.avatarUrl?.trim()),
   };
 }
 
@@ -94,7 +98,7 @@ export async function getAvatarProfile(
     select: { avatarUrl: true, avatarVisibility: true, updatedAt: true },
   });
   if (!user) {
-    return { avatar_url: null, avatar_visibility: "branch" };
+    return { avatar_url: null, avatar_visibility: "branch", has_avatar: false };
   }
   return mapAvatarProfileFields(user, publicBaseUrl);
 }
@@ -322,25 +326,29 @@ async function persistAvatarBytes(
 
   if (shouldUseObjectStorage()) {
     try {
-      await putObject(objectKey, buffer, "image/webp");
-      return objectKey;
+      return await writeStoredBytes(objectKey, buffer, "image/webp");
     } catch (err) {
-      log("warn", "Avatar S3/R2 gagal — pakai disk lokal", {
+      log("error", "Avatar S3/R2 gagal disimpan", {
         userId,
         objectKey,
         error: formatStorageError(err),
         hint:
           env.nodeEnv === "production"
-            ? "Set AWS_ENDPOINT ke R2 + credentials di Railway (bukan localhost:9000)"
-            : "Jalankan MinIO lokal atau kosongkan AWS_ENDPOINT untuk disk lokal",
+            ? "Periksa AWS_ENDPOINT (R2) dan credentials di Railway"
+            : "Jalankan MinIO lokal atau set UPLOAD_STORAGE_DIR",
       });
+      if (env.nodeEnv === "production") {
+        throw businessError(
+          "Penyimpanan foto gagal. Hubungi admin — konfigurasi object storage (R2/S3) belum benar."
+        );
+      }
     }
   }
 
   try {
-    return await writeLocalBytes(objectKey, buffer);
+    return await writeStoredBytes(objectKey, buffer, "image/webp");
   } catch (err) {
-    log("error", "Avatar local storage failed", {
+    log("error", "Avatar storage failed", {
       userId,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -352,8 +360,8 @@ async function persistAvatarBytes(
 
 export async function removeStoredAvatar(storedPath: string | null): Promise<void> {
   if (!storedPath) return;
-  if (isLocalFilePath(storedPath)) {
-    await deleteLocalStoredFile(storedPath);
+  if (isLocalFilePath(storedPath) || isDbFilePath(storedPath)) {
+    await deleteStoredFile(storedPath);
     return;
   }
 

@@ -15,6 +15,7 @@ import {
   notifyApprovalReviewed,
   notifyManagersNewApprovalRequest,
 } from "./notificationService.js";
+import { recalculateAttendanceKpiForShiftChange } from "./attendanceKpiRecalcService.js";
 import { findUserIdForEmployee } from "./employeeAccountService.js";
 import {
   listShiftOptions,
@@ -528,9 +529,10 @@ export async function confirmShiftSwapApproval(
   });
 
   if (request.attendance) {
-    await prisma.attendanceRecord.update({
-      where: { id: request.attendance.id },
-      data: { shiftId: override.shiftId },
+    await recalculateAttendanceKpiForShiftChange({
+      employeeId: request.employeeId,
+      workDate: request.workDate,
+      newShiftId: override.shiftId,
     });
   }
 

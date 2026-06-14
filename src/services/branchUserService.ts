@@ -394,7 +394,12 @@ async function ensureEmployeeRecord(
           where: { id: existingEmp.id },
           data: {
             employeeTypeCode: normalizedType,
-            defaultShiftId: typeConfig.shiftIds[0] ?? existingEmp.defaultShiftId,
+            ...(typeConfig.shiftIds.length > 0
+              ? {
+                  defaultShiftId:
+                    typeConfig.shiftIds[0] ?? existingEmp.defaultShiftId,
+                }
+              : {}),
           },
         });
       }
@@ -414,7 +419,9 @@ async function ensureEmployeeRecord(
       where: { code: typeCode, isActive: true },
     });
     if (typeConfig) {
-      defaultShiftId = typeConfig.shiftIds[0] ?? 1;
+      if (typeConfig.shiftIds.length > 0) {
+        defaultShiftId = typeConfig.shiftIds[0] ?? 1;
+      }
     } else {
       typeCode = null;
     }
@@ -438,6 +445,7 @@ async function ensureEmployeeRecord(
       branchId,
       defaultShiftId,
       employeeTypeCode: typeCode,
+      shiftScheduleAssigned: false,
     },
   });
   return created.id;
@@ -543,7 +551,7 @@ export async function createBranchUser(
       await purgeEmployeeOperationalData(tx, [employeeId!]);
       await tx.employee.update({
         where: { id: employeeId! },
-        data: { accountCode: null },
+        data: { accountCode: null, shiftScheduleAssigned: false },
       });
     });
     invalidateBranchAttendanceCache(branchId);
@@ -793,6 +801,10 @@ export async function updateUserRole(
         primaryBranchId: branchId,
       });
       await attachEmployeeToUserAccount(userId, employeeId);
+      await prisma.employee.update({
+        where: { id: employeeId },
+        data: { shiftScheduleAssigned: false },
+      });
     }
   } else {
     let branchIds: string[];
@@ -979,6 +991,10 @@ export async function updateUserAccountRole(
       data: { employeeId, branchId },
     });
     await attachEmployeeToUserAccount(userId, employeeId);
+    await prisma.employee.update({
+      where: { id: employeeId },
+      data: { shiftScheduleAssigned: false },
+    });
   } else {
     await updateEmployeeType(actor, branchId, working.employeeId, typeCode);
   }

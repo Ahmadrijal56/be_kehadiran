@@ -142,4 +142,26 @@ describe("createBranchUser — akun baru mulai dari 0 poin", () => {
     expect(scores).toHaveLength(0);
     expect(attendances).toHaveLength(0);
   });
+
+  it("akun baru belum punya jadwal shift sampai manager mengatur", async () => {
+    const stamp = Date.now().toString().slice(-6);
+    const freshNik = `SCH${stamp}`;
+    const created = await createBranchUser(actor, branchId, {
+      nik: freshNik,
+      full_name: "Schedule Empty Test",
+      password: "password123",
+      role: "employee",
+    });
+
+    const employee = await prisma.employee.findUniqueOrThrow({
+      where: { id: created.employee_id! },
+      select: { shiftScheduleAssigned: true },
+    });
+    expect(employee.shiftScheduleAssigned).toBe(false);
+
+    await prisma.userRole.deleteMany({ where: { userId: created.id } });
+    await prisma.userBranch.deleteMany({ where: { userId: created.id } });
+    await prisma.user.delete({ where: { id: created.id } });
+    await prisma.employee.delete({ where: { id: created.employee_id! } });
+  });
 });

@@ -59,7 +59,11 @@ meAccountRouter.get(
 
     const avatar = profile
       ? await mapAvatarProfileFields(profile, publicBaseUrl)
-      : { avatar_url: null as string | null, avatar_visibility: "branch" as const };
+      : {
+          avatar_url: null as string | null,
+          avatar_visibility: "branch" as const,
+          has_avatar: false,
+        };
 
     const employee_type_label = profile?.employeeId
       ? (

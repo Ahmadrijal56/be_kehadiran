@@ -14,6 +14,7 @@ import {
   buildBranchScheduleToday,
   type PublicBranchSchedule,
 } from "./publicScheduleService.js";
+import { sortAndRankTodayLeaderboard } from "./publicRankingSort.js";
 
 const CACHE_TTL = 60;
 
@@ -87,26 +88,28 @@ async function buildBranchBoard(
     code: b.code,
     name: b.name,
     summary_today: computeBranchStatsFromRows(attendance.items, workDateStr),
-    rankings: rankings.map((r) => {
-      const att = attByEmployeeId.get(r.employee_id);
-      const checkIn = att?.check_in_at;
-      const status = att?.status ?? "absent";
-      const today_points =
-        status === "absent"
-          ? null
-          : (todayPointsByEmployee.get(r.employee_id) ?? null);
-      return {
-        rank: r.rank,
-        nik: r.nik,
-        full_name: r.full_name,
-        total_points: r.total_points,
-        total_late_count: r.total_late_count,
-        today_status: status,
-        today_check_in: checkIn ? checkIn.slice(11, 16) : null,
-        today_points,
-        avatar_url: null,
-      };
-    }),
+    rankings: sortAndRankTodayLeaderboard(
+      rankings.map((r) => {
+        const att = attByEmployeeId.get(r.employee_id);
+        const checkIn = att?.check_in_at;
+        const status = att?.status ?? "absent";
+        const today_points =
+          status === "absent"
+            ? null
+            : (todayPointsByEmployee.get(r.employee_id) ?? null);
+        return {
+          rank: r.rank,
+          nik: r.nik,
+          full_name: r.full_name,
+          total_points: r.total_points,
+          total_late_count: r.total_late_count,
+          today_status: status,
+          today_check_in: checkIn ? checkIn.slice(11, 16) : null,
+          today_points,
+          avatar_url: null,
+        };
+      })
+    ),
     schedule_today: buildBranchScheduleToday(attendance.items, shiftDefs),
   };
 }

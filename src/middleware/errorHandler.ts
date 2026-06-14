@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import multer from "multer";
-import { AppError, validationError } from "../lib/errors.js";
+import { Prisma } from "@prisma/client";
+import { AppError, businessError, validationError } from "../lib/errors.js";
 import { log } from "../lib/logger.js";
 import { env } from "../config/env.js";
 import { AVATAR_FORMAT_HINT } from "../lib/avatarMime.js";
@@ -49,6 +50,28 @@ export function errorHandler(
         code: err.code,
         message: err.message,
         details: err.details,
+        request_id: requestId,
+      },
+    });
+    return;
+  }
+
+  if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+    const target = Array.isArray(err.meta?.target)
+      ? (err.meta.target as string[])
+      : [];
+    let message = "Data sudah terdaftar";
+    if (target.includes("nik")) {
+      message = "ID login sudah terdaftar. Cek di Kelola User atau gunakan ID lain.";
+    } else if (target.includes("email")) {
+      message = "Email sudah terdaftar";
+    }
+    const appErr = businessError(message);
+    res.status(appErr.statusCode).json({
+      error: {
+        code: appErr.code,
+        message: appErr.message,
+        details: appErr.details,
         request_id: requestId,
       },
     });

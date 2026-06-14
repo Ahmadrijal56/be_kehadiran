@@ -11,14 +11,29 @@ import {
   getS3Client,
   isObjectStorageConfigured,
   objectKeyFromPublicUrl,
+  putObject,
   shouldUseObjectStorage,
+  deleteObject,
 } from "../lib/s3Client.js";
+import {
+  DB_PREFIX,
+  dbFileKey,
+  deleteDbBytes,
+  isDbFilePath,
+  readDbBytes,
+  writeDbBytes,
+} from "./blobStorageService.js";
 
 const MAX_BYTES = 5 * 1024 * 1024;
 const ALLOWED_MIME = new Set(["image/jpeg", "image/png", "image/jpg"]);
 const LOCAL_PREFIX = "local:";
 
-const UPLOAD_ROOT = path.join(process.cwd(), "storage", "uploads");
+function getUploadRoot(): string {
+  if (env.uploadStorageDir) {
+    return path.resolve(env.uploadStorageDir);
+  }
+  return path.join(process.cwd(), "storage", "uploads");
+}
 
 function requireS3() {
   const client = getS3Client();
@@ -38,14 +53,17 @@ export function isLocalFilePath(filePath: string): boolean {
   return filePath.startsWith(LOCAL_PREFIX);
 }
 
+export { isDbFilePath, dbFileKey, DB_PREFIX };
+
 export function localFileKey(filePath: string): string {
   return filePath.slice(LOCAL_PREFIX.length);
 }
 
 function resolveLocalPath(key: string): string {
   const normalized = path.normalize(key).replace(/^(\.\.(\/|\\|$))+/, "");
-  const fullPath = path.join(UPLOAD_ROOT, normalized);
-  if (!fullPath.startsWith(UPLOAD_ROOT)) {
+  const uploadRoot = getUploadRoot();
+  const fullPath = path.join(uploadRoot, normalized);
+  if (!fullPath.startsWith(uploadRoot)) {
     throw businessError("Path file tidak valid");
   }
   return fullPath;
@@ -81,6 +99,7 @@ export function resolveStoredObjectKey(storedPath: string): string | null {
   const trimmed = storedPath.trim();
   if (!trimmed) return null;
   if (isLocalFilePath(trimmed)) return localFileKey(trimmed);
+  if (isDbFilePath(trimmed)) return dbFileKey(trimmed);
   if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
     return objectKeyFromPublicUrl(trimmed);
   }
@@ -128,6 +147,62 @@ async function uploadToLocal(
   return { filePath: `${LOCAL_PREFIX}${key}`, mimeType, sizeBytes: file.size };
 }
 
+async function uploadToDatabase(
+  file: Express.Multer.File,
+  prefix: string
+): Promise<{ filePath: string; mimeType: string; sizeBytes: number }> {
+  const mimeType = normalizeMime(file.mimetype);
+  const ext = fileExtension(mimeType);
+  const key = `${prefix}/${randomUUID()}.${ext}`;
+  const filePath = await writeDbBytes(key, file.buffer, mimeType);
+  return { filePath, mimeType, sizeBytes: file.size };
+}
+
+/** Backend penyimpanan aktif untuk upload (S3 > volume > DB prod > disk lokal dev). */
+export function resolveUploadBackend(): "s3" | "volume" | "database" | "local" {
+  if (shouldUseObjectStorage()) return "s3";
+  if (env.uploadStorageDir) return "volume";
+  if (env.nodeEnv === "production") return "database";
+  return "local";
+}
+
+export async function writeStoredBytes(
+  key: string,
+  buffer: Buffer,
+  mimeType: string
+): Promise<string> {
+  const backend = resolveUploadBackend();
+  if (backend === "s3") {
+    await putObject(key, buffer, mimeType);
+    return key;
+  }
+  if (backend === "volume") {
+    return writeLocalBytes(key, buffer);
+  }
+  if (backend === "database") {
+    return writeDbBytes(key, buffer, mimeType);
+  }
+  return writeLocalBytes(key, buffer);
+}
+
+export async function deleteStoredFile(storedPath: string): Promise<void> {
+  if (!storedPath) return;
+  if (isLocalFilePath(storedPath)) {
+    await deleteLocalStoredFile(storedPath);
+    return;
+  }
+  if (isDbFilePath(storedPath)) {
+    await deleteDbBytes(dbFileKey(storedPath));
+    return;
+  }
+  const legacyKey = objectKeyFromPublicUrl(storedPath);
+  const objectKey =
+    legacyKey ?? (storedPath.startsWith("http") ? null : storedPath);
+  if (objectKey && shouldUseObjectStorage()) {
+    await deleteObject(objectKey);
+  }
+}
+
 async function uploadToS3(
   file: Express.Multer.File,
   prefix: string
@@ -152,26 +227,33 @@ export async function uploadPrivateFile(
 ): Promise<{ filePath: string; mimeType: string; sizeBytes: number }> {
   validateUpload(file);
 
-  if (!shouldUseObjectStorage()) {
+  const backend = resolveUploadBackend();
+  if (backend === "s3") {
+    try {
+      return await uploadToS3(file, prefix);
+    } catch (err) {
+      if (env.nodeEnv !== "production") {
+        log("warn", "S3 upload failed, falling back to local storage", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return uploadToLocal(file, prefix);
+      }
+      throw businessError("Gagal mengunggah file");
+    }
+  }
+  if (backend === "volume") {
     return uploadToLocal(file, prefix);
   }
-
-  try {
-    return await uploadToS3(file, prefix);
-  } catch (err) {
-    if (env.nodeEnv !== "production") {
-      log("warn", "S3 upload failed, falling back to local storage", {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return uploadToLocal(file, prefix);
-    }
-    throw businessError("Gagal mengunggah file");
+  if (backend === "database") {
+    return uploadToDatabase(file, prefix);
   }
+  return uploadToLocal(file, prefix);
 }
 
 export async function getSignedFileUrl(filePath: string, expiresSec = 3600): Promise<string> {
-  if (isLocalFilePath(filePath)) {
-    return signLocalFileUrl(localFileKey(filePath), expiresSec);
+  if (isLocalFilePath(filePath) || isDbFilePath(filePath)) {
+    const key = isLocalFilePath(filePath) ? localFileKey(filePath) : dbFileKey(filePath);
+    return signLocalFileUrl(key, expiresSec);
   }
 
   const url = await getSignedUrl(
@@ -182,12 +264,14 @@ export async function getSignedFileUrl(filePath: string, expiresSec = 3600): Pro
   return url;
 }
 
-/** Baca file dari disk lokal atau object storage (S3/R2/MinIO). */
+/** Baca file dari disk lokal, PostgreSQL, atau object storage (S3/R2/MinIO). */
 export async function readStoredFile(
   key: string
 ): Promise<{ buffer: Buffer; mimeType: string } | null> {
   const local = await readLocalFile(key);
   if (local) return local;
+  const db = await readDbBytes(key);
+  if (db) return db;
   return getObjectBuffer(key);
 }
 

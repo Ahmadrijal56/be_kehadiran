@@ -1,6 +1,8 @@
 import { prisma } from "./prisma.js";
+import { env } from "../config/env.js";
 import { getRedis } from "./redis.js";
 import { isObjectStorageConfigured, verifyObjectStorageConnection } from "./s3Client.js";
+import { resolveUploadBackend } from "../services/storageService.js";
 import { log } from "./logger.js";
 
 export async function checkStartupHealth(): Promise<void> {
@@ -35,10 +37,21 @@ export async function checkStartupHealth(): Promise<void> {
     if (storage.ok) {
       checks.push(`storage ${storage.provider}`);
     } else {
-      checks.push("storage lokal");
-      log("debug", "Object storage tidak tersedia, avatar pakai disk lokal", {
-        error: storage.error,
-      });
+      const backend = resolveUploadBackend();
+      if (backend === "database") {
+        checks.push("storage database");
+      } else if (backend === "volume") {
+        checks.push("storage volume");
+      } else {
+        checks.push("storage lokal");
+      }
+    }
+  } else {
+    const backend = resolveUploadBackend();
+    if (backend === "database") {
+      checks.push("storage database");
+    } else if (backend === "volume") {
+      checks.push("storage volume");
     }
   }
 

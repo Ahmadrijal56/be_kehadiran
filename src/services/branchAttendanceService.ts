@@ -115,9 +115,9 @@ function mapRow(
     att?.checkOutAt
   );
   const shiftCode =
-    att?.shift.code ?? scheduledShift?.code ?? emp.defaultShift.code;
+    scheduledShift?.code ?? att?.shift.code ?? emp.defaultShift.code;
   const shiftName =
-    att?.shift.name ?? scheduledShift?.name ?? emp.defaultShift.name;
+    scheduledShift?.name ?? att?.shift.name ?? emp.defaultShift.name;
   const timeRange = scheduledShift?.time_range ?? null;
   return {
     employee_id: emp.id,
@@ -129,7 +129,7 @@ function mapRow(
       name: shiftName,
       time_range: timeRange,
     },
-    status: scheduledOff && !att ? "off" : att?.status ?? "absent",
+    status: scheduledOff ? "off" : att?.status ?? "absent",
     check_in_at: formatWibIso(att?.checkInAt ?? null),
     check_out_at: formatWibIso(att?.checkOutAt ?? null),
     late_minutes: att?.lateMinutes ?? 0,
@@ -196,6 +196,7 @@ async function loadBranchRows(branchId: string): Promise<BranchEmployeeAttendanc
     employees.map((emp) => ({
       id: emp.id,
       defaultShiftId: emp.defaultShiftId,
+      shiftScheduleAssigned: emp.shiftScheduleAssigned,
     })),
     workDate
   );
@@ -204,21 +205,20 @@ async function loadBranchRows(branchId: string): Promise<BranchEmployeeAttendanc
     const att = emp.attendanceRecords[0];
     const effectiveShiftId = shiftMap.get(emp.id) ?? emp.defaultShiftId;
     const scheduledOff = effectiveShiftId === OFF_SHIFT_ID;
-    const scheduledShift = shiftById[effectiveShiftId];
-    const shiftIdForRange = att?.shiftId ?? effectiveShiftId;
-    const timeRange = shiftTimeRangeById.get(shiftIdForRange) ?? null;
-    return mapRow(
-      emp,
-      att,
-      scheduledShift
+    const timeRange = scheduledOff
+      ? null
+      : shiftTimeRangeById.get(effectiveShiftId) ?? null;
+    const scheduledShift = scheduledOff
+      ? { code: "Libur", name: "Libur", time_range: null as string | null }
+      : shiftById[effectiveShiftId]
         ? {
-            code: scheduledShift.code,
-            name: scheduledShift.name,
+            code: shiftById[effectiveShiftId]!.code,
+            name: shiftById[effectiveShiftId]!.name,
             time_range: timeRange,
           }
-        : { code: "?", name: "?", time_range: timeRange },
-      scheduledOff
-    );
+        : { code: "?", name: "?", time_range: timeRange };
+
+    return mapRow(emp, att, scheduledShift, scheduledOff);
   });
 
   rowsMemCache.set(memKey, { at: Date.now(), rows });

@@ -18,6 +18,50 @@ function pad2(n: number) {
   return String(n).padStart(2, "0");
 }
 
+function monthRangeFromWorkDate(workDate: Date) {
+  const ym = workDate.toISOString().slice(0, 7);
+  const [year, month] = ym.split("-").map(Number);
+  const dayCount = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return {
+    rangeStart: new Date(`${ym}-01T00:00:00.000Z`),
+    rangeEnd: new Date(
+      `${ym}-${pad2(dayCount)}T00:00:00.000Z`
+    ),
+  };
+}
+
+/** Cabang yang sudah pakai jadwal explicit (grid / Excel) punya minimal satu override bulan ini. */
+async function branchUsesExplicitShiftSchedules(
+  branchId: string,
+  workDate: Date
+): Promise<boolean> {
+  const { rangeStart, rangeEnd } = monthRangeFromWorkDate(workDate);
+  const row = await prisma.employeeShift.findFirst({
+    where: {
+      workDate: { gte: rangeStart, lte: rangeEnd },
+      employee: { branchId, isActive: true },
+    },
+    select: { id: true },
+  });
+  return row != null;
+}
+
+/** Karyawan sudah didaftarkan ke jadwal bulan ini (punya override di grid / hasil salin otomatis). */
+async function employeeHasExplicitScheduleForMonth(
+  employeeId: string,
+  workDate: Date
+): Promise<boolean> {
+  const { rangeStart, rangeEnd } = monthRangeFromWorkDate(workDate);
+  const row = await prisma.employeeShift.findFirst({
+    where: {
+      employeeId,
+      workDate: { gte: rangeStart, lte: rangeEnd },
+    },
+    select: { id: true },
+  });
+  return row != null;
+}
+
 function formatShiftTimeRange(start: Date, end: Date): string {
   const s = timeFromDbTime(start);
   const e = timeFromDbTime(end);
@@ -85,7 +129,11 @@ export async function syncAttendanceRemindersForUser(
   const [employee, user] = await Promise.all([
     prisma.employee.findUnique({
       where: { id: employeeId, isActive: true },
-      select: { branchId: true },
+      select: {
+        branchId: true,
+        shiftScheduleAssigned: true,
+        employeeType: { select: { shiftIds: true } },
+      },
     }),
     prisma.user.findUnique({
       where: { id: userId },
@@ -94,12 +142,27 @@ export async function syncAttendanceRemindersForUser(
   ]);
   if (!employee || !user) return;
 
+  if (!employee.shiftScheduleAssigned) return;
+
+  if (employee.employeeType && employee.employeeType.shiftIds.length === 0) {
+    return;
+  }
+
   const workDate = todayWorkDateWib();
   const workDateStr = workDate.toISOString().slice(0, 10);
 
   // Akun baru di hari yang sama — jangan kirim notif belum absen / telat.
   if (isInstantOnWorkDateWib(user.createdAt, workDate)) {
     return;
+  }
+
+  // Cabang pakai jadwal explicit — karyawan tanpa entri jadwal bulan ini tidak diingatkan.
+  if (await branchUsesExplicitShiftSchedules(employee.branchId, workDate)) {
+    const hasSchedule = await employeeHasExplicitScheduleForMonth(
+      employeeId,
+      workDate
+    );
+    if (!hasSchedule) return;
   }
 
   const shift = await resolveShiftContext(
