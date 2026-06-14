@@ -590,3 +590,14 @@ model ManagerEvaluation {
 
   @@map("manager_evaluations")
 }
+
+/** Binary upload persisten (avatar, lampiran) — fallback PostgreSQL saat R2/volume tidak ada. */
+model StoredBlob {
+  objectKey String   @id @map("object_key") @db.VarChar(512)
+  data      Bytes
+  mimeType  String   @map("mime_type") @db.VarChar(64)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("stored_blobs")
+}

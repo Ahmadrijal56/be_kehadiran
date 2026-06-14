@@ -5,13 +5,14 @@ import { prisma } from "../lib/prisma.js";
 import { businessError, validationError } from "../lib/errors.js";
 import { log } from "../lib/logger.js";
 import {
-  deleteLocalStoredFile,
+  deleteStoredFile,
+  isDbFilePath,
   isLocalFilePath,
   resolveStoredObjectKey,
   signLocalFileUrl,
-  writeLocalBytes,
+  writeStoredBytes,
 } from "./storageService.js";
-import { deleteObject, objectKeyFromPublicUrl, putObject, shouldUseObjectStorage, formatStorageError } from "../lib/s3Client.js";
+import { deleteObject, objectKeyFromPublicUrl, shouldUseObjectStorage, formatStorageError } from "../lib/s3Client.js";
 import { invalidateAuthUserCache } from "../lib/authUserCache.js";
 import { AVATAR_FORMAT_HINT, isAllowedAvatarUpload } from "../lib/avatarMime.js";
 import type { AuthUser } from "./authService.js";
@@ -325,8 +326,7 @@ async function persistAvatarBytes(
 
   if (shouldUseObjectStorage()) {
     try {
-      await putObject(objectKey, buffer, "image/webp");
-      return objectKey;
+      return await writeStoredBytes(objectKey, buffer, "image/webp");
     } catch (err) {
       log("error", "Avatar S3/R2 gagal disimpan", {
         userId,
@@ -345,17 +345,10 @@ async function persistAvatarBytes(
     }
   }
 
-  if (env.nodeEnv === "production" && !env.uploadStorageDir) {
-    log("warn", "Avatar disimpan ke disk ephemeral — akan hilang saat redeploy", {
-      userId,
-      hint: "Set AWS_* (R2) atau UPLOAD_STORAGE_DIR ke volume persisten di Railway",
-    });
-  }
-
   try {
-    return await writeLocalBytes(objectKey, buffer);
+    return await writeStoredBytes(objectKey, buffer, "image/webp");
   } catch (err) {
-    log("error", "Avatar local storage failed", {
+    log("error", "Avatar storage failed", {
       userId,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -367,8 +360,8 @@ async function persistAvatarBytes(
 
 export async function removeStoredAvatar(storedPath: string | null): Promise<void> {
   if (!storedPath) return;
-  if (isLocalFilePath(storedPath)) {
-    await deleteLocalStoredFile(storedPath);
+  if (isLocalFilePath(storedPath) || isDbFilePath(storedPath)) {
+    await deleteStoredFile(storedPath);
     return;
   }
 

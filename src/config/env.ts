@@ -71,7 +71,7 @@ export const env = {
 
   /**
    * Folder persisten untuk upload lokal (Railway volume mount).
-   * Contoh: /data/uploads — tanpa ini, foto hilang tiap redeploy jika S3/R2 tidak dipakai.
+   * Contoh: /data/uploads — tanpa R2, production fallback ke PostgreSQL (stored_blobs).
    */
   uploadStorageDir: process.env.UPLOAD_STORAGE_DIR?.trim() ?? "",
 
