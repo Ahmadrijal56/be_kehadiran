@@ -7,7 +7,7 @@ import { calculateKpiScore } from "./kpiScoringService.js";
  */
 describe("shift change KPI scenario (scoring math)", () => {
   it("check-in 07:05 vs S2 start 15:00 → telat parah (-3)", () => {
-    const deltaMinutesLateVsS2 = 7 * 60 + 5; // ~475 menit telat
+    const deltaMinutesLateVsS2 = 7 * 60 + 5;
     expect(calculateKpiScore(deltaMinutesLateVsS2).points).toBe(-3);
   });
 

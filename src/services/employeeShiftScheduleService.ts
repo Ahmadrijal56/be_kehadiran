@@ -11,7 +11,7 @@ import { OFF_SHIFT_ID } from "../constants/shifts.js";
 import { currentYearMonthWib } from "../utils/format.js";
 import { timeFromDbTime, toDateOnly } from "../utils/time.js";
 import { invalidatePapanCaches } from "./papanCacheInvalidation.js";
-import { recalculateAttendanceKpiForShiftChange } from "./attendanceKpiRecalcService.js";
+import { recalculateAttendanceKpiForShiftChange, syncAttendanceShiftFromSchedule } from "./attendanceKpiRecalcService.js";
 
 export type ShiftOption = {
   id: number;
@@ -227,7 +227,7 @@ export async function saveBranchShiftSchedule(
       ch.shift_id === null || ch.shift_id === empDefault[ch.employee_id]
         ? empDefault[ch.employee_id]
         : ch.shift_id;
-    const updated = await recalculateAttendanceKpiForShiftChange({
+    const updated = await syncAttendanceShiftFromSchedule({
       employeeId: ch.employee_id,
       workDate,
       newShiftId,

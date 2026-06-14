@@ -62,9 +62,37 @@ export async function computeCheckInKpiFields(
 }
 
 /**
- * Setelah jadwal shift diubah manager, hitung ulang shift absensi + poin KPI hari itu.
+ * Setelah jadwal shift diubah manager, sinkronkan shift absensi + poin KPI hari itu.
  * Penyesuaian manual manager (adjustmentPoints) tetap dipertahankan.
  */
+export async function syncAttendanceShiftFromSchedule(input: {
+  employeeId: string;
+  workDate: Date;
+  newShiftId: number;
+  invalidateCache?: boolean;
+}): Promise<boolean> {
+  if (isOffShift(input.newShiftId)) {
+    const workDate = toDateOnly(input.workDate);
+    const updated = await prisma.attendanceRecord.updateMany({
+      where: {
+        employeeId: input.employeeId,
+        workDate,
+        checkInAt: { not: null },
+      },
+      data: { shiftId: input.newShiftId },
+    });
+    if (updated.count > 0 && input.invalidateCache !== false) {
+      const employee = await prisma.employee.findUnique({
+        where: { id: input.employeeId },
+        select: { branchId: true },
+      });
+      if (employee) await invalidatePapanCaches(employee.branchId);
+    }
+    return updated.count > 0;
+  }
+  return recalculateAttendanceKpiForShiftChange(input);
+}
+
 export async function recalculateAttendanceKpiForShiftChange(input: {
   employeeId: string;
   workDate: Date;

@@ -115,7 +115,9 @@ export async function getDailyReport(from?: string, to?: string) {
       if (scheduledOff && !att) continue;
 
       const scheduledShift = shiftById[effectiveShiftId];
-      const shiftCode = att?.shift.code ?? scheduledShift?.code ?? "?";
+      const shiftCode = scheduledOff
+        ? "Libur"
+        : scheduledShift?.code ?? att?.shift.code ?? "?";
 
       items.push({
         work_date: dateStr,
@@ -124,8 +126,7 @@ export async function getDailyReport(from?: string, to?: string) {
         employee_type_label: emp.employeeType?.label?.trim() ?? null,
         branch_code: emp.branch.code,
         shift_code: shiftCode,
-        status:
-          scheduledOff && !att ? "off" : att?.status ?? "absent",
+        status: scheduledOff ? "off" : att?.status ?? "absent",
         check_in_at: formatWibIso(att?.checkInAt ?? null),
         check_out_at: formatWibIso(att?.checkOutAt ?? null),
         late_minutes: att?.lateMinutes ?? 0,
