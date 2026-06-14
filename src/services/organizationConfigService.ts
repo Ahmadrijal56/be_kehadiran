@@ -589,7 +589,7 @@ export async function rewardAmountFromSettings(
 async function buildPublicRules(): Promise<PublicRulesPayload> {
   const [types, rules, settings] = await Promise.all([
     listEmployeeTypes(),
-    listKpiPointRules(),
+    listKpiPointRulesCached({ activeOnly: false }),
     getGamificationSettingsCached(),
   ]);
 

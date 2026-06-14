@@ -230,10 +230,11 @@ async function buildLeaderboardEntries(
   for (const [key, ids] of employeeIdsByGroup) {
     kpiGroups.set(key, ids);
   }
-  const pointsCache = await sumDedupedMonthlyPointsForGroups(kpiGroups, yearMonth);
-
   const employeeIds = [...groups.values()].map((row) => row.id);
-  const todayCheckIns = await loadTodayCheckInByEmployee(employeeIds);
+  const [pointsCache, todayCheckIns] = await Promise.all([
+    sumDedupedMonthlyPointsForGroups(kpiGroups, yearMonth),
+    loadTodayCheckInByEmployee(employeeIds),
+  ]);
 
   const ranked = [...groups.entries()]
     .map(([key, representative]) => {

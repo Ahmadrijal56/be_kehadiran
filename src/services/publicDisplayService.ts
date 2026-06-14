@@ -72,10 +72,13 @@ async function buildBranchBoard(
   workDate: Date,
   todayPointsByEmployee: Map<string, number>
 ): Promise<PublicBranchBoard> {
-  const { listBranchShiftDefs } = await import("./branchShiftConfigService.js");
-  const [shiftDefs, attendance, rankings] = await Promise.all([
-    listBranchShiftDefs(b.id),
-    listBranchAttendanceToday(b.id),
+  const { getBranchShiftSettings, shiftDefsFromBranchShifts } = await import(
+    "./branchShiftConfigService.js"
+  );
+  const { shifts } = await getBranchShiftSettings(b.id);
+  const shiftDefs = shiftDefsFromBranchShifts(shifts);
+  const [attendance, rankings] = await Promise.all([
+    listBranchAttendanceToday(b.id, shifts),
     getBranchLeaderboardBase(b.id, ym),
   ]);
   const attByEmployeeId = new Map(

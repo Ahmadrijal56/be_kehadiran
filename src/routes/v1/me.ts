@@ -135,15 +135,14 @@ meRouter.get(
       page: Number(req.query.page) || 1,
       limit: Number(req.query.limit) || 31,
     };
-    const timeline = await listAttendanceTimeline(
-      accountScope.historyEmployeeIds,
-      queryOpts
-    );
     const yearMonth =
       queryOpts.from?.slice(0, 7) ??
       queryOpts.to?.slice(0, 7) ??
       currentYearMonthWib();
-    const monthlyKpi = await getKpiMonthly(accountScope.historyEmployeeIds, yearMonth);
+    const [timeline, monthlyKpi] = await Promise.all([
+      listAttendanceTimeline(accountScope.historyEmployeeIds, queryOpts),
+      getKpiMonthly(accountScope.historyEmployeeIds, yearMonth),
+    ]);
     res.json({
       ...timeline,
       summary: {

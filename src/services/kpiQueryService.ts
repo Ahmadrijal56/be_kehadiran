@@ -244,8 +244,6 @@ export async function getKpiMonthlyBreakdown(
   const end = new Date(start);
   end.setUTCMonth(end.getUTCMonth() + 1);
 
-  const summary = await getKpiMonthly(ids, ym);
-
   const daily = await prisma.kpiDailyScore.findMany({
     where: {
       employeeId: ids.length === 1 ? ids[0]! : { in: ids },
@@ -260,6 +258,28 @@ export async function getKpiMonthlyBreakdown(
   });
 
   const deduped = dedupeDailyScoresByWorkDate(daily);
+  const totalPoints = deduped.reduce((sum, row) => sum + row.totalPoints, 0);
+  const totalLate = deduped.filter((row) => row.lateMinutes > 0).length;
+  const totalPresent = deduped.length;
+
+  let rankBranch: number | null = null;
+  let rankGlobal: number | null = null;
+  if (ids.length === 1) {
+    const agg = await prisma.kpiMonthlyAggregate.findUnique({
+      where: { employeeId_yearMonth: { employeeId: ids[0]!, yearMonth: ym } },
+    });
+    rankBranch = agg?.rankBranch ?? null;
+    rankGlobal = agg?.rankGlobal ?? null;
+  }
+
+  const summary = {
+    year_month: ym,
+    total_points: totalPoints,
+    total_late_count: totalLate,
+    total_present_days: totalPresent,
+    rank_branch: rankBranch,
+    rank_global: rankGlobal,
+  };
 
   const sortedAsc = [...deduped].sort(
     (a, b) => a.workDate.getTime() - b.workDate.getTime()

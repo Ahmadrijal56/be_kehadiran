@@ -326,8 +326,15 @@ export async function getBranchShiftWindow(
 }
 
 /** Definisi shift aktif (non-OFF) untuk jadwal publik & papan. */
-export async function listBranchShiftDefs(branchId: string) {
-  const { shifts } = await getBranchShiftSettings(branchId);
+export function shiftDefsFromBranchShifts(
+  shifts: BranchShiftSettingRow[]
+): Array<{
+  id: number;
+  code: string;
+  name: string;
+  startTime: Date;
+  endTime: Date;
+}> {
   return shifts
     .filter(
       (s) =>
@@ -342,4 +349,9 @@ export async function listBranchShiftDefs(branchId: string) {
       startTime: parseHHmm(s.start_time),
       endTime: parseHHmm(s.end_time),
     }));
+}
+
+export async function listBranchShiftDefs(branchId: string) {
+  const { shifts } = await getBranchShiftSettings(branchId);
+  return shiftDefsFromBranchShifts(shifts);
 }

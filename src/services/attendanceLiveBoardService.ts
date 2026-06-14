@@ -1,7 +1,10 @@
 import { prisma } from "../lib/prisma.js";
 import { todayWorkDateWib } from "../utils/format.js";
 import { listBranchAttendanceToday, type BranchEmployeeAttendance } from "./branchAttendanceService.js";
-import { listBranchShiftDefs } from "./branchShiftConfigService.js";
+import {
+  getBranchShiftSettings,
+  shiftDefsFromBranchShifts,
+} from "./branchShiftConfigService.js";
 import {
   getActiveShiftIds,
   getWibMinutesNow,
@@ -168,16 +171,19 @@ export async function getBranchLiveAttendanceBoard(branchId: string) {
     select: { id: true, code: true, name: true },
   });
 
-  const [attendance, shiftDefs] = await Promise.all([
-    listBranchAttendanceToday(branchId),
-    listBranchShiftDefs(branchId),
-  ]);
+  const { shifts: branchShifts } = await getBranchShiftSettings(branchId);
+  const shiftDefs = shiftDefsFromBranchShifts(branchShifts);
+  const attendance = await listBranchAttendanceToday(branchId, branchShifts);
 
-  const { shifts, label } = buildCurrentShifts(shiftDefs, getWibMinutesNow(), {
-    code: branch.code,
-    name: branch.name,
-  });
-  const activeIds = shifts.map((s) => s.shift_id);
+  const { shifts: currentShifts, label } = buildCurrentShifts(
+    shiftDefs,
+    getWibMinutesNow(),
+    {
+      code: branch.code,
+      name: branch.name,
+    }
+  );
+  const activeIds = currentShifts.map((s) => s.shift_id);
 
   const items = attendance.items
     .map((item) => mapEmployeeRow(item, branch, activeIds))
@@ -189,7 +195,7 @@ export async function getBranchLiveAttendanceBoard(branchId: string) {
     generated_at: new Date().toISOString(),
     scope: "branch" as const,
     branch,
-    current_shifts: shifts,
+    current_shifts: currentShifts,
     current_shift_label: label,
     absent_count: items.filter((i) => i.is_absent).length,
     items,
@@ -209,18 +215,21 @@ export async function getOrganizationLiveAttendanceBoard() {
 
   await Promise.all(
     branches.map(async (branch) => {
-      const [attendance, shiftDefs] = await Promise.all([
-        listBranchAttendanceToday(branch.id),
-        listBranchShiftDefs(branch.id),
-      ]);
+      const { shifts: branchShifts } = await getBranchShiftSettings(branch.id);
+      const shiftDefs = shiftDefsFromBranchShifts(branchShifts);
+      const attendance = await listBranchAttendanceToday(branch.id, branchShifts);
 
-      const { shifts } = buildCurrentShifts(shiftDefs, getWibMinutesNow(), {
-        code: branch.code,
-        name: branch.name,
-      });
-      allShifts.push(...shifts);
+      const { shifts: currentShifts } = buildCurrentShifts(
+        shiftDefs,
+        getWibMinutesNow(),
+        {
+          code: branch.code,
+          name: branch.name,
+        }
+      );
+      allShifts.push(...currentShifts);
 
-      const activeIds = shifts.map((s) => s.shift_id);
+      const activeIds = currentShifts.map((s) => s.shift_id);
       for (const item of attendance.items) {
         const row = mapEmployeeRow(item, branch, activeIds);
         if (row) allItems.push(row);

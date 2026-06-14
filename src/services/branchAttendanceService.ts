@@ -86,6 +86,7 @@ const rowsMemCache = new Map<
   string,
   { at: number; rows: BranchEmployeeAttendance[] }
 >();
+const rowsInflight = new Map<string, Promise<BranchEmployeeAttendance[]>>();
 const ROWS_MEM_CACHE_MS = 20_000;
 
 async function getShiftsById(): Promise<Record<number, ShiftRow>> {
@@ -163,7 +164,12 @@ function mapRow(
   };
 }
 
-async function loadBranchRows(branchId: string): Promise<BranchEmployeeAttendance[]> {
+async function loadBranchRows(
+  branchId: string,
+  preloadedBranchShifts?: Awaited<
+    ReturnType<typeof getBranchShiftSettings>
+  >["shifts"]
+): Promise<BranchEmployeeAttendance[]> {
   const workDate = todayWorkDateWib();
   const workDateKey = workDate.toISOString().slice(0, 10);
   const memKey = `${branchId}:${workDateKey}`;
@@ -180,72 +186,92 @@ async function loadBranchRows(branchId: string): Promise<BranchEmployeeAttendanc
     return redisHit.items;
   }
 
-  const activeEmployeeIds = await listActiveEmployeeIdsForBranch(branchId);
-  if (activeEmployeeIds.length === 0) {
-    return [];
-  }
+  const inflight = rowsInflight.get(memKey);
+  if (inflight) return inflight;
 
-  const shiftById = await getShiftsById();
-  const { shifts: branchShifts } = await getBranchShiftSettings(branchId);
-  const shiftTimeRangeById = new Map(
-    branchShifts.map((s) => [s.shift_id, s.time_range])
-  );
+  const promise = (async () => {
+    const [activeEmployeeIds, shiftById, branchShifts] = await Promise.all([
+      listActiveEmployeeIdsForBranch(branchId),
+      getShiftsById(),
+      preloadedBranchShifts
+        ? Promise.resolve(preloadedBranchShifts)
+        : getBranchShiftSettings(branchId).then((s) => s.shifts),
+    ]);
 
-  // Peserta = akun karyawan aktif di cabang (user.branch / user_branches),
-  // selaras dengan leaderboard — bukan filter employee.branchId saja.
-  const employees = await prisma.employee.findMany({
-    where: { isActive: true, id: { in: activeEmployeeIds } },
-    include: {
-      defaultShift: true,
-      employeeType: { select: { label: true } },
-      attendanceRecords: {
-        where: { workDate },
-        include: {
-          shift: true,
-          breakSessions: { orderBy: { breakStartAt: "desc" } },
+    if (activeEmployeeIds.length === 0) {
+      return [];
+    }
+
+    const shiftTimeRangeById = new Map(
+      branchShifts.map((s) => [s.shift_id, s.time_range])
+    );
+
+    const employees = await prisma.employee.findMany({
+      where: { isActive: true, id: { in: activeEmployeeIds } },
+      include: {
+        defaultShift: true,
+        employeeType: { select: { label: true } },
+        attendanceRecords: {
+          where: { workDate },
+          include: {
+            shift: true,
+            breakSessions: { orderBy: { breakStartAt: "desc" } },
+          },
         },
       },
-    },
-    orderBy: { fullName: "asc" },
-  });
+      orderBy: { fullName: "asc" },
+    });
 
-  const shiftMap = await resolveEffectiveShiftIdsForEmployees(
-    employees.map((emp) => ({
-      id: emp.id,
-      defaultShiftId: emp.defaultShiftId,
-      shiftScheduleAssigned: emp.shiftScheduleAssigned,
-    })),
-    workDate
-  );
+    const shiftMap = await resolveEffectiveShiftIdsForEmployees(
+      employees.map((emp) => ({
+        id: emp.id,
+        defaultShiftId: emp.defaultShiftId,
+        shiftScheduleAssigned: emp.shiftScheduleAssigned,
+      })),
+      workDate
+    );
 
-  const rows = employees.map((emp) => {
-    const att = emp.attendanceRecords[0];
-    const effectiveShiftId = shiftMap.get(emp.id) ?? OFF_SHIFT_ID;
-    const scheduledOff = effectiveShiftId === OFF_SHIFT_ID;
-    const timeRange = scheduledOff
-      ? null
-      : shiftTimeRangeById.get(effectiveShiftId) ?? null;
-    const scheduledShift = scheduledOff
-      ? { code: "Libur", name: "Libur", time_range: null as string | null }
-      : shiftById[effectiveShiftId]
-        ? {
-            code: shiftById[effectiveShiftId]!.code,
-            name: shiftById[effectiveShiftId]!.name,
-            time_range: timeRange,
-          }
-        : { code: "?", name: "?", time_range: timeRange };
+    const rows = employees.map((emp) => {
+      const att = emp.attendanceRecords[0];
+      const effectiveShiftId = shiftMap.get(emp.id) ?? OFF_SHIFT_ID;
+      const scheduledOff = effectiveShiftId === OFF_SHIFT_ID;
+      const timeRange = scheduledOff
+        ? null
+        : shiftTimeRangeById.get(effectiveShiftId) ?? null;
+      const scheduledShift = scheduledOff
+        ? { code: "Libur", name: "Libur", time_range: null as string | null }
+        : shiftById[effectiveShiftId]
+          ? {
+              code: shiftById[effectiveShiftId]!.code,
+              name: shiftById[effectiveShiftId]!.name,
+              time_range: timeRange,
+            }
+          : { code: "?", name: "?", time_range: timeRange };
 
-    return mapRow(emp, att, scheduledShift, scheduledOff);
-  });
+      return mapRow(emp, att, scheduledShift, scheduledOff);
+    });
 
-  rowsMemCache.set(memKey, { at: Date.now(), rows });
-  await cacheSet(redisKey, { items: rows }, 45);
+    rowsMemCache.set(memKey, { at: Date.now(), rows });
+    await cacheSet(redisKey, { items: rows }, 45);
 
-  return rows;
+    return rows;
+  })();
+
+  rowsInflight.set(memKey, promise);
+  try {
+    return await promise;
+  } finally {
+    rowsInflight.delete(memKey);
+  }
 }
 
-export async function listBranchAttendanceToday(branchId: string) {
-  const rows = await loadBranchRows(branchId);
+export async function listBranchAttendanceToday(
+  branchId: string,
+  preloadedBranchShifts?: Awaited<
+    ReturnType<typeof getBranchShiftSettings>
+  >["shifts"]
+) {
+  const rows = await loadBranchRows(branchId, preloadedBranchShifts);
   return {
     work_date: todayWorkDateWib().toISOString().slice(0, 10),
     items: rows,
