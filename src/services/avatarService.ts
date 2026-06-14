@@ -29,6 +29,8 @@ const AVATAR_URL_TTL_SEC = 30 * 24 * 3600;
 export type AvatarProfileFields = {
   avatar_url: string | null;
   avatar_visibility: AvatarVisibility;
+  /** True jika DB masih punya file avatar (meski URL sementara gagal di-generate). */
+  has_avatar: boolean;
 };
 
 /** URL tampilan — selalu via API backend agar bisa diakses dari HP/LAN/papan publik. */
@@ -82,6 +84,7 @@ export async function mapAvatarProfileFields(
       avatarCacheBust(row.updatedAt)
     ),
     avatar_visibility: row.avatarVisibility,
+    has_avatar: Boolean(row.avatarUrl?.trim()),
   };
 }
 
@@ -94,7 +97,7 @@ export async function getAvatarProfile(
     select: { avatarUrl: true, avatarVisibility: true, updatedAt: true },
   });
   if (!user) {
-    return { avatar_url: null, avatar_visibility: "branch" };
+    return { avatar_url: null, avatar_visibility: "branch", has_avatar: false };
   }
   return mapAvatarProfileFields(user, publicBaseUrl);
 }
@@ -325,16 +328,28 @@ async function persistAvatarBytes(
       await putObject(objectKey, buffer, "image/webp");
       return objectKey;
     } catch (err) {
-      log("warn", "Avatar S3/R2 gagal — pakai disk lokal", {
+      log("error", "Avatar S3/R2 gagal disimpan", {
         userId,
         objectKey,
         error: formatStorageError(err),
         hint:
           env.nodeEnv === "production"
-            ? "Set AWS_ENDPOINT ke R2 + credentials di Railway (bukan localhost:9000)"
-            : "Jalankan MinIO lokal atau kosongkan AWS_ENDPOINT untuk disk lokal",
+            ? "Periksa AWS_ENDPOINT (R2) dan credentials di Railway"
+            : "Jalankan MinIO lokal atau set UPLOAD_STORAGE_DIR",
       });
+      if (env.nodeEnv === "production") {
+        throw businessError(
+          "Penyimpanan foto gagal. Hubungi admin — konfigurasi object storage (R2/S3) belum benar."
+        );
+      }
     }
+  }
+
+  if (env.nodeEnv === "production" && !env.uploadStorageDir) {
+    log("warn", "Avatar disimpan ke disk ephemeral — akan hilang saat redeploy", {
+      userId,
+      hint: "Set AWS_* (R2) atau UPLOAD_STORAGE_DIR ke volume persisten di Railway",
+    });
   }
 
   try {

@@ -1,4 +1,5 @@
 import { prisma } from "./prisma.js";
+import { env } from "../config/env.js";
 import { getRedis } from "./redis.js";
 import { isObjectStorageConfigured, verifyObjectStorageConnection } from "./s3Client.js";
 import { log } from "./logger.js";
@@ -40,6 +41,16 @@ export async function checkStartupHealth(): Promise<void> {
         error: storage.error,
       });
     }
+  }
+
+  if (
+    process.env.NODE_ENV === "production" &&
+    !isObjectStorageConfigured() &&
+    !env.uploadStorageDir
+  ) {
+    log("warn", "Foto profil tidak persisten — redeploy akan menghapus avatar lokal", {
+      hint: "Set AWS_* (Cloudflare R2) atau UPLOAD_STORAGE_DIR ke volume Railway",
+    });
   }
 
   try {

@@ -18,7 +18,12 @@ const MAX_BYTES = 5 * 1024 * 1024;
 const ALLOWED_MIME = new Set(["image/jpeg", "image/png", "image/jpg"]);
 const LOCAL_PREFIX = "local:";
 
-const UPLOAD_ROOT = path.join(process.cwd(), "storage", "uploads");
+function getUploadRoot(): string {
+  if (env.uploadStorageDir) {
+    return path.resolve(env.uploadStorageDir);
+  }
+  return path.join(process.cwd(), "storage", "uploads");
+}
 
 function requireS3() {
   const client = getS3Client();
@@ -44,8 +49,9 @@ export function localFileKey(filePath: string): string {
 
 function resolveLocalPath(key: string): string {
   const normalized = path.normalize(key).replace(/^(\.\.(\/|\\|$))+/, "");
-  const fullPath = path.join(UPLOAD_ROOT, normalized);
-  if (!fullPath.startsWith(UPLOAD_ROOT)) {
+  const uploadRoot = getUploadRoot();
+  const fullPath = path.join(uploadRoot, normalized);
+  if (!fullPath.startsWith(uploadRoot)) {
     throw businessError("Path file tidak valid");
   }
   return fullPath;
