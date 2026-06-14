@@ -92,9 +92,11 @@ function assertOwner(actor: AuthUser) {
 }
 
 export async function ensureOrganizationDefaults(): Promise<void> {
-  const typeCount = await prisma.employeeTypeConfig.count();
-  if (typeCount === 0) {
-    for (const t of DEFAULT_EMPLOYEE_TYPES) {
+  for (const t of DEFAULT_EMPLOYEE_TYPES) {
+    const exists = await prisma.employeeTypeConfig.findUnique({
+      where: { code: t.code },
+    });
+    if (!exists) {
       await prisma.employeeTypeConfig.create({
         data: {
           code: t.code,
@@ -152,13 +154,33 @@ export async function listEmployeeTypes(): Promise<EmployeeTypeRow[]> {
   }));
 }
 
+function isNewTypeCode(code: string): boolean {
+  return code.startsWith("__new_");
+}
+
+function generateTypeCode(label: string, used: Set<string>): string {
+  const base =
+    label
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, "")
+      .slice(0, 8) || "TIPE";
+  if (!used.has(base)) return base;
+  for (let n = 2; n <= 99; n++) {
+    const suffix = String(n);
+    const candidate = `${base.slice(0, Math.max(1, 8 - suffix.length))}${suffix}`;
+    if (!used.has(candidate)) return candidate;
+  }
+  throw validationError("Tidak dapat menghasilkan kode tipe unik");
+}
+
 export async function saveEmployeeTypes(
   actor: AuthUser,
   items: EmployeeTypeRow[]
 ) {
   assertCanManageEmployeeTypes(actor);
   if (!Array.isArray(items) || items.length === 0) {
-    throw validationError("employee_types[] wajib");
+    throw validationError("Minimal satu tipe karyawan wajib ada");
   }
 
   const masters = await prisma.shift.findMany({
@@ -167,48 +189,90 @@ export async function saveEmployeeTypes(
   });
   const validShiftIds = new Set(masters.map((s) => s.id));
 
-  for (const item of items) {
-    const code = item.code?.trim().toUpperCase();
-    if (!code || code.length > 8) {
-      throw validationError("Kode tipe wajib (maks. 8 karakter)");
+  const usedCodes = new Set<string>();
+  const resolved: EmployeeTypeRow[] = [];
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]!;
+    const label = item.label?.trim();
+    if (!label) {
+      throw validationError(`Nama tipe baris ${i + 1} wajib diisi`);
     }
-    if (!item.label?.trim()) throw validationError(`Label tipe ${code} wajib`);
     if (!Array.isArray(item.shift_ids) || item.shift_ids.length === 0) {
-      throw validationError(`Shift tipe ${code} wajib`);
+      throw validationError(`Shift untuk "${label}" wajib dipilih minimal satu`);
     }
     for (const sid of item.shift_ids) {
       if (!validShiftIds.has(sid)) {
-        throw validationError(`Shift ${sid} tidak valid untuk tipe ${code}`);
+        throw validationError(`Shift ${sid} tidak valid untuk "${label}"`);
       }
     }
+
+    let code = item.code?.trim() ?? "";
+    if (isNewTypeCode(code) || !code) {
+      code = generateTypeCode(label, usedCodes);
+    } else {
+      code = code.toUpperCase();
+      if (code.length > 8) {
+        throw validationError(`Kode tipe "${code}" terlalu panjang (maks. 8)`);
+      }
+    }
+    if (usedCodes.has(code)) {
+      throw validationError(`Kode tipe "${code}" duplikat`);
+    }
+    usedCodes.add(code);
+
+    resolved.push({
+      code,
+      label,
+      shift_ids: item.shift_ids,
+      sort_order: item.sort_order ?? i + 1,
+      is_active: item.is_active ?? true,
+    });
   }
 
-  await prisma.$transaction(
-    items.map((item) =>
-      prisma.employeeTypeConfig.upsert({
-        where: { code: item.code.trim().toUpperCase() },
+  const existing = await prisma.employeeTypeConfig.findMany({
+    select: { code: true, label: true },
+  });
+
+  await prisma.$transaction(async (tx) => {
+    for (const row of existing) {
+      if (usedCodes.has(row.code)) continue;
+      const inUse = await tx.employee.count({
+        where: { employeeTypeCode: row.code, isActive: true },
+      });
+      if (inUse > 0) {
+        throw validationError(
+          `Tipe "${row.label}" masih dipakai ${inUse} karyawan — ubah peran mereka dulu sebelum hapus`
+        );
+      }
+      await tx.employeeTypeConfig.delete({ where: { code: row.code } });
+    }
+
+    for (const item of resolved) {
+      await tx.employeeTypeConfig.upsert({
+        where: { code: item.code },
         create: {
-          code: item.code.trim().toUpperCase(),
-          label: item.label.trim(),
+          code: item.code,
+          label: item.label,
           shiftIds: item.shift_ids,
           sortOrder: item.sort_order ?? 0,
           isActive: item.is_active ?? true,
         },
         update: {
-          label: item.label.trim(),
+          label: item.label,
           shiftIds: item.shift_ids,
           sortOrder: item.sort_order ?? 0,
           isActive: item.is_active ?? true,
         },
-      })
-    )
-  );
+      });
+    }
+  });
 
   await writeAuditLog({
     userId: actor.id,
     action: "employee_types.update",
     entityType: "employee_type_config",
-    newValues: { count: items.length },
+    newValues: { count: resolved.length },
   });
 
   return listEmployeeTypes();

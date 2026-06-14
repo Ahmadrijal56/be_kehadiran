@@ -20,6 +20,7 @@ import {
   listBranchAttendanceAbsent,
   listBranchAttendanceLate,
   listBranchAttendanceOnBreak,
+  listBranchAttendancePresent,
   listBranchAttendanceToday,
 } from "../../services/branchAttendanceService.js";
 import {
@@ -150,6 +151,16 @@ branchesRouter.get(
     const branchId = branchIdParam(req);
     assertBranchAccess(req.user!, branchId);
     res.json({ data: await listBranchAttendanceToday(branchId) });
+  })
+);
+
+branchesRouter.get(
+  "/:branchId/attendance/present",
+  requirePermission("attendance.read.branch"),
+  asyncHandler(async (req, res) => {
+    const branchId = branchIdParam(req);
+    assertBranchAccess(req.user!, branchId);
+    res.json({ data: await listBranchAttendancePresent(branchId) });
   })
 );
 

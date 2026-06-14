@@ -204,12 +204,23 @@ export function mapAuthUserResponse(user: AuthUser) {
   };
 }
 
+async function loadEmployeeTypeLabel(
+  employeeId: string | null
+): Promise<string | null> {
+  if (!employeeId) return null;
+  const employee = await prisma.employee.findUnique({
+    where: { id: employeeId },
+    select: { employeeType: { select: { label: true } } },
+  });
+  return employee?.employeeType?.label?.trim() ?? null;
+}
+
 export async function enrichAuthUserResponse(
   user: AuthUser,
   publicBaseUrl?: string
 ) {
   const base = mapAuthUserResponse(user);
-  const [branch, avatar] = await Promise.all([
+  const [branch, avatar, employee_type_label] = await Promise.all([
     user.branchId
       ? prisma.branch.findUnique({
           where: { id: user.branchId },
@@ -222,10 +233,12 @@ export async function enrichAuthUserResponse(
         })
       : Promise.resolve(null),
     getAvatarProfile(user.id, publicBaseUrl),
+    loadEmployeeTypeLabel(user.employeeId),
   ]);
   return {
     ...base,
     ...avatar,
+    employee_type_label,
     branch: branch
       ? {
           id: branch.id,

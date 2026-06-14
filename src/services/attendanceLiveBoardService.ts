@@ -12,11 +12,13 @@ export type LiveEmployeeRow = {
   employee_id: string;
   nik: string;
   full_name: string;
+  employee_type_label: string | null;
   display_tag: string;
   branch_code: string;
   branch_name: string;
   shift_code: string;
   shift_name: string;
+  shift_time_range: string | null;
   status: string;
   status_label: string;
   is_absent: boolean;
@@ -92,11 +94,13 @@ function mapEmployeeRow(
     employee_id: item.employee_id,
     nik: item.nik,
     full_name: item.full_name,
+    employee_type_label: item.employee_type_label,
     display_tag: displayTag(item.full_name, branch.code),
     branch_code: branch.code,
     branch_name: branch.name,
     shift_code: item.shift.code,
     shift_name: item.shift.name,
+    shift_time_range: item.shift.time_range,
     status: item.status,
     status_label: liveStatusLabel(item.status),
     is_absent: item.status === "absent",

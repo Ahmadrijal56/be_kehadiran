@@ -7,6 +7,7 @@ import {
   resetUserPassword,
   updateBranchUser,
   updateUserBranches,
+  updateUserAccountRole,
   updateUserRole,
 } from "../../services/branchUserService.js";
 import { validationError } from "../../lib/errors.js";
@@ -77,6 +78,25 @@ usersRouter.put(
       userId,
       branch_ids.map(String)
     );
+    res.json({ data });
+  })
+);
+
+usersRouter.patch(
+  "/:userId/account-role",
+  requirePermission("users.manage.branch"),
+  asyncHandler(async (req, res) => {
+    const userId = String(req.params.userId);
+    const { account_role, branch_ids } = req.body ?? {};
+    if (!account_role) {
+      throw validationError("account_role wajib");
+    }
+    const data = await updateUserAccountRole(req.user!, userId, {
+      account_role: String(account_role),
+      branch_ids: Array.isArray(branch_ids)
+        ? branch_ids.map(String)
+        : undefined,
+    });
     res.json({ data });
   })
 );

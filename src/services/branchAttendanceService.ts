@@ -4,6 +4,7 @@ import { OFF_SHIFT_ID } from "../constants/shifts.js";
 import { cacheDeleteByPrefix, cacheGet, cacheSet } from "../lib/redis.js";
 import { resolveEffectiveShiftIdsForEmployees } from "./employeeShiftScheduleService.js";
 import { listActiveEmployeeIdsForBranch } from "./activeEmployeeFilter.js";
+import { getBranchShiftSettings } from "./branchShiftConfigService.js";
 import {
   computeWorkDurationMinutes,
   formatWorkDurationLabel,
@@ -14,7 +15,8 @@ export type BranchEmployeeAttendance = {
   employee_id: string;
   nik: string;
   full_name: string;
-  shift: { code: string; name: string };
+  employee_type_label: string | null;
+  shift: { code: string; name: string; time_range: string | null };
   status: string;
   check_in_at: string | null;
   check_out_at: string | null;
@@ -26,6 +28,36 @@ export type BranchEmployeeAttendance = {
   overtime_label: string | null;
   scheduled_off?: boolean;
 };
+
+/** Sudah scan masuk hari ini (termasuk yang sudah pulang). */
+const CHECKED_IN_STATUSES = new Set([
+  "present",
+  "late",
+  "on_break",
+  "left",
+  "forgot_checkout",
+]);
+
+export function attendanceHasCheckedIn(
+  status: string,
+  checkInAt: Date | string | null
+): boolean {
+  if (status === "off" || status === "absent") return false;
+  return CHECKED_IN_STATUSES.has(status) || checkInAt != null;
+}
+
+export function attendanceIsLate(status: string, lateMinutes: number): boolean {
+  if (status === "off" || status === "absent") return false;
+  return status === "late" || lateMinutes > 0;
+}
+
+export function rowHasCheckedIn(row: BranchEmployeeAttendance): boolean {
+  return attendanceHasCheckedIn(row.status, row.check_in_at);
+}
+
+export function rowIsLate(row: BranchEmployeeAttendance): boolean {
+  return attendanceIsLate(row.status, row.late_minutes);
+}
 
 type ShiftRow = { id: number; code: string; name: string };
 
@@ -56,8 +88,10 @@ function mapRow(
     nik: string;
     fullName: string;
     defaultShift: { code: string; name: string };
+    employeeType?: { label: string } | null;
   },
   att?: {
+    shiftId: number;
     status: string;
     checkInAt: Date | null;
     checkOutAt: Date | null;
@@ -65,7 +99,7 @@ function mapRow(
     shift: { code: string; name: string };
     breakSessions: Array<{ breakStartAt: Date; breakEndAt: Date | null }>;
   },
-  scheduledShift?: { code: string; name: string },
+  scheduledShift?: { code: string; name: string; time_range: string | null },
   scheduledOff = false
 ): BranchEmployeeAttendance {
   const activeBreak = att?.breakSessions.find((b) => !b.breakEndAt);
@@ -80,13 +114,20 @@ function mapRow(
     att?.checkInAt,
     att?.checkOutAt
   );
+  const shiftCode =
+    att?.shift.code ?? scheduledShift?.code ?? emp.defaultShift.code;
+  const shiftName =
+    att?.shift.name ?? scheduledShift?.name ?? emp.defaultShift.name;
+  const timeRange = scheduledShift?.time_range ?? null;
   return {
     employee_id: emp.id,
     nik: emp.nik,
     full_name: emp.fullName,
-    shift: att?.shift ?? scheduledShift ?? {
-      code: emp.defaultShift.code,
-      name: emp.defaultShift.name,
+    employee_type_label: emp.employeeType?.label?.trim() ?? null,
+    shift: {
+      code: shiftCode,
+      name: shiftName,
+      time_range: timeRange,
     },
     status: scheduledOff && !att ? "off" : att?.status ?? "absent",
     check_in_at: formatWibIso(att?.checkInAt ?? null),
@@ -128,6 +169,10 @@ async function loadBranchRows(branchId: string): Promise<BranchEmployeeAttendanc
   }
 
   const shiftById = await getShiftsById();
+  const { shifts: branchShifts } = await getBranchShiftSettings(branchId);
+  const shiftTimeRangeById = new Map(
+    branchShifts.map((s) => [s.shift_id, s.time_range])
+  );
 
   // Peserta = akun karyawan aktif di cabang (user.branch / user_branches),
   // selaras dengan leaderboard — bukan filter employee.branchId saja.
@@ -135,6 +180,7 @@ async function loadBranchRows(branchId: string): Promise<BranchEmployeeAttendanc
     where: { isActive: true, id: { in: activeEmployeeIds } },
     include: {
       defaultShift: true,
+      employeeType: { select: { label: true } },
       attendanceRecords: {
         where: { workDate },
         include: {
@@ -159,12 +205,18 @@ async function loadBranchRows(branchId: string): Promise<BranchEmployeeAttendanc
     const effectiveShiftId = shiftMap.get(emp.id) ?? emp.defaultShiftId;
     const scheduledOff = effectiveShiftId === OFF_SHIFT_ID;
     const scheduledShift = shiftById[effectiveShiftId];
+    const shiftIdForRange = att?.shiftId ?? effectiveShiftId;
+    const timeRange = shiftTimeRangeById.get(shiftIdForRange) ?? null;
     return mapRow(
       emp,
       att,
       scheduledShift
-        ? { code: scheduledShift.code, name: scheduledShift.name }
-        : undefined,
+        ? {
+            code: scheduledShift.code,
+            name: scheduledShift.name,
+            time_range: timeRange,
+          }
+        : { code: "?", name: "?", time_range: timeRange },
       scheduledOff
     );
   });
@@ -179,7 +231,15 @@ export async function listBranchAttendanceToday(branchId: string) {
   const rows = await loadBranchRows(branchId);
   return {
     work_date: todayWorkDateWib().toISOString().slice(0, 10),
-    items: rows,
+    items: rows.filter((r) => r.status !== "off"),
+  };
+}
+
+export async function listBranchAttendancePresent(branchId: string) {
+  const rows = await loadBranchRows(branchId);
+  return {
+    work_date: todayWorkDateWib().toISOString().slice(0, 10),
+    items: rows.filter(rowHasCheckedIn),
   };
 }
 
@@ -187,7 +247,7 @@ export async function listBranchAttendanceLate(branchId: string) {
   const rows = await loadBranchRows(branchId);
   return {
     work_date: todayWorkDateWib().toISOString().slice(0, 10),
-    items: rows.filter((r) => r.status === "late"),
+    items: rows.filter(rowIsLate),
   };
 }
 
@@ -211,17 +271,19 @@ export function computeBranchStatsFromRows(
   rows: BranchEmployeeAttendance[],
   workDateStr: string
 ) {
-  const count = (s: string) => rows.filter((i) => i.status === s).length;
+  const active = rows.filter((i) => i.status !== "off");
 
   return {
     work_date: workDateStr,
-    total_employees: rows.filter((i) => i.status !== "off").length,
-    present: count("present"),
-    late: count("late"),
-    absent: count("absent"),
-    on_break: count("on_break"),
-    left: count("left"),
-    off: count("off"),
+    total_employees: active.length,
+    present: active.filter(rowHasCheckedIn).length,
+    late: active.filter(rowIsLate).length,
+    absent: active.filter((i) => i.status === "absent").length,
+    on_break: active.filter((i) => i.status === "on_break").length,
+    left: active.filter(
+      (i) => i.status === "left" || i.status === "forgot_checkout"
+    ).length,
+    off: rows.filter((i) => i.status === "off").length,
   };
 }
 

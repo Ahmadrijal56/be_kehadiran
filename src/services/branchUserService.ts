@@ -29,6 +29,7 @@ import {
   userHasHiddenDirectoryRole,
   userHiddenFromDirectoryWhere,
 } from "../constants/directoryVisibility.js";
+import { updateEmployeeType } from "./organizationConfigService.js";
 
 export type BranchUserRole = "employee" | "manager";
 
@@ -69,6 +70,12 @@ const userInclude = {
   userRoles: { include: { role: true } },
   branch: true,
   userBranches: { include: { branch: true } },
+  employee: {
+    select: {
+      employeeTypeCode: true,
+      employeeType: { select: { code: true, label: true } },
+    },
+  },
 } as const;
 
 function roleAccessLabel(roles: string[]): string {
@@ -78,6 +85,21 @@ function roleAccessLabel(roles: string[]): string {
     owner: "Owner",
   };
   return roles.map((r) => labels[r] ?? r).join(", ");
+}
+
+function accountAccessLabel(
+  roles: string[],
+  employeeType?: { code: string; label: string } | null
+): string {
+  if (roles.includes("owner")) return "Owner";
+  if (roles.includes("manager")) return "Manager";
+  if (roles.includes("employee")) {
+    if (employeeType?.label?.trim()) {
+      return employeeType.label.trim();
+    }
+    return "Karyawan";
+  }
+  return roleAccessLabel(roles);
 }
 
 function mapUser(u: {
@@ -95,6 +117,10 @@ function mapUser(u: {
     branchId: string;
     branch: { id: string; code: string; name: string };
   }>;
+  employee?: {
+    employeeTypeCode: string | null;
+    employeeType: { code: string; label: string } | null;
+  } | null;
 }) {
   const branchIds =
     u.userBranches && u.userBranches.length > 0
@@ -117,6 +143,7 @@ function mapUser(u: {
   const roles = u.userRoles.map((ur) => ur.role.code);
   const branchNames = branches.map((b) => b.name);
   const branchCodes = branches.map((b) => b.code);
+  const employeeType = u.employee?.employeeType ?? null;
 
   return {
     id: u.id,
@@ -138,7 +165,10 @@ function mapUser(u: {
       : (u.branch?.name ?? null),
     roles,
     access: roles,
-    access_label: roleAccessLabel(roles),
+    employee_type_code:
+      u.employee?.employeeTypeCode ?? employeeType?.code ?? null,
+    employee_type_label: employeeType?.label ?? null,
+    access_label: accountAccessLabel(roles, employeeType),
   };
 }
 
@@ -204,6 +234,23 @@ async function ensureEmployeeRecord(
       where: { employeeId: existingEmp.id },
     });
     if (linked) throw businessError("Karyawan dengan ID ini sudah memiliki akun");
+
+    const normalizedType = employeeTypeCode?.trim().toUpperCase() ?? null;
+    if (normalizedType) {
+      const typeConfig = await prisma.employeeTypeConfig.findFirst({
+        where: { code: normalizedType, isActive: true },
+      });
+      if (typeConfig) {
+        await prisma.employee.update({
+          where: { id: existingEmp.id },
+          data: {
+            employeeTypeCode: normalizedType,
+            defaultShiftId: typeConfig.shiftIds[0] ?? existingEmp.defaultShiftId,
+          },
+        });
+      }
+    }
+
     return existingEmp.id;
   }
 
@@ -654,6 +701,141 @@ export async function updateUserRole(
     entityId: userId,
     oldValues: { role: currentRole },
     newValues: { role: newRole, branch_ids: branchIdsForUser(refreshed) },
+  });
+
+  await invalidateLeaderboardCaches();
+
+  return mapUser(refreshed);
+}
+
+export async function updateUserAccountRole(
+  actor: AuthUser,
+  userId: string,
+  data: {
+    account_role: string;
+    branch_ids?: string[];
+  }
+) {
+  if (actor.id === userId) {
+    throw forbidden("Tidak dapat mengubah peran akun sendiri");
+  }
+
+  const accountRole = trimStr(data.account_role);
+  if (!accountRole) {
+    throw validationError("account_role wajib");
+  }
+
+  if (accountRole.toLowerCase() === "manager") {
+    return updateUserRole(actor, userId, {
+      role: "manager",
+      branch_ids: data.branch_ids,
+    });
+  }
+
+  const typeCode = accountRole.trim().toUpperCase();
+  if (!typeCode || typeCode.length > 8) {
+    throw validationError("account_role tidak valid");
+  }
+
+  const typeConfig = await prisma.employeeTypeConfig.findFirst({
+    where: { code: typeCode, isActive: true },
+  });
+  if (!typeConfig) {
+    throw validationError("Tipe karyawan tidak dikenal atau sudah dihapus");
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    include: userInclude,
+  });
+  if (!user) throw notFound("User tidak ditemukan");
+
+  const currentRoles = user.userRoles.map((ur) => ur.role.code);
+  if (currentRoles.includes("owner")) {
+    throw forbidden("Role owner tidak dapat diubah");
+  }
+  if (userHasHiddenDirectoryRole(user.userRoles)) {
+    throw forbidden("Akun sistem tidak dapat diubah dari sini");
+  }
+
+  const isOwner = actor.roles.includes("owner");
+  if (!isOwner && !hasPermission(actor, "users.manage.branch")) {
+    throw forbidden("Tidak memiliki izin mengubah peran pengguna");
+  }
+
+  const targetBranchIds = branchIdsForUser(user);
+  if (!isOwner && !actorSharesBranchWith(actor, targetBranchIds)) {
+    throw forbidden();
+  }
+
+  const currentRole = primaryAccountRole(currentRoles);
+  if (!currentRole) {
+    throw validationError("Role pengguna tidak didukung untuk diubah");
+  }
+
+  const branchId =
+    data.branch_ids?.length === 1
+      ? data.branch_ids[0]!
+      : user.branchId ?? targetBranchIds[0];
+  if (!branchId) {
+    throw validationError("Cabang karyawan tidak ditemukan");
+  }
+
+  if (currentRole === "employee") {
+    const currentType =
+      user.employee?.employeeTypeCode ?? user.employee?.employeeType?.code ?? null;
+    if (currentType === typeCode) {
+      throw validationError(`Akun sudah berperan sebagai ${typeConfig.label}`);
+    }
+  }
+
+  if (currentRole === "manager") {
+    await updateUserRole(actor, userId, {
+      role: "employee",
+      branch_ids: [branchId],
+    });
+  }
+
+  let working = await prisma.user.findUniqueOrThrow({
+    where: { id: userId },
+    include: userInclude,
+  });
+
+  if (!working.employeeId) {
+    const employeeId = await ensureEmployeeRecord(
+      branchId,
+      working.nik,
+      working.fullName,
+      null,
+      typeCode
+    );
+    await prisma.user.update({
+      where: { id: userId },
+      data: { employeeId, branchId },
+    });
+    await attachEmployeeToUserAccount(userId, employeeId);
+  } else {
+    await updateEmployeeType(actor, branchId, working.employeeId, typeCode);
+  }
+
+  invalidateAuthUserCache(userId);
+
+  const refreshed = await prisma.user.findUniqueOrThrow({
+    where: { id: userId },
+    include: userInclude,
+  });
+
+  await writeAuditLog({
+    userId: actor.id,
+    action: "user.account_role.update",
+    entityType: "user",
+    entityId: userId,
+    oldValues: {
+      role: currentRole,
+      employee_type_code:
+        user.employee?.employeeTypeCode ?? user.employee?.employeeType?.code ?? null,
+    },
+    newValues: { account_role: typeCode },
   });
 
   await invalidateLeaderboardCaches();

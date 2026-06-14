@@ -1,31 +1,39 @@
 import { prisma } from "../lib/prisma.js";
 import { validationError } from "../lib/errors.js";
 import { todayWorkDateWib } from "../utils/format.js";
+import {
+  attendanceHasCheckedIn,
+  attendanceIsLate,
+} from "./branchAttendanceService.js";
 
 export async function getOwnerDashboardSummary() {
   const workDate = todayWorkDateWib();
-  const [employees, statusGroups] = await Promise.all([
+  const [employees, records] = await Promise.all([
     prisma.employee.count({ where: { isActive: true } }),
-    prisma.attendanceRecord.groupBy({
-      by: ["status"],
+    prisma.attendanceRecord.findMany({
       where: { workDate },
-      _count: { id: true },
+      select: { status: true, lateMinutes: true, checkInAt: true },
     }),
   ]);
 
-  const count = (s: string) =>
-    statusGroups.find((g) => g.status === s)?._count.id ?? 0;
-  const withRecord = statusGroups.reduce((sum, g) => sum + g._count.id, 0);
-  const absent = Math.max(0, employees - withRecord) + count("absent");
+  const withRecord = records.length;
+  const absent =
+    Math.max(0, employees - withRecord) +
+    records.filter((r) => r.status === "absent").length;
 
   return {
     work_date: workDate.toISOString().slice(0, 10),
     total_employees: employees,
-    present: count("present"),
-    late: count("late"),
+    present: records.filter((r) =>
+      attendanceHasCheckedIn(r.status, r.checkInAt)
+    ).length,
+    late: records.filter((r) => attendanceIsLate(r.status, r.lateMinutes))
+      .length,
     absent,
-    on_break: count("on_break"),
-    left: count("left"),
+    on_break: records.filter((r) => r.status === "on_break").length,
+    left: records.filter(
+      (r) => r.status === "left" || r.status === "forgot_checkout"
+    ).length,
   };
 }
 
@@ -36,16 +44,20 @@ export async function getOwnerBranchesComparison() {
     orderBy: { code: "asc" },
   });
 
-  const [employeeCounts, attendanceGroups] = await Promise.all([
+  const [employeeCounts, attendanceRecords] = await Promise.all([
     prisma.employee.groupBy({
       by: ["branchId"],
       where: { isActive: true },
       _count: { id: true },
     }),
-    prisma.attendanceRecord.groupBy({
-      by: ["branchId", "status"],
+    prisma.attendanceRecord.findMany({
       where: { workDate },
-      _count: { id: true },
+      select: {
+        branchId: true,
+        status: true,
+        lateMinutes: true,
+        checkInAt: true,
+      },
     }),
   ]);
 
@@ -57,19 +69,20 @@ export async function getOwnerBranchesComparison() {
     { present: number; late: number; onBreak: number }
   >();
 
-  for (const row of attendanceGroups) {
+  for (const row of attendanceRecords) {
     const current = statusByBranch.get(row.branchId) ?? {
       present: 0,
       late: 0,
       onBreak: 0,
     };
-    if (row.status === "present" || row.status === "left") {
-      current.present += row._count.id;
-    } else if (row.status === "on_break") {
-      current.onBreak += row._count.id;
-      current.present += row._count.id;
-    } else if (row.status === "late") {
-      current.late += row._count.id;
+    if (attendanceHasCheckedIn(row.status, row.checkInAt)) {
+      current.present += 1;
+    }
+    if (attendanceIsLate(row.status, row.lateMinutes)) {
+      current.late += 1;
+    }
+    if (row.status === "on_break") {
+      current.onBreak += 1;
     }
     statusByBranch.set(row.branchId, current);
   }

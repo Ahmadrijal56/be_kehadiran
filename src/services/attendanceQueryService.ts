@@ -332,10 +332,13 @@ export async function getTodayAttendance(employeeId: string) {
     where: { id: employeeId },
     select: {
       branch: { select: { breakAttendanceEnabled: true } },
+      employeeType: { select: { label: true } },
     },
   });
   const breakAttendanceEnabled =
     employee?.branch.breakAttendanceEnabled ?? true;
+  const employee_type_label =
+    employee?.employeeType?.label?.trim() ?? null;
 
   const row = await prisma.attendanceRecord.findUnique({
     where: { employeeId_workDate: { employeeId, workDate } },
@@ -351,6 +354,7 @@ export async function getTodayAttendance(employeeId: string) {
       check_out_at: null,
       break: null,
       break_attendance_enabled: breakAttendanceEnabled,
+      employee_type_label,
       work_duration_minutes: null,
       work_duration_label: null,
       is_overtime: false,
@@ -374,6 +378,7 @@ export async function getTodayAttendance(employeeId: string) {
   return {
     ...mapped,
     break_attendance_enabled: breakAttendanceEnabled,
+    employee_type_label,
     break: breakAttendanceEnabled ? mapped.break : null,
     work_duration_minutes: row.checkOutAt ? workDurationMinutes : null,
     work_duration_label:
@@ -400,6 +405,7 @@ export type TimelineDayRow = {
   work_date: string;
   employee_nik: string;
   employee_name: string;
+  employee_type_label: string | null;
   shift_code: string;
   shift_name: string;
   shift_start_time: string;
@@ -545,7 +551,13 @@ export async function listAttendanceTimeline(
     include: {
       shift: true,
       breakSessions: { orderBy: { breakStartAt: "asc" } },
-      employee: { select: { nik: true, fullName: true } },
+      employee: {
+        select: {
+          nik: true,
+          fullName: true,
+          employeeType: { select: { label: true } },
+        },
+      },
       branch: { select: { name: true, breakAttendanceEnabled: true } },
       kpiDailyScore: { select: { totalPoints: true } },
       ...sourceMessageInclude,
@@ -618,6 +630,8 @@ export async function listAttendanceTimeline(
           work_date: workDateStr,
           employee_nik: row.employee.nik,
           employee_name: row.employee.fullName,
+          employee_type_label:
+            row.employee.employeeType?.label?.trim() ?? null,
           shift_code: row.shift.code,
           shift_name: row.shift.name,
           shift_start_time: formatDbTimeHHmm(shiftWindow.startTime),

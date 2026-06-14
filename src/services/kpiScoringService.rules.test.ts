@@ -77,4 +77,30 @@ describe("calculateKpiScoreFromRules", () => {
     const r = calculateKpiScoreFromRules(-90, 1, custom);
     expect(r.points).toBe(5);
   });
+
+  it("datang 2–0 menit sebelum shift → 0 poin", () => {
+    const custom: KpiPointRuleRow[] = [
+      {
+        id: "early-neutral",
+        points: 0,
+        min_seconds: -120,
+        max_seconds: 0,
+        label: "Datang 2–0 menit sebelum shift",
+        sort_order: 1,
+        is_active: true,
+      },
+      {
+        id: "late",
+        points: -1,
+        min_seconds: 0,
+        max_seconds: 300,
+        label: "Telat 0–5 menit",
+        sort_order: 2,
+        is_active: true,
+      },
+    ];
+    expect(calculateKpiScoreFromRules(-90, 1, custom).points).toBe(0);
+    expect(calculateKpiScoreFromRules(0, 1, custom).points).toBe(0);
+    expect(calculateKpiScoreFromRules(60, 1, custom).points).toBe(-1);
+  });
 });

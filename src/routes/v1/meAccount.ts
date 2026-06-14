@@ -42,6 +42,7 @@ meAccountRouter.get(
     const profile = await prisma.user.findUnique({
       where: { id: user.id },
       select: {
+        employeeId: true,
         avatarUrl: true,
         avatarVisibility: true,
         updatedAt: true,
@@ -60,6 +61,15 @@ meAccountRouter.get(
       ? await mapAvatarProfileFields(profile, publicBaseUrl)
       : { avatar_url: null as string | null, avatar_visibility: "branch" as const };
 
+    const employee_type_label = profile?.employeeId
+      ? (
+          await prisma.employee.findUnique({
+            where: { id: profile.employeeId },
+            select: { employeeType: { select: { label: true } } },
+          })
+        )?.employeeType?.label?.trim() ?? null
+      : null;
+
     const branchPayload = profile?.branch
       ? {
           id: profile.branch.id,
@@ -73,6 +83,7 @@ meAccountRouter.get(
       data: {
         ...mapAuthUserResponse(user),
         ...avatar,
+        employee_type_label,
         branch: branchPayload,
       },
     });

@@ -25,7 +25,16 @@ describe("createBranchUser — akun baru mulai dari 0 poin", () => {
         isActive: true,
         userRoles: { some: { role: { code: "owner" } } },
       },
-      include: { userRoles: { include: { role: true } } },
+      select: {
+        id: true,
+        nik: true,
+        fullName: true,
+        email: true,
+        accountCode: true,
+        branchId: true,
+        employeeId: true,
+        userRoles: { include: { role: true } },
+      },
     });
     const manager = owner
       ? null
@@ -34,7 +43,16 @@ describe("createBranchUser — akun baru mulai dari 0 poin", () => {
             isActive: true,
             userRoles: { some: { role: { code: "manager" } } },
           },
-          include: { userRoles: { include: { role: true } } },
+          select: {
+            id: true,
+            nik: true,
+            fullName: true,
+            email: true,
+            accountCode: true,
+            branchId: true,
+            employeeId: true,
+            userRoles: { include: { role: true } },
+          },
         });
     const actorUser = owner ?? manager;
     if (!actorUser) throw new Error("seed owner/manager missing");
