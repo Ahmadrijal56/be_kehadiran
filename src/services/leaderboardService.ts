@@ -5,11 +5,12 @@ import type { AuthUser } from "./authService.js";
 import { hasPermission } from "./authService.js";
 import { sumDedupedMonthlyPointsForGroups } from "./kpiQueryService.js";
 import { attachLeaderboardAvatars } from "./avatarService.js";
-import { currentYearMonthWib } from "../utils/format.js";
+import { currentYearMonthWib, todayWorkDateWib } from "../utils/format.js";
+import { compareMonthlyPointsTieBreak } from "./publicRankingSort.js";
 import { activeEmployeeUserWhere } from "./activeEmployeeFilter.js";
 
 const CACHE_TTL = 90;
-const CACHE_VERSION = "v9";
+const CACHE_VERSION = "v10";
 
 type LeaderboardEntryBase = {
   rank: number;
@@ -207,6 +208,9 @@ async function buildLeaderboardEntries(
   }
   const pointsCache = await sumDedupedMonthlyPointsForGroups(kpiGroups, yearMonth);
 
+  const employeeIds = [...groups.values()].map((row) => row.id);
+  const todayCheckIns = await loadTodayCheckInByEmployee(employeeIds);
+
   const ranked = [...groups.entries()]
     .map(([key, representative]) => {
       const stats = pointsCache.get(key) ?? {
@@ -228,6 +232,11 @@ async function buildLeaderboardEntries(
     })
     .sort((a, b) => {
       if (b.total_points !== a.total_points) return b.total_points - a.total_points;
+      const checkInCmp = compareMonthlyPointsTieBreak(
+        todayCheckIns.get(a.employee_id),
+        todayCheckIns.get(b.employee_id)
+      );
+      if (checkInCmp !== 0) return checkInCmp;
       if (b.total_present_days !== a.total_present_days) {
         return b.total_present_days - a.total_present_days;
       }
@@ -239,6 +248,28 @@ async function buildLeaderboardEntries(
     .map((row, i) => ({ ...row, rank: i + 1 }));
 
   return ranked;
+}
+
+async function loadTodayCheckInByEmployee(
+  employeeIds: string[]
+): Promise<Map<string, Date>> {
+  if (employeeIds.length === 0) return new Map();
+  const workDate = todayWorkDateWib();
+  const rows = await prisma.attendanceRecord.findMany({
+    where: {
+      workDate,
+      employeeId: { in: employeeIds },
+      checkInAt: { not: null },
+    },
+    select: { employeeId: true, checkInAt: true },
+  });
+  return new Map(
+    rows
+      .filter((row): row is { employeeId: string; checkInAt: Date } =>
+        Boolean(row.checkInAt)
+      )
+      .map((row) => [row.employeeId, row.checkInAt] as const)
+  );
 }
 
 export async function computeBranchLeaderboard(
