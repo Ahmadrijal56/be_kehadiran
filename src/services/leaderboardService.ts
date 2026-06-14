@@ -10,7 +10,7 @@ import { compareMonthlyPointsTieBreak } from "./publicRankingSort.js";
 import { activeEmployeeUserWhere } from "./activeEmployeeFilter.js";
 
 const CACHE_TTL = 90;
-const CACHE_VERSION = "v10";
+const CACHE_VERSION = "v12";
 
 type LeaderboardEntryBase = {
   rank: number;
@@ -20,6 +20,8 @@ type LeaderboardEntryBase = {
   branch_id: string;
   branch_code: string;
   branch_name: string;
+  employee_type_code: string | null;
+  employee_type_label: string | null;
   total_points: number;
   total_late_count: number;
 };
@@ -35,6 +37,8 @@ type EmployeeRow = {
   accountCode: string | null;
   branchId: string;
   branch: { code: string; name: string };
+  employeeTypeCode: string | null;
+  employeeTypeLabel: string | null;
 };
 
 function accountGroupKey(row: EmployeeRow): string {
@@ -131,7 +135,12 @@ async function loadParticipantsForBranch(
       accountCode: true,
       employeeId: true,
       employee: {
-        select: { id: true, accountCode: true },
+        select: {
+          id: true,
+          accountCode: true,
+          employeeTypeCode: true,
+          employeeType: { select: { code: true, label: true } },
+        },
       },
     },
   });
@@ -145,6 +154,11 @@ async function loadParticipantsForBranch(
       accountCode: user.accountCode ?? user.employee!.accountCode,
       branchId: branch.id,
       branch: { code: branch.code, name: branch.name },
+      employeeTypeCode:
+        user.employee!.employeeTypeCode ??
+        user.employee!.employeeType?.code ??
+        null,
+      employeeTypeLabel: user.employee!.employeeType?.label ?? null,
     }));
 }
 
@@ -165,7 +179,12 @@ async function loadParticipantsGlobal(): Promise<EmployeeRow[]> {
         },
       },
       employee: {
-        select: { id: true, accountCode: true },
+        select: {
+          id: true,
+          accountCode: true,
+          employeeTypeCode: true,
+          employeeType: { select: { code: true, label: true } },
+        },
       },
     },
   });
@@ -186,6 +205,11 @@ async function loadParticipantsGlobal(): Promise<EmployeeRow[]> {
         accountCode: user.accountCode ?? user.employee!.accountCode,
         branchId: displayBranch.id,
         branch: { code: displayBranch.code, name: displayBranch.name },
+        employeeTypeCode:
+          user.employee!.employeeTypeCode ??
+          user.employee!.employeeType?.code ??
+          null,
+        employeeTypeLabel: user.employee!.employeeType?.label ?? null,
       };
     })
     .filter((row): row is EmployeeRow => row !== null);
@@ -225,6 +249,8 @@ async function buildLeaderboardEntries(
         branch_id: representative.branchId,
         branch_code: representative.branch.code,
         branch_name: representative.branch.name,
+        employee_type_code: representative.employeeTypeCode,
+        employee_type_label: representative.employeeTypeLabel,
         total_points: stats.total_points,
         total_late_count: stats.total_late_count,
         total_present_days: stats.total_present_days,

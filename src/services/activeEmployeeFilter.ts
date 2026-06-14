@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 
-/** User karyawan / load test yang masih aktif dan terhubung ke record HR aktif. */
+/** User karyawan aktif (bukan manager/owner/dev) yang terhubung ke record HR aktif. */
 export function activeEmployeeUserWhere(): Prisma.UserWhereInput {
   return {
     isActive: true,
@@ -9,7 +9,7 @@ export function activeEmployeeUserWhere(): Prisma.UserWhereInput {
     employee: { is: { isActive: true } },
     userRoles: {
       some: { role: { code: { in: ["employee", "load_test"] } } },
-      none: { role: { code: { in: ["owner", "developer"] } } },
+      none: { role: { code: { in: ["owner", "developer", "manager"] } } },
     },
   };
 }

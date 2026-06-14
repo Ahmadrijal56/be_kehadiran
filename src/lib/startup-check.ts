@@ -1,12 +1,51 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma.js";
-import { env } from "../config/env.js";
 import { getRedis } from "./redis.js";
 import { isObjectStorageConfigured, verifyObjectStorageConnection } from "./s3Client.js";
 import { resolveUploadBackend } from "../services/storageService.js";
 import { log } from "./logger.js";
 
+function assertPrismaClientMatchesSchema(): void {
+  const employee = Prisma.dmmf.datamodel.models.find((m) => m.name === "Employee");
+  const hasField = employee?.fields.some((f) => f.name === "shiftScheduleAssigned");
+  if (hasField) return;
+
+  const msg =
+    "Prisma Client usang (field shiftScheduleAssigned tidak ada). " +
+    "Jalankan: npx prisma generate — lalu hentikan SEMUA proses `npm run dev` backend dan start ulang.";
+  log("error", msg);
+  throw new Error(msg);
+}
+
+async function assertDatabaseHasShiftScheduleColumn(): Promise<void> {
+  const rows = await prisma.$queryRaw<Array<{ column_name: string }>>`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'employees'
+      AND column_name = 'shift_schedule_assigned'
+  `;
+  if (rows.length > 0) return;
+
+  const msg =
+    "Kolom employees.shift_schedule_assigned belum ada. " +
+    "Jalankan: npm run db:migrate:deploy";
+  log("error", msg);
+  throw new Error(msg);
+}
+
 export async function checkStartupHealth(): Promise<void> {
-  const checks: string[] = [];
+  assertPrismaClientMatchesSchema();
+
+  const checks: string[] = ["prisma client OK"];
+
+  try {
+    await assertDatabaseHasShiftScheduleColumn();
+    checks.push("shift_schedule_assigned OK");
+  } catch (err) {
+    checks.push("shift_schedule_assigned FAIL");
+    throw err;
+  }
 
   try {
     await prisma.$queryRaw`SELECT 1`;
