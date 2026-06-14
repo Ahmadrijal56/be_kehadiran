@@ -220,13 +220,23 @@ branchesRouter.post(
   asyncHandler(async (req, res) => {
     const branchId = branchIdParam(req);
     assertBranchAccess(req.user!, branchId);
-    const { nik, full_name, email, password, employee_id, role, branch_ids } = req.body ?? {};
+    const {
+      nik,
+      full_name,
+      email,
+      password,
+      employee_id,
+      employee_type_code,
+      role,
+      branch_ids,
+    } = req.body ?? {};
     const user = await createBranchUser(req.user!, branchId, {
       nik,
       full_name,
       email,
       password,
       employee_id,
+      employee_type_code,
       role,
       branch_ids,
     });

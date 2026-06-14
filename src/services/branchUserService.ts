@@ -21,6 +21,7 @@ import {
   attachEmployeeToUserAccount,
   ensureUserAccountCode,
 } from "./accountIdentityService.js";
+import { normalizeTypeCode } from "../constants/employeeTypes.js";
 import { invalidateLeaderboardCaches } from "./leaderboardService.js";
 import { purgeEmployeeOperationalData } from "./branchPurgeService.js";
 import { invalidateBranchAttendanceCache } from "./branchAttendanceService.js";
@@ -30,8 +31,18 @@ import {
   userHiddenFromDirectoryWhere,
 } from "../constants/directoryVisibility.js";
 import { updateEmployeeType } from "./organizationConfigService.js";
+import { timeFromDbTime } from "../utils/time.js";
 
 export type BranchUserRole = "employee" | "manager";
+
+export type EmployeeTypeShiftInfo = {
+  shift_id: number;
+  code: string;
+  name: string;
+  time_range: string | null;
+};
+
+type MappedBranchUser = ReturnType<typeof mapUser>;
 
 function trimStr(value: unknown): string {
   if (value == null) return "";
@@ -94,9 +105,11 @@ function accountAccessLabel(
   if (roles.includes("owner")) return "Owner";
   if (roles.includes("manager")) return "Manager";
   if (roles.includes("employee")) {
-    if (employeeType?.label?.trim()) {
-      return employeeType.label.trim();
-    }
+    const label = employeeType?.label?.trim();
+    const code = employeeType?.code?.trim();
+    if (code && label) return `${code} · ${label}`;
+    if (label) return label;
+    if (code) return code;
     return "Karyawan";
   }
   return roleAccessLabel(roles);
@@ -185,16 +198,150 @@ function branchIdsForUser(user: {
   return [...new Set(ids)];
 }
 
+async function enrichUsersWithTypeShifts(
+  users: MappedBranchUser[]
+): Promise<Array<MappedBranchUser & { employee_type_shifts: EmployeeTypeShiftInfo[] }>> {
+  if (users.length === 0) return [];
+
+  const typeCodes = new Set<string>();
+  const branchIds = new Set<string>();
+
+  for (const user of users) {
+    if (!user.roles.includes("employee") || !user.employee_type_code) continue;
+    typeCodes.add(user.employee_type_code);
+    const branchId = user.branch_id ?? user.branch_ids[0];
+    if (branchId) branchIds.add(branchId);
+  }
+
+  const typeShiftMap = new Map<string, number[]>();
+  if (typeCodes.size > 0) {
+    const typeConfigs = await prisma.employeeTypeConfig.findMany({
+      where: { code: { in: [...typeCodes] } },
+      select: { code: true, shiftIds: true },
+    });
+    for (const config of typeConfigs) {
+      typeShiftMap.set(config.code, config.shiftIds);
+    }
+  }
+
+  const { getBranchShiftSettings } = await import("./branchShiftConfigService.js");
+  const shiftDefsByBranch = new Map<string, Map<number, BranchShiftTimeDef>>();
+  await Promise.all(
+    [...branchIds].map(async (branchId) => {
+      const { shifts } = await getBranchShiftSettings(branchId);
+      const map = new Map<number, BranchShiftTimeDef>();
+      for (const shift of shifts) {
+        if (shift.is_off) continue;
+        map.set(shift.shift_id, {
+          code: shift.code,
+          name: shift.name,
+          time_range:
+            shift.time_range ??
+            (shift.start_time && shift.end_time
+              ? `${shift.start_time} – ${shift.end_time}`
+              : null),
+        });
+      }
+      shiftDefsByBranch.set(branchId, map);
+    })
+  );
+
+  const allShiftIds = new Set<number>();
+  for (const ids of typeShiftMap.values()) {
+    for (const id of ids) allShiftIds.add(id);
+  }
+  const masterShiftMap = await loadMasterShiftTimeMap([...allShiftIds]);
+
+  return users.map((user) => ({
+    ...user,
+    employee_type_shifts: resolveEmployeeTypeShifts(
+      user,
+      typeShiftMap,
+      shiftDefsByBranch,
+      masterShiftMap
+    ),
+  }));
+}
+
+type BranchShiftTimeDef = {
+  code: string;
+  name: string;
+  time_range: string | null;
+};
+
+async function loadMasterShiftTimeMap(
+  shiftIds: number[]
+): Promise<Map<number, BranchShiftTimeDef>> {
+  if (shiftIds.length === 0) return new Map();
+
+  const rows = await prisma.shift.findMany({
+    where: { id: { in: shiftIds } },
+    orderBy: { id: "asc" },
+  });
+
+  const map = new Map<number, BranchShiftTimeDef>();
+  for (const row of rows) {
+    const start = timeFromDbTime(row.startTime);
+    const end = timeFromDbTime(row.endTime);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const time_range =
+      row.startTime.getTime() === row.endTime.getTime()
+        ? null
+        : `${pad(start.hours)}:${pad(start.minutes)} – ${pad(end.hours)}:${pad(end.minutes)}`;
+    map.set(row.id, {
+      code: row.code,
+      name: row.name,
+      time_range,
+    });
+  }
+  return map;
+}
+
+function resolveEmployeeTypeShifts(
+  user: MappedBranchUser,
+  typeShiftMap: Map<string, number[]>,
+  shiftDefsByBranch: Map<string, Map<number, BranchShiftTimeDef>>,
+  masterShiftMap: Map<number, BranchShiftTimeDef>
+): EmployeeTypeShiftInfo[] {
+  if (!user.roles.includes("employee") || !user.employee_type_code) return [];
+
+  const shiftIds = typeShiftMap.get(user.employee_type_code);
+  if (!shiftIds?.length) return [];
+
+  const branchId = user.branch_id ?? user.branch_ids[0] ?? null;
+  const branchDefs = branchId ? shiftDefsByBranch.get(branchId) : undefined;
+
+  return [...shiftIds]
+    .sort((a, b) => a - b)
+    .map((id) => {
+      const branchShift = branchDefs?.get(id);
+      const masterShift = masterShiftMap.get(id);
+      const source = branchShift ?? masterShift;
+      return {
+        shift_id: id,
+        code: source?.code ?? `S${id}`,
+        name: source?.name ?? `Shift ${id}`,
+        time_range: source?.time_range ?? null,
+      };
+    });
+}
+
 export async function listBranchUsers(branchId: string) {
   const users = await prisma.user.findMany({
     where: {
       userBranches: { some: { branchId } },
+      userRoles: { some: { role: { code: "employee" } } },
+      NOT: {
+        userRoles: {
+          some: { role: { code: { in: ["manager", "owner"] } } },
+        },
+      },
       ...userHiddenFromDirectoryWhere(),
     },
     include: userInclude,
     orderBy: { fullName: "asc" },
   });
-  return users.map(mapUser);
+  return enrichUsersWithTypeShifts(users.map(mapUser));
 }
 
 export async function listAllUsers(branchId?: string) {
@@ -206,7 +353,7 @@ export async function listAllUsers(branchId?: string) {
     include: userInclude,
     orderBy: [{ branch: { name: "asc" } }, { fullName: "asc" }],
   });
-  return users.map(mapUser);
+  return enrichUsersWithTypeShifts(users.map(mapUser));
 }
 
 async function ensureEmployeeRecord(
@@ -235,7 +382,9 @@ async function ensureEmployeeRecord(
     });
     if (linked) throw businessError("Karyawan dengan ID ini sudah memiliki akun");
 
-    const normalizedType = employeeTypeCode?.trim().toUpperCase() ?? null;
+    const normalizedType = employeeTypeCode
+      ? normalizeTypeCode(employeeTypeCode)
+      : null;
     if (normalizedType) {
       const typeConfig = await prisma.employeeTypeConfig.findFirst({
         where: { code: normalizedType, isActive: true },
@@ -255,7 +404,10 @@ async function ensureEmployeeRecord(
   }
 
   let defaultShiftId = 1;
-  let typeCode: string | null = employeeTypeCode?.trim().toUpperCase() ?? null;
+  let typeCode: string | null = employeeTypeCode
+    ? normalizeTypeCode(employeeTypeCode)
+    : null;
+  if (typeCode === "") typeCode = null;
 
   if (typeCode) {
     const typeConfig = await prisma.employeeTypeConfig.findFirst({
@@ -526,7 +678,10 @@ export async function updateUserRole(
   }
 
   const isOwner = actor.roles.includes("owner");
-  if (!isOwner && !hasPermission(actor, "users.manage.branch")) {
+  if (!isOwner) {
+    throw forbidden("Hanya owner yang dapat mengubah peran login karyawan/manager");
+  }
+  if (!hasPermission(actor, "users.manage.branch") && !isOwner) {
     throw forbidden("Tidak memiliki izin mengubah role pengguna");
   }
 
@@ -725,23 +880,15 @@ export async function updateUserAccountRole(
     throw validationError("account_role wajib");
   }
 
-  if (accountRole.toLowerCase() === "manager") {
-    return updateUserRole(actor, userId, {
-      role: "manager",
-      branch_ids: data.branch_ids,
-    });
+  const isOwner = actor.roles.includes("owner");
+  if (!isOwner && !hasPermission(actor, "users.manage.branch")) {
+    throw forbidden("Tidak memiliki izin mengubah peran pengguna");
   }
 
-  const typeCode = accountRole.trim().toUpperCase();
-  if (!typeCode || typeCode.length > 8) {
-    throw validationError("account_role tidak valid");
-  }
-
-  const typeConfig = await prisma.employeeTypeConfig.findFirst({
-    where: { code: typeCode, isActive: true },
-  });
-  if (!typeConfig) {
-    throw validationError("Tipe karyawan tidak dikenal atau sudah dihapus");
+  if (!isOwner) {
+    if (accountRole.toLowerCase() === "manager") {
+      throw forbidden("Hanya owner yang dapat mengubah peran login menjadi manager");
+    }
   }
 
   const user = await prisma.user.findUnique({
@@ -758,11 +905,6 @@ export async function updateUserAccountRole(
     throw forbidden("Akun sistem tidak dapat diubah dari sini");
   }
 
-  const isOwner = actor.roles.includes("owner");
-  if (!isOwner && !hasPermission(actor, "users.manage.branch")) {
-    throw forbidden("Tidak memiliki izin mengubah peran pengguna");
-  }
-
   const targetBranchIds = branchIdsForUser(user);
   if (!isOwner && !actorSharesBranchWith(actor, targetBranchIds)) {
     throw forbidden();
@@ -771,6 +913,29 @@ export async function updateUserAccountRole(
   const currentRole = primaryAccountRole(currentRoles);
   if (!currentRole) {
     throw validationError("Role pengguna tidak didukung untuk diubah");
+  }
+
+  if (!isOwner && currentRole === "manager") {
+    throw forbidden("Hanya owner yang dapat mengubah peran akun manager");
+  }
+
+  if (accountRole.toLowerCase() === "manager") {
+    return updateUserRole(actor, userId, {
+      role: "manager",
+      branch_ids: data.branch_ids,
+    });
+  }
+
+  const typeCode = normalizeTypeCode(accountRole);
+  if (!typeCode) {
+    throw validationError("account_role tidak valid");
+  }
+
+  const typeConfig = await prisma.employeeTypeConfig.findFirst({
+    where: { code: typeCode, isActive: true },
+  });
+  if (!typeConfig) {
+    throw validationError("Tipe karyawan tidak dikenal atau sudah dihapus");
   }
 
   const branchId =

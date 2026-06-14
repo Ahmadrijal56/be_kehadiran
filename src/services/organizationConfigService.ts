@@ -1,5 +1,9 @@
 import type { AchievementType } from "@prisma/client";
-import { DEFAULT_EMPLOYEE_TYPES } from "../constants/employeeTypes.js";
+import {
+  DEFAULT_EMPLOYEE_TYPES,
+  LEGACY_EMPLOYEE_TYPE_LABEL,
+  normalizeTypeCode,
+} from "../constants/employeeTypes.js";
 import {
   DEFAULT_GAMIFICATION_SETTINGS,
   DEFAULT_KPI_POINT_RULES,
@@ -16,6 +20,8 @@ import { assertBranchAccess } from "./branchAccess.js";
 
 export type EmployeeTypeRow = {
   code: string;
+  /** Kode saat dimuat — dipakai mendeteksi rename (mis. A → q). */
+  original_code?: string;
   label: string;
   shift_ids: number[];
   sort_order: number;
@@ -105,6 +111,15 @@ export async function ensureOrganizationDefaults(): Promise<void> {
           sortOrder: t.sort_order,
         },
       });
+      continue;
+    }
+
+    const legacy = exists.label.match(LEGACY_EMPLOYEE_TYPE_LABEL);
+    if (legacy && legacy[1]!.toUpperCase() === t.code && exists.label !== t.label) {
+      await prisma.employeeTypeConfig.update({
+        where: { code: t.code },
+        data: { label: t.label },
+      });
     }
   }
 
@@ -141,37 +156,35 @@ export async function ensureOrganizationDefaults(): Promise<void> {
 }
 
 export async function listEmployeeTypes(): Promise<EmployeeTypeRow[]> {
-  await ensureOrganizationDefaults();
-  const rows = await prisma.employeeTypeConfig.findMany({
-    orderBy: { sortOrder: "asc" },
-  });
-  return rows.map((r) => ({
-    code: r.code,
-    label: r.label,
-    shift_ids: r.shiftIds,
-    sort_order: r.sortOrder,
-    is_active: r.isActive,
-  }));
+  try {
+    await ensureOrganizationDefaults();
+    const rows = await prisma.employeeTypeConfig.findMany({
+      orderBy: { sortOrder: "asc" },
+    });
+    return rows.map((r) => ({
+      code: r.code,
+      label: r.label,
+      shift_ids: r.shiftIds,
+      sort_order: r.sortOrder,
+      is_active: r.isActive,
+    }));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (
+      msg.includes("employee_type_configs") ||
+      msg.includes("does not exist") ||
+      msg.includes("P2021")
+    ) {
+      throw validationError(
+        "Tabel tipe karyawan belum tersedia. Jalankan migration database (prisma migrate deploy) di server."
+      );
+    }
+    throw err;
+  }
 }
 
 function isNewTypeCode(code: string): boolean {
   return code.startsWith("__new_");
-}
-
-function generateTypeCode(label: string, used: Set<string>): string {
-  const base =
-    label
-      .trim()
-      .toUpperCase()
-      .replace(/[^A-Z0-9]+/g, "")
-      .slice(0, 8) || "TIPE";
-  if (!used.has(base)) return base;
-  for (let n = 2; n <= 99; n++) {
-    const suffix = String(n);
-    const candidate = `${base.slice(0, Math.max(1, 8 - suffix.length))}${suffix}`;
-    if (!used.has(candidate)) return candidate;
-  }
-  throw validationError("Tidak dapat menghasilkan kode tipe unik");
 }
 
 export async function saveEmployeeTypes(
@@ -190,13 +203,20 @@ export async function saveEmployeeTypes(
   const validShiftIds = new Set(masters.map((s) => s.id));
 
   const usedCodes = new Set<string>();
-  const resolved: EmployeeTypeRow[] = [];
+  const resolved: Array<{
+    code: string;
+    original_code: string | null;
+    label: string;
+    shift_ids: number[];
+    sort_order: number;
+    is_active: boolean;
+  }> = [];
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i]!;
     const label = item.label?.trim();
     if (!label) {
-      throw validationError(`Nama tipe baris ${i + 1} wajib diisi`);
+      throw validationError(`Detail jabatan baris ${i + 1} wajib diisi`);
     }
     if (!Array.isArray(item.shift_ids) || item.shift_ids.length === 0) {
       throw validationError(`Shift untuk "${label}" wajib dipilih minimal satu`);
@@ -207,15 +227,17 @@ export async function saveEmployeeTypes(
       }
     }
 
-    let code = item.code?.trim() ?? "";
-    if (isNewTypeCode(code) || !code) {
-      code = generateTypeCode(label, usedCodes);
-    } else {
-      code = code.toUpperCase();
-      if (code.length > 8) {
-        throw validationError(`Kode tipe "${code}" terlalu panjang (maks. 8)`);
-      }
+    const code = normalizeTypeCode(item.code ?? "");
+    if (isNewTypeCode(item.code ?? "") || !code) {
+      throw validationError(`Kode tipe baris ${i + 1} wajib diisi`);
     }
+
+    const rawOriginal = item.original_code?.trim();
+    const original_code =
+      rawOriginal && !isNewTypeCode(rawOriginal)
+        ? normalizeTypeCode(rawOriginal)
+        : null;
+
     if (usedCodes.has(code)) {
       throw validationError(`Kode tipe "${code}" duplikat`);
     }
@@ -223,6 +245,7 @@ export async function saveEmployeeTypes(
 
     resolved.push({
       code,
+      original_code,
       label,
       shift_ids: item.shift_ids,
       sort_order: item.sort_order ?? i + 1,
@@ -234,9 +257,15 @@ export async function saveEmployeeTypes(
     select: { code: true, label: true },
   });
 
+  const keptOriginalCodes = new Set(
+    resolved
+      .map((r) => r.original_code)
+      .filter((c): c is string => Boolean(c))
+  );
+
   await prisma.$transaction(async (tx) => {
     for (const row of existing) {
-      if (usedCodes.has(row.code)) continue;
+      if (keptOriginalCodes.has(row.code)) continue;
       const inUse = await tx.employee.count({
         where: { employeeTypeCode: row.code, isActive: true },
       });
@@ -249,21 +278,53 @@ export async function saveEmployeeTypes(
     }
 
     for (const item of resolved) {
-      await tx.employeeTypeConfig.upsert({
+      const data = {
+        label: item.label,
+        shiftIds: item.shift_ids,
+        sortOrder: item.sort_order ?? 0,
+        isActive: item.is_active ?? true,
+      };
+
+      if (!item.original_code) {
+        await tx.employeeTypeConfig.create({
+          data: { code: item.code, ...data },
+        });
+        continue;
+      }
+
+      if (item.original_code === item.code) {
+        await tx.employeeTypeConfig.update({
+          where: { code: item.code },
+          data,
+        });
+        continue;
+      }
+
+      const oldRow = await tx.employeeTypeConfig.findUnique({
+        where: { code: item.original_code },
+      });
+      if (!oldRow) {
+        throw validationError(
+          `Tipe "${item.original_code}" tidak ditemukan — muat ulang halaman`
+        );
+      }
+
+      const taken = await tx.employeeTypeConfig.findUnique({
         where: { code: item.code },
-        create: {
-          code: item.code,
-          label: item.label,
-          shiftIds: item.shift_ids,
-          sortOrder: item.sort_order ?? 0,
-          isActive: item.is_active ?? true,
-        },
-        update: {
-          label: item.label,
-          shiftIds: item.shift_ids,
-          sortOrder: item.sort_order ?? 0,
-          isActive: item.is_active ?? true,
-        },
+      });
+      if (taken) {
+        throw validationError(`Kode tipe "${item.code}" sudah dipakai tipe lain`);
+      }
+
+      await tx.employeeTypeConfig.create({
+        data: { code: item.code, ...data },
+      });
+      await tx.employee.updateMany({
+        where: { employeeTypeCode: item.original_code },
+        data: { employeeTypeCode: item.code },
+      });
+      await tx.employeeTypeConfig.delete({
+        where: { code: item.original_code },
       });
     }
   });
