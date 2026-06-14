@@ -9,8 +9,9 @@ import { hasPermission } from "./authService.js";
 import { writeAuditLog } from "./auditService.js";
 import { OFF_SHIFT_ID } from "../constants/shifts.js";
 import { currentYearMonthWib } from "../utils/format.js";
-import { timeFromDbTime } from "../utils/time.js";
-import { toDateOnly } from "../utils/time.js";
+import { timeFromDbTime, toDateOnly } from "../utils/time.js";
+import { invalidatePapanCaches } from "./papanCacheInvalidation.js";
+import { recalculateAttendanceKpiForShiftChange } from "./attendanceKpiRecalcService.js";
 
 export type ShiftOption = {
   id: number;
@@ -219,12 +220,35 @@ export async function saveBranchShiftSchedule(
     }
   });
 
+  let kpiRecalculated = 0;
+  for (const ch of changes) {
+    const workDate = toDateOnly(new Date(`${ch.work_date}T00:00:00.000Z`));
+    const newShiftId =
+      ch.shift_id === null || ch.shift_id === empDefault[ch.employee_id]
+        ? empDefault[ch.employee_id]
+        : ch.shift_id;
+    const updated = await recalculateAttendanceKpiForShiftChange({
+      employeeId: ch.employee_id,
+      workDate,
+      newShiftId,
+      invalidateCache: false,
+    });
+    if (updated) kpiRecalculated += 1;
+  }
+  if (kpiRecalculated > 0) {
+    await invalidatePapanCaches(branchId);
+  }
+
   await writeAuditLog({
     userId: actor.id,
     action: "shift_schedule.update",
     entityType: "branch",
     entityId: branchId,
-    newValues: { year_month: yearMonth, change_count: changes.length },
+    newValues: {
+      year_month: yearMonth,
+      change_count: changes.length,
+      kpi_recalculated: kpiRecalculated,
+    },
   });
 
   return getBranchShiftSchedule(branchId, yearMonth);

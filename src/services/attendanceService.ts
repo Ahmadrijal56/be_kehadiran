@@ -1,17 +1,11 @@
-import type { AttendanceStatus, AttendanceType } from "@prisma/client";
+import type { AttendanceType } from "@prisma/client";
 import { businessError } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
-import { computeDeltaSeconds, toDateOnly } from "../utils/time.js";
+import { toDateOnly } from "../utils/time.js";
 import { resolveEffectiveShiftId, isOffShift } from "./employeeShiftScheduleService.js";
-import {
-  calculateKpiScoreFromRules,
-  type KpiScoreResult,
-} from "./kpiScoringService.js";
-import {
-  getActiveKpiRulesCached,
-  getGamificationSettingsCached,
-} from "./organizationConfigService.js";
+import type { KpiScoreResult } from "./kpiScoringService.js";
 import { invalidatePapanCaches } from "./papanCacheInvalidation.js";
+import { computeCheckInKpiFields } from "./attendanceKpiRecalcService.js";
 
 export type ProcessCheckInInput = {
   employeeId: string;
@@ -49,33 +43,15 @@ export async function processCheckIn(
   if (isOffShift(shiftId)) {
     throw businessError("Hari ini jadwal libur — absensi tidak diharapkan");
   }
-  const { getBranchShiftWindow } = await import("./branchShiftConfigService.js");
-  const shiftWindow = await getBranchShiftWindow(employee.branchId, shiftId);
 
-  const [settings, rules] = await Promise.all([
-    getGamificationSettingsCached(),
-    getActiveKpiRulesCached(),
-  ]);
-
-  const deltaSeconds = computeDeltaSeconds(
-    input.checkInAt,
-    shiftWindow.startTime,
-    workDate
+  const scored = await computeCheckInKpiFields(
+    employee.branchId,
+    shiftId,
+    workDate,
+    input.checkInAt
   );
-  const kpi = calculateKpiScoreFromRules(
-    deltaSeconds,
-    settings.late_threshold_seconds,
-    rules
-  );
-  const deltaMinutes =
-    deltaSeconds > settings.late_threshold_seconds
-      ? Math.floor(deltaSeconds / 60)
-      : deltaSeconds < -settings.late_threshold_seconds
-        ? Math.ceil(deltaSeconds / 60)
-        : 0;
-
-  const status: AttendanceStatus =
-    deltaSeconds > settings.late_threshold_seconds ? "late" : "present";
+  const { deltaMinutes, lateMinutesAttendance: lateMinutes, kpi, status } =
+    scored;
 
   const existing = await prisma.attendanceRecord.findUnique({
     where: {
@@ -107,7 +83,7 @@ export async function processCheckIn(
           sourceMessageId: input.sourceMessageId,
           photoUrl: input.photoUrl,
           deviceId: input.deviceId,
-          lateMinutes: Math.max(0, deltaMinutes),
+          lateMinutes,
           status,
         },
       })
@@ -122,7 +98,7 @@ export async function processCheckIn(
           sourceMessageId: input.sourceMessageId,
           photoUrl: input.photoUrl,
           deviceId: input.deviceId,
-          lateMinutes: Math.max(0, deltaMinutes),
+          lateMinutes,
           status,
         },
       });
