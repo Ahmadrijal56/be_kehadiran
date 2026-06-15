@@ -26,7 +26,7 @@ settingsRouter.get(
 
 settingsRouter.put(
   "/employee-types",
-  requirePermission("users.manage.branch"),
+  requireOwner,
   asyncHandler(async (req, res) => {
     const { employee_types } = req.body ?? {};
     res.json({

@@ -11,6 +11,7 @@ import {
   getOwnerTopEmployees,
 } from "../../services/ownerDashboardService.js";
 import { getGlobalLeaderboard } from "../../services/leaderboardService.js";
+import { attachLeaderboardAvatars } from "../../services/avatarService.js";
 import { assertOrgWideRankingEnabled } from "../../services/organizationConfigService.js";
 import { listAllUsers } from "../../services/branchUserService.js";
 import {
@@ -87,7 +88,13 @@ ownerRouter.get(
   asyncHandler(async (req, res) => {
     await assertOrgWideRankingEnabled();
     const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 10));
-    res.json({ data: await getOwnerTopEmployees(limit) });
+    const items = await getOwnerTopEmployees(limit);
+    const withAvatars = await attachLeaderboardAvatars(
+      items,
+      req.user!,
+      getRequestPublicBaseUrl(req)
+    );
+    res.json({ data: withAvatars });
   })
 );
 

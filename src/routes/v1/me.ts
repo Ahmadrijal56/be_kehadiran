@@ -38,6 +38,7 @@ import {
   getBranchLiveAttendanceBoard,
   getOrganizationLiveAttendanceBoard,
 } from "../../services/attendanceLiveBoardService.js";
+import { assertEmployeeLiveAttendanceEnabled } from "../../services/organizationConfigService.js";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -92,6 +93,7 @@ meRouter.get(
     };
 
     if (scope === "branch") {
+      await assertEmployeeLiveAttendanceEnabled();
       const employee = await prisma.employee.findUniqueOrThrow({
         where: { id: accountScope.currentEmployeeId },
         select: { branchId: true },
@@ -112,8 +114,13 @@ meRouter.get(
     const scope = (req.query.scope as string | undefined) ?? "branch";
 
     if (scope === "organization" || scope === "all") {
+      await assertEmployeeLiveAttendanceEnabled();
       res.json({ data: await getOrganizationLiveAttendanceBoard() });
       return;
+    }
+
+    if (scope === "branch") {
+      await assertEmployeeLiveAttendanceEnabled();
     }
 
     const employee = await prisma.employee.findUniqueOrThrow({
@@ -167,6 +174,7 @@ meRouter.get(
     };
 
     if (scope === "branch") {
+      await assertEmployeeLiveAttendanceEnabled();
       const employee = await prisma.employee.findUniqueOrThrow({
         where: { id: accountScope.currentEmployeeId },
         select: { branchId: true },

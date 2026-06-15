@@ -6,7 +6,7 @@ import {
   parseDateQuery,
   todayWorkDateWib,
 } from "../utils/format.js";
-import { resolveEffectiveShiftId, isOffShift } from "./employeeShiftScheduleService.js";
+import { resolveEffectiveShiftId, isExplicitOffDay } from "./employeeShiftScheduleService.js";
 import { getBranchShiftWindow } from "./branchShiftConfigService.js";
 import { computeDeltaMinutes, timeFromDbTime, toDateOnly } from "../utils/time.js";
 import {
@@ -908,7 +908,7 @@ export async function ensureAttendanceRecordForDate(
     where: { id: employeeId },
   });
   const shiftId = await resolveEffectiveShiftId(employeeId, dateOnly);
-  if (isOffShift(shiftId)) {
+  if (await isExplicitOffDay(employeeId, dateOnly)) {
     if (options?.skipOffDay) return null;
     throw validationError("Hari libur — tidak perlu pengajuan keterlambatan");
   }

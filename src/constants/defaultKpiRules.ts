@@ -64,6 +64,7 @@ export const DEFAULT_GAMIFICATION_SETTINGS = {
   late_threshold_seconds: 1,
   monthly_rewards_enabled: true,
   org_wide_ranking_enabled: false,
+  employee_live_attendance_enabled: false,
   top1_amount_idr: 100_000,
   top1_reward_label: "Voucher Indomaret",
   top2_amount_idr: 50_000,

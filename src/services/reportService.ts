@@ -107,9 +107,12 @@ export async function getDailyReport(from?: string, to?: string) {
     const dateStr = workDate.toISOString().slice(0, 10);
     for (const emp of employees) {
       const key = `${emp.id}:${dateStr}`;
+      const override = overrideByKey.get(key);
+      const scheduledOff = override === OFF_SHIFT_ID;
       const effectiveShiftId =
-        overrideByKey.get(key) ?? emp.defaultShiftId;
-      const scheduledOff = effectiveShiftId === OFF_SHIFT_ID;
+        override !== undefined
+          ? override
+          : emp.defaultShiftId;
       const att = recordByKey.get(key);
 
       if (scheduledOff && !att) continue;

@@ -111,6 +111,38 @@ export async function reviewLateExcuse(
   return updated;
 }
 
+export async function batchLateExcuseAttachments(excuseIds: string[]) {
+  if (excuseIds.length === 0) return new Map<string, Awaited<ReturnType<typeof lateExcuseAttachments>>>();
+
+  const attachments = await prisma.attachment.findMany({
+    where: { entityType: "late_excuse", entityId: { in: excuseIds } },
+  });
+
+  const byExcuse = new Map<string, typeof attachments>();
+  for (const a of attachments) {
+    const list = byExcuse.get(a.entityId) ?? [];
+    list.push(a);
+    byExcuse.set(a.entityId, list);
+  }
+
+  const result = new Map<string, Awaited<ReturnType<typeof lateExcuseAttachments>>>();
+  await Promise.all(
+    excuseIds.map(async (excuseId) => {
+      const rows = byExcuse.get(excuseId) ?? [];
+      const mapped = await Promise.all(
+        rows.map(async (a) => ({
+          id: a.id,
+          mime_type: a.mimeType,
+          size_bytes: a.sizeBytes,
+          url: await getSignedFileUrl(a.filePath).catch(() => null),
+        }))
+      );
+      result.set(excuseId, mapped);
+    })
+  );
+  return result;
+}
+
 export async function lateExcuseAttachments(excuseId: string) {
   const attachments = await prisma.attachment.findMany({
     where: { entityType: "late_excuse", entityId: excuseId },

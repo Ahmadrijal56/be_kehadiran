@@ -8,7 +8,7 @@ import {
   listBranchLateExcuses,
   mapLateExcuseResponse,
   reviewLateExcuse,
-  lateExcuseAttachments,
+  batchLateExcuseAttachments,
 } from "../../services/lateExcuseService.js";
 import { formatWibIso } from "../../utils/format.js";
 import { assertBranchAccess } from "../../services/branchAccess.js";
@@ -26,25 +26,24 @@ lateExcusesRouter.get(
     assertBranchAccess(user, branchId);
     const status = req.query.status as LateExcuseStatus | undefined;
     const items = await listBranchLateExcuses(branchId, status);
-    const data = await Promise.all(
-      items.map(async (e) => ({
-        id: e.id,
-        status: e.status,
-        reason_text: e.reasonText,
-        manager_note: e.managerNote,
-        created_at: formatWibIso(e.createdAt),
-        reviewed_at: formatWibIso(e.reviewedAt),
-        employee: {
-          nik: e.employee.nik,
-          full_name: e.employee.fullName,
-        },
-        attendance: {
-          work_date: e.attendance.workDate.toISOString().slice(0, 10),
-          late_minutes: e.attendance.lateMinutes,
-        },
-        attachments: await lateExcuseAttachments(e.id),
-      }))
-    );
+    const attachmentMap = await batchLateExcuseAttachments(items.map((e) => e.id));
+    const data = items.map((e) => ({
+      id: e.id,
+      status: e.status,
+      reason_text: e.reasonText,
+      manager_note: e.managerNote,
+      created_at: formatWibIso(e.createdAt),
+      reviewed_at: formatWibIso(e.reviewedAt),
+      employee: {
+        nik: e.employee.nik,
+        full_name: e.employee.fullName,
+      },
+      attendance: {
+        work_date: e.attendance.workDate.toISOString().slice(0, 10),
+        late_minutes: e.attendance.lateMinutes,
+      },
+      attachments: attachmentMap.get(e.id) ?? [],
+    }));
     res.json({ data });
   })
 );

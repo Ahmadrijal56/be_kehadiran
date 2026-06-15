@@ -1,13 +1,20 @@
 import { Router } from "express";
-import { authenticate } from "../../middleware/auth.js";
+import { authenticate, requirePermission } from "../../middleware/auth.js";
 import { asyncHandler } from "../../middleware/asyncHandler.js";
 import { listMonthlyAchievements } from "../../services/achievementService.js";
 
 export const achievementsRouter = Router();
 achievementsRouter.use(authenticate);
 
+const monthlyGuard = requirePermission(
+  "reports.export",
+  "attendance.read.all",
+  "kpi.adjust"
+);
+
 achievementsRouter.get(
   "/monthly",
+  monthlyGuard,
   asyncHandler(async (req, res) => {
     const month =
       (req.query.month as string) ?? (req.query.year_month as string);

@@ -68,6 +68,25 @@ export async function startBackgroundServices(): Promise<void> {
       });
     });
 
+  void import("./services/avatarService.js")
+    .then(({ migrateEphemeralAvatarsToDatabase }) =>
+      migrateEphemeralAvatarsToDatabase()
+    )
+    .then((result) => {
+      if (result.migrated > 0) {
+        log("info", "Avatar dipindahkan ke penyimpanan persisten", result);
+      } else if (result.missing > 0) {
+        log("warn", "Beberapa avatar lokal tidak ditemukan (perlu upload ulang)", {
+          missing: result.missing,
+        });
+      }
+    })
+    .catch((err) => {
+      log("debug", "Migrasi avatar dilewati", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+
   // --- Queue worker ---
   if (env.queueEnabled) {
     try {

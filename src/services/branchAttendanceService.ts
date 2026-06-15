@@ -2,7 +2,7 @@ import { prisma } from "../lib/prisma.js";
 import { formatWibIso, todayWorkDateWib } from "../utils/format.js";
 import { OFF_SHIFT_ID } from "../constants/shifts.js";
 import { cacheDeleteByPrefix, cacheGet, cacheSet } from "../lib/redis.js";
-import { resolveEffectiveShiftIdsForEmployees } from "./employeeShiftScheduleService.js";
+import { resolveEffectiveShiftIdsForEmployees, resolveShiftDayStatesForEmployees } from "./employeeShiftScheduleService.js";
 import { listActiveEmployeeIdsForBranch } from "./activeEmployeeFilter.js";
 import { getBranchShiftSettings } from "./branchShiftConfigService.js";
 import {
@@ -230,11 +230,20 @@ async function loadBranchRows(
       })),
       workDate
     );
+    const dayStates = await resolveShiftDayStatesForEmployees(
+      employees.map((emp) => ({
+        id: emp.id,
+        defaultShiftId: emp.defaultShiftId,
+        shiftScheduleAssigned: emp.shiftScheduleAssigned,
+      })),
+      workDate
+    );
 
     const rows = employees.map((emp) => {
       const att = emp.attendanceRecords[0];
       const effectiveShiftId = shiftMap.get(emp.id) ?? OFF_SHIFT_ID;
-      const scheduledOff = effectiveShiftId === OFF_SHIFT_ID;
+      const dayState = dayStates.get(emp.id);
+      const scheduledOff = dayState?.isExplicitOff ?? false;
       const timeRange = scheduledOff
         ? null
         : shiftTimeRangeById.get(effectiveShiftId) ?? null;

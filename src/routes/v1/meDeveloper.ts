@@ -34,7 +34,7 @@ import {
 } from "../../services/developerScenarioService.js";
 import { setDeveloperKpiBatch } from "../../services/developerToolsService.js";
 import { getDeveloperMonitorSnapshot } from "../../services/developerMonitorService.js";
-import { setOrgWideRankingEnabled } from "../../services/organizationConfigService.js";
+import { setOrgWideRankingEnabled, setEmployeeLiveAttendanceEnabled } from "../../services/organizationConfigService.js";
 import { executeFactoryReset } from "../../services/factoryResetService.js";
 import { handleDeveloperMonitorStream } from "./developerMonitorStream.js";
 
@@ -86,6 +86,16 @@ meDeveloperRouter.put(
     const enabled = Boolean((req.body as { enabled?: boolean })?.enabled);
     res.json({
       data: await setOrgWideRankingEnabled(req.user!, enabled),
+    });
+  })
+);
+
+meDeveloperRouter.put(
+  "/features/employee-live-attendance",
+  asyncHandler(async (req, res) => {
+    const enabled = Boolean((req.body as { enabled?: boolean })?.enabled);
+    res.json({
+      data: await setEmployeeLiveAttendanceEnabled(req.user!, enabled),
     });
   })
 );

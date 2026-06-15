@@ -2,7 +2,11 @@ import type { AttendanceType } from "@prisma/client";
 import { businessError } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
 import { toDateOnly } from "../utils/time.js";
-import { resolveEffectiveShiftId, isOffShift } from "./employeeShiftScheduleService.js";
+import {
+  isExplicitOffDay,
+  resolveEffectiveShiftId,
+  resolveShiftDayStatesForEmployees,
+} from "./employeeShiftScheduleService.js";
 import type { KpiScoreResult } from "./kpiScoringService.js";
 import { invalidatePapanCaches } from "./papanCacheInvalidation.js";
 import { computeCheckInKpiFields } from "./attendanceKpiRecalcService.js";
@@ -39,19 +43,45 @@ export async function processCheckIn(
     include: { defaultShift: true },
   });
 
-  const shiftId = await resolveShiftId(input.employeeId, workDate);
-  if (isOffShift(shiftId)) {
+  if (await isExplicitOffDay(input.employeeId, workDate)) {
     throw businessError("Hari ini jadwal libur — absensi tidak diharapkan");
   }
 
-  const scored = await computeCheckInKpiFields(
-    employee.branchId,
-    shiftId,
-    workDate,
-    input.checkInAt
-  );
-  const { deltaMinutes, lateMinutesAttendance: lateMinutes, kpi, status } =
-    scored;
+  const dayState = (
+    await resolveShiftDayStatesForEmployees(
+      [
+        {
+          id: input.employeeId,
+          defaultShiftId: employee.defaultShiftId,
+          shiftScheduleAssigned: employee.shiftScheduleAssigned,
+        },
+      ],
+      workDate
+    )
+  ).get(input.employeeId)!;
+
+  const shiftId = dayState.shiftId;
+  const pendingSchedule = dayState.isUnscheduled;
+
+  const scored = pendingSchedule
+    ? null
+    : await computeCheckInKpiFields(
+        employee.branchId,
+        shiftId,
+        workDate,
+        input.checkInAt
+      );
+
+  const deltaMinutes = scored?.deltaMinutes ?? 0;
+  const lateMinutes = scored?.lateMinutesAttendance ?? 0;
+  const kpi =
+    scored?.kpi ??
+    ({
+      points: 0,
+      ruleCode: "pending_schedule",
+      label: "Menunggu jadwal shift",
+    } satisfies KpiScoreResult);
+  const status = scored?.status ?? "present";
 
   const existing = await prisma.attendanceRecord.findUnique({
     where: {
@@ -103,24 +133,26 @@ export async function processCheckIn(
         },
       });
 
-  await prisma.kpiDailyScore.upsert({
-    where: {
-      employeeId_workDate: {
+  if (!pendingSchedule) {
+    await prisma.kpiDailyScore.upsert({
+      where: {
+        employeeId_workDate: {
+          employeeId: input.employeeId,
+          workDate,
+        },
+      },
+      create: {
         employeeId: input.employeeId,
         workDate,
+        checkInPoints: kpi.points,
+        adjustmentPoints: 0,
+        totalPoints: kpi.points,
+        lateMinutes: deltaMinutes,
+        ruleApplied: kpi.ruleCode,
       },
-    },
-    create: {
-      employeeId: input.employeeId,
-      workDate,
-      checkInPoints: kpi.points,
-      adjustmentPoints: 0,
-      totalPoints: kpi.points,
-      lateMinutes: deltaMinutes,
-      ruleApplied: kpi.ruleCode,
-    },
-    update: {},
-  });
+      update: {},
+    });
+  }
 
   await invalidatePapanCaches(employee.branchId);
 

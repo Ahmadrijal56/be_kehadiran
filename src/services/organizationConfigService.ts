@@ -42,6 +42,7 @@ export type GamificationSettingsRow = {
   late_threshold_seconds: number;
   monthly_rewards_enabled: boolean;
   org_wide_ranking_enabled: boolean;
+  employee_live_attendance_enabled: boolean;
   top1_amount_idr: number;
   top1_reward_label: string;
   top2_amount_idr: number;
@@ -71,6 +72,7 @@ export type PublicRulesPayload = {
   };
   features: {
     org_wide_ranking_enabled: boolean;
+    employee_live_attendance_enabled: boolean;
   };
 };
 
@@ -150,6 +152,8 @@ export async function ensureOrganizationDefaults(): Promise<void> {
       lateThresholdSeconds: DEFAULT_GAMIFICATION_SETTINGS.late_threshold_seconds,
       monthlyRewardsEnabled: DEFAULT_GAMIFICATION_SETTINGS.monthly_rewards_enabled,
       orgWideRankingEnabled: DEFAULT_GAMIFICATION_SETTINGS.org_wide_ranking_enabled,
+      employeeLiveAttendanceEnabled:
+        DEFAULT_GAMIFICATION_SETTINGS.employee_live_attendance_enabled,
       top1AmountIdr: DEFAULT_GAMIFICATION_SETTINGS.top1_amount_idr,
       top1RewardLabel: DEFAULT_GAMIFICATION_SETTINGS.top1_reward_label,
       top2AmountIdr: DEFAULT_GAMIFICATION_SETTINGS.top2_amount_idr,
@@ -353,6 +357,7 @@ export async function getGamificationSettings(): Promise<GamificationSettingsRow
     late_threshold_seconds: row.lateThresholdSeconds,
     monthly_rewards_enabled: row.monthlyRewardsEnabled,
     org_wide_ranking_enabled: row.orgWideRankingEnabled,
+    employee_live_attendance_enabled: row.employeeLiveAttendanceEnabled,
     top1_amount_idr: row.top1AmountIdr,
     top1_reward_label: row.top1RewardLabel,
     top2_amount_idr: row.top2AmountIdr,
@@ -446,6 +451,43 @@ export async function setOrgWideRankingEnabled(
     entityType: "gamification_settings",
     entityId: "default",
     newValues: { org_wide_ranking_enabled: Boolean(enabled) },
+  });
+
+  return getGamificationSettings();
+}
+
+export async function isEmployeeLiveAttendanceEnabled(): Promise<boolean> {
+  const settings = await getGamificationSettingsCached();
+  return settings.employee_live_attendance_enabled;
+}
+
+export async function assertEmployeeLiveAttendanceEnabled(): Promise<void> {
+  if (!(await isEmployeeLiveAttendanceEnabled())) {
+    throw forbidden(
+      "Live absen cabang untuk karyawan nonaktif. Aktifkan lewat panel developer jika diperlukan."
+    );
+  }
+}
+
+export async function setEmployeeLiveAttendanceEnabled(
+  actor: AuthUser,
+  enabled: boolean
+): Promise<GamificationSettingsRow> {
+  if (!actor.roles.includes("developer")) throw forbidden();
+
+  await ensureOrganizationDefaults();
+  await prisma.gamificationSettings.update({
+    where: { id: "default" },
+    data: { employeeLiveAttendanceEnabled: Boolean(enabled) },
+  });
+  invalidateConfigCache();
+
+  await writeAuditLog({
+    userId: actor.id,
+    action: "employee_live_attendance.update",
+    entityType: "gamification_settings",
+    entityId: "default",
+    newValues: { employee_live_attendance_enabled: Boolean(enabled) },
   });
 
   return getGamificationSettings();
@@ -639,6 +681,7 @@ async function buildPublicRules(): Promise<PublicRulesPayload> {
     },
     features: {
       org_wide_ranking_enabled: settings.org_wide_ranking_enabled,
+      employee_live_attendance_enabled: settings.employee_live_attendance_enabled,
     },
   };
 }

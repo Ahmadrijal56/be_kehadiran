@@ -3,7 +3,7 @@ import { isInstantOnWorkDateWib, todayWorkDateWib } from "../utils/format.js";
 import { timeFromDbTime } from "../utils/time.js";
 import { getBranchShiftWindow } from "./branchShiftConfigService.js";
 import {
-  isOffShift,
+  isExplicitOffDay,
   resolveEffectiveShiftId,
 } from "./employeeShiftScheduleService.js";
 import {
@@ -118,7 +118,7 @@ async function resolveShiftContext(
   workDate: Date
 ): Promise<AttendanceShiftContext | null> {
   const shiftId = await resolveEffectiveShiftId(employeeId, workDate);
-  if (isOffShift(shiftId)) return null;
+  if (await isExplicitOffDay(employeeId, workDate)) return null;
   return shiftContextFromId(branchId, shiftId);
 }
 

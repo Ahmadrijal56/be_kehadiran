@@ -8,11 +8,14 @@ import {
   deleteStoredFile,
   isDbFilePath,
   isLocalFilePath,
+  localFileKey,
+  readLocalFile,
   resolveStoredObjectKey,
   signLocalFileUrl,
   writeStoredBytes,
 } from "./storageService.js";
-import { deleteObject, objectKeyFromPublicUrl, shouldUseObjectStorage, formatStorageError } from "../lib/s3Client.js";
+import { writeDbBytes } from "./blobStorageService.js";
+import { deleteObject, objectKeyFromPublicUrl } from "../lib/s3Client.js";
 import { invalidateAuthUserCache } from "../lib/authUserCache.js";
 import { AVATAR_FORMAT_HINT, isAllowedAvatarUpload } from "../lib/avatarMime.js";
 import type { AuthUser } from "./authService.js";
@@ -202,6 +205,8 @@ function attachAvatarUrlsFromMap<T extends { nik: string }>(
 ): Array<T & { avatar_url: string | null }> {
   return items.map((item) => {
     const target = byNik.get(item.nik);
+    // Papan peringkat & tampilan publik: tampilkan foto jika ada di DB,
+    // tanpa filter avatar_visibility — semua role (karyawan/manager/owner) melihat sama.
     if (!target?.avatarUrl) return { ...item, avatar_url: null };
     return {
       ...item,
@@ -323,28 +328,6 @@ async function persistAvatarBytes(
   buffer: Buffer
 ): Promise<string> {
   const objectKey = avatarObjectKey(userId);
-
-  if (shouldUseObjectStorage()) {
-    try {
-      return await writeStoredBytes(objectKey, buffer, "image/webp");
-    } catch (err) {
-      log("error", "Avatar S3/R2 gagal disimpan", {
-        userId,
-        objectKey,
-        error: formatStorageError(err),
-        hint:
-          env.nodeEnv === "production"
-            ? "Periksa AWS_ENDPOINT (R2) dan credentials di Railway"
-            : "Jalankan MinIO lokal atau set UPLOAD_STORAGE_DIR",
-      });
-      if (env.nodeEnv === "production") {
-        throw businessError(
-          "Penyimpanan foto gagal. Hubungi admin — konfigurasi object storage (R2/S3) belum benar."
-        );
-      }
-    }
-  }
-
   try {
     return await writeStoredBytes(objectKey, buffer, "image/webp");
   } catch (err) {
@@ -473,4 +456,43 @@ export async function removeUserAvatar(
   });
   invalidateAuthUserCache(userId);
   return mapAvatarProfileFields(updated, publicBaseUrl);
+}
+
+/**
+ * Pindahkan avatar dari disk lokal (hilang saat deploy) ke PostgreSQL.
+ * Dipanggil sekali saat startup — aman dijalankan berulang.
+ */
+export async function migrateEphemeralAvatarsToDatabase(): Promise<{
+  migrated: number;
+  missing: number;
+}> {
+  const users = await prisma.user.findMany({
+    where: { avatarUrl: { startsWith: "local:" } },
+    select: { id: true, avatarUrl: true },
+  });
+
+  let migrated = 0;
+  let missing = 0;
+
+  for (const user of users) {
+    const stored = user.avatarUrl!;
+    const key = localFileKey(stored);
+    const file = await readLocalFile(key);
+    if (!file) {
+      missing += 1;
+      continue;
+    }
+
+    const objectKey = avatarObjectKey(user.id);
+    const dbPath = await writeDbBytes(objectKey, file.buffer, file.mimeType);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { avatarUrl: dbPath },
+    });
+    await deleteStoredFile(stored);
+    invalidateAuthUserCache(user.id);
+    migrated += 1;
+  }
+
+  return { migrated, missing };
 }

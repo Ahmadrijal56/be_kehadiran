@@ -179,9 +179,10 @@ export async function saveBranchShiftSchedule(
   const validDays = new Set(daysInMonth(yearMonth));
   const employees = await prisma.employee.findMany({
     where: { branchId, isActive: true },
-    select: { id: true },
+    select: { id: true, defaultShiftId: true },
   });
   const empIds = new Set(employees.map((e) => e.id));
+  const empById = new Map(employees.map((e) => [e.id, e]));
 
   const allowedShiftIds = new Set(
     (await listShiftOptions(branchId)).map((s) => s.id)
@@ -231,8 +232,21 @@ export async function saveBranchShiftSchedule(
   let kpiRecalculated = 0;
   for (const ch of changes) {
     const workDate = toDateOnly(new Date(`${ch.work_date}T00:00:00.000Z`));
+    const emp = empById.get(ch.employee_id);
     const newShiftId =
-      ch.shift_id === null ? OFF_SHIFT_ID : ch.shift_id;
+      ch.shift_id === null
+        ? emp?.defaultShiftId ?? OFF_SHIFT_ID
+        : ch.shift_id;
+    if (isOffShift(newShiftId)) {
+      const updated = await syncAttendanceShiftFromSchedule({
+        employeeId: ch.employee_id,
+        workDate,
+        newShiftId,
+        invalidateCache: false,
+      });
+      if (updated) kpiRecalculated += 1;
+      continue;
+    }
     const updated = await syncAttendanceShiftFromSchedule({
       employeeId: ch.employee_id,
       workDate,
@@ -306,40 +320,23 @@ export async function copyShiftScheduleFromPreviousMonth(
   return saveBranchShiftSchedule(actor, branchId, yearMonth, changes);
 }
 
-/** Shift efektif untuk tanggal kerja (override atau default). */
-export async function resolveEffectiveShiftId(
-  employeeId: string,
-  workDate: Date
-): Promise<number> {
-  const employee = await prisma.employee.findUniqueOrThrow({
-    where: { id: employeeId },
-    select: { defaultShiftId: true, shiftScheduleAssigned: true },
-  });
-  if (!employee.shiftScheduleAssigned) return OFF_SHIFT_ID;
+/** Shift efektif untuk tanggal kerja. */
+export type ShiftDayState = {
+  shiftId: number;
+  isExplicitOff: boolean;
+  isUnscheduled: boolean;
+};
 
-  const map = await resolveEffectiveShiftIdsForEmployees(
-    [
-      {
-        id: employeeId,
-        defaultShiftId: employee.defaultShiftId,
-        shiftScheduleAssigned: true,
-      },
-    ],
-    workDate
-  );
-  return map.get(employeeId) ?? OFF_SHIFT_ID;
-}
-
-/** Batch: satu query override untuk banyak karyawan. */
-export async function resolveEffectiveShiftIdsForEmployees(
+/** Batch: status jadwal per karyawan (libur eksplisit vs belum dijadwalkan vs shift kerja). */
+export async function resolveShiftDayStatesForEmployees(
   employees: Array<{
     id: string;
     defaultShiftId: number;
     shiftScheduleAssigned?: boolean;
   }>,
   workDate: Date
-): Promise<Map<string, number>> {
-  const result = new Map<string, number>();
+): Promise<Map<string, ShiftDayState>> {
+  const result = new Map<string, ShiftDayState>();
   if (employees.length === 0) return result;
 
   const dateOnly = toDateOnly(workDate);
@@ -355,16 +352,89 @@ export async function resolveEffectiveShiftIdsForEmployees(
   );
 
   for (const emp of employees) {
-    if (emp.shiftScheduleAssigned === false) {
-      result.set(emp.id, OFF_SHIFT_ID);
-      continue;
-    }
     const override = overrideMap.get(emp.id);
-    if (override !== undefined) {
-      result.set(emp.id, override);
+    if (override !== undefined && override === OFF_SHIFT_ID) {
+      result.set(emp.id, {
+        shiftId: OFF_SHIFT_ID,
+        isExplicitOff: true,
+        isUnscheduled: false,
+      });
+    } else if (override !== undefined) {
+      result.set(emp.id, {
+        shiftId: override,
+        isExplicitOff: false,
+        isUnscheduled: false,
+      });
     } else {
-      result.set(emp.id, OFF_SHIFT_ID);
+      result.set(emp.id, {
+        shiftId: emp.defaultShiftId,
+        isExplicitOff: false,
+        isUnscheduled: true,
+      });
     }
+  }
+  return result;
+}
+
+export async function isExplicitOffDay(
+  employeeId: string,
+  workDate: Date
+): Promise<boolean> {
+  const employee = await prisma.employee.findUniqueOrThrow({
+    where: { id: employeeId },
+    select: { defaultShiftId: true, shiftScheduleAssigned: true },
+  });
+  const states = await resolveShiftDayStatesForEmployees(
+    [
+      {
+        id: employeeId,
+        defaultShiftId: employee.defaultShiftId,
+        shiftScheduleAssigned: employee.shiftScheduleAssigned,
+      },
+    ],
+    workDate
+  );
+  return states.get(employeeId)?.isExplicitOff ?? false;
+}
+
+/** Shift efektif untuk tanggal kerja (override atau default). */
+export async function resolveEffectiveShiftId(
+  employeeId: string,
+  workDate: Date
+): Promise<number> {
+  const employee = await prisma.employee.findUniqueOrThrow({
+    where: { id: employeeId },
+    select: { defaultShiftId: true, shiftScheduleAssigned: true },
+  });
+
+  const map = await resolveShiftDayStatesForEmployees(
+    [
+      {
+        id: employeeId,
+        defaultShiftId: employee.defaultShiftId,
+        shiftScheduleAssigned: employee.shiftScheduleAssigned,
+      },
+    ],
+    workDate
+  );
+  const state = map.get(employeeId);
+  if (!state) return OFF_SHIFT_ID;
+  return state.isExplicitOff ? OFF_SHIFT_ID : state.shiftId;
+}
+
+/** Batch: satu query override untuk banyak karyawan. */
+export async function resolveEffectiveShiftIdsForEmployees(
+  employees: Array<{
+    id: string;
+    defaultShiftId: number;
+    shiftScheduleAssigned?: boolean;
+  }>,
+  workDate: Date
+): Promise<Map<string, number>> {
+  const states = await resolveShiftDayStatesForEmployees(employees, workDate);
+  const result = new Map<string, number>();
+  for (const [id, state] of states) {
+    result.set(id, state.isExplicitOff ? OFF_SHIFT_ID : state.shiftId);
   }
   return result;
 }

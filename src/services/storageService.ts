@@ -1,4 +1,4 @@
-import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import fs from "node:fs/promises";
@@ -134,30 +134,6 @@ export function validateUpload(file: Express.Multer.File): void {
   }
 }
 
-async function uploadToLocal(
-  file: Express.Multer.File,
-  prefix: string
-): Promise<{ filePath: string; mimeType: string; sizeBytes: number }> {
-  const mimeType = normalizeMime(file.mimetype);
-  const ext = fileExtension(mimeType);
-  const key = `${prefix}/${randomUUID()}.${ext}`;
-  const fullPath = resolveLocalPath(key);
-  await fs.mkdir(path.dirname(fullPath), { recursive: true });
-  await fs.writeFile(fullPath, file.buffer);
-  return { filePath: `${LOCAL_PREFIX}${key}`, mimeType, sizeBytes: file.size };
-}
-
-async function uploadToDatabase(
-  file: Express.Multer.File,
-  prefix: string
-): Promise<{ filePath: string; mimeType: string; sizeBytes: number }> {
-  const mimeType = normalizeMime(file.mimetype);
-  const ext = fileExtension(mimeType);
-  const key = `${prefix}/${randomUUID()}.${ext}`;
-  const filePath = await writeDbBytes(key, file.buffer, mimeType);
-  return { filePath, mimeType, sizeBytes: file.size };
-}
-
 /** Backend penyimpanan aktif untuk upload (S3 > volume > DB prod > disk lokal dev). */
 export function resolveUploadBackend(): "s3" | "volume" | "database" | "local" {
   if (shouldUseObjectStorage()) return "s3";
@@ -166,23 +142,68 @@ export function resolveUploadBackend(): "s3" | "volume" | "database" | "local" {
   return "local";
 }
 
+/** Urutan fallback jika S3 gagal — database lebih persisten daripada disk lokal. */
+function durableFallbackBackends(): Array<"volume" | "database" | "local"> {
+  const chain: Array<"volume" | "database" | "local"> = [];
+  if (env.uploadStorageDir) chain.push("volume");
+  chain.push("database");
+  if (env.nodeEnv !== "production") chain.push("local");
+  return chain;
+}
+
+async function writeBytesToBackend(
+  backend: "s3" | "volume" | "database" | "local",
+  key: string,
+  buffer: Buffer,
+  mimeType: string
+): Promise<string> {
+  switch (backend) {
+    case "s3":
+      await putObject(key, buffer, mimeType);
+      return key;
+    case "volume":
+    case "local":
+      return writeLocalBytes(key, buffer);
+    case "database":
+      return writeDbBytes(key, buffer, mimeType);
+  }
+}
+
 export async function writeStoredBytes(
   key: string,
   buffer: Buffer,
   mimeType: string
 ): Promise<string> {
-  const backend = resolveUploadBackend();
-  if (backend === "s3") {
-    await putObject(key, buffer, mimeType);
-    return key;
+  const primary = resolveUploadBackend();
+  try {
+    return await writeBytesToBackend(primary, key, buffer, mimeType);
+  } catch (err) {
+    if (primary !== "s3") throw err;
+
+    let lastErr: unknown = err;
+    for (const fallback of durableFallbackBackends()) {
+      try {
+        const stored = await writeBytesToBackend(fallback, key, buffer, mimeType);
+        log("warn", "Object storage tidak tersedia — file disimpan ke fallback persisten", {
+          fallback,
+          key,
+          error: err instanceof Error ? err.message : String(err),
+          hint:
+            fallback === "database"
+              ? "Data aman di PostgreSQL (tahan restart/deploy). Periksa AWS_ENDPOINT / MinIO jika ingin pakai R2."
+              : undefined,
+        });
+        return stored;
+      } catch (fallbackErr) {
+        lastErr = fallbackErr;
+      }
+    }
+
+    if (env.nodeEnv === "production") {
+      throw businessError("Gagal mengunggah file — penyimpanan tidak tersedia");
+    }
+    throw lastErr;
   }
-  if (backend === "volume") {
-    return writeLocalBytes(key, buffer);
-  }
-  if (backend === "database") {
-    return writeDbBytes(key, buffer, mimeType);
-  }
-  return writeLocalBytes(key, buffer);
 }
 
 export async function deleteStoredFile(storedPath: string): Promise<void> {
@@ -203,51 +224,17 @@ export async function deleteStoredFile(storedPath: string): Promise<void> {
   }
 }
 
-async function uploadToS3(
-  file: Express.Multer.File,
-  prefix: string
-): Promise<{ filePath: string; mimeType: string; sizeBytes: number }> {
-  const mimeType = normalizeMime(file.mimetype);
-  const ext = fileExtension(mimeType);
-  const key = `${prefix}/${randomUUID()}.${ext}`;
-  await requireS3().send(
-    new PutObjectCommand({
-      Bucket: env.awsBucket,
-      Key: key,
-      Body: file.buffer,
-      ContentType: mimeType,
-    })
-  );
-  return { filePath: key, mimeType, sizeBytes: file.size };
-}
-
 export async function uploadPrivateFile(
   file: Express.Multer.File,
   prefix: string
 ): Promise<{ filePath: string; mimeType: string; sizeBytes: number }> {
   validateUpload(file);
 
-  const backend = resolveUploadBackend();
-  if (backend === "s3") {
-    try {
-      return await uploadToS3(file, prefix);
-    } catch (err) {
-      if (env.nodeEnv !== "production") {
-        log("warn", "S3 upload failed, falling back to local storage", {
-          error: err instanceof Error ? err.message : String(err),
-        });
-        return uploadToLocal(file, prefix);
-      }
-      throw businessError("Gagal mengunggah file");
-    }
-  }
-  if (backend === "volume") {
-    return uploadToLocal(file, prefix);
-  }
-  if (backend === "database") {
-    return uploadToDatabase(file, prefix);
-  }
-  return uploadToLocal(file, prefix);
+  const mimeType = normalizeMime(file.mimetype);
+  const ext = fileExtension(mimeType);
+  const key = `${prefix}/${randomUUID()}.${ext}`;
+  const filePath = await writeStoredBytes(key, file.buffer, mimeType);
+  return { filePath, mimeType, sizeBytes: file.size };
 }
 
 export async function getSignedFileUrl(filePath: string, expiresSec = 3600): Promise<string> {
