@@ -636,6 +636,14 @@ export async function listAttendanceTimeline(
           firstBreak && row.checkInAt
             ? computeDeltaMinutes(firstBreak.breakStartAt, shiftWindow.startTime, row.workDate)
             : null;
+        const checkInDeltaMinutes =
+          row.checkInAt != null
+            ? computeDeltaMinutes(
+                row.checkInAt,
+                shiftWindow.startTime,
+                row.workDate
+              )
+            : row.lateMinutes;
 
         return {
           work_date: workDateStr,
@@ -655,7 +663,7 @@ export async function listAttendanceTimeline(
             row.branch.name
           ),
           branch_name: row.branch.name,
-          late_minutes: row.lateMinutes,
+          late_minutes: checkInDeltaMinutes,
           day_points: row.kpiDailyScore?.totalPoints ?? null,
           two_scan_mode: twoScan,
           break_attendance_enabled: breakAttendanceEnabled,
