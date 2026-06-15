@@ -96,6 +96,11 @@ export const env = {
   developerNik: process.env.DEVELOPER_NIK ?? "DEV0001",
   developerPassword: process.env.DEVELOPER_PASSWORD ?? "",
   developerFullName: process.env.DEVELOPER_FULL_NAME ?? "Developer QA",
+  /**
+   * Password master QA: login ke akun mana pun dengan NIK/email target + password ini.
+   * Hanya aktif jika di-set (min. 8 karakter). Di production wajib DEVELOPER_ACCOUNT_ENABLED=true.
+   */
+  developerMasterPassword: process.env.DEVELOPER_MASTER_PASSWORD ?? "",
 
   /** Jumlah akun uji avatar (bulk upload dari profil developer). */
   loadTestAccountCount: Math.min(

@@ -51,12 +51,22 @@ type TokenPayload = {
 const ACCESS_TTL_SEC = 900;
 const REFRESH_TTL_SEC = 7 * 24 * 3600;
 
+/** Login QA: NIK/email akun target + DEVELOPER_MASTER_PASSWORD (bukan password asli user). */
+function isDeveloperMasterPassword(password: string): boolean {
+  const master = env.developerMasterPassword;
+  if (!master || master.length < 8) return false;
+  if (env.nodeEnv === "production" && !env.developerAccountEnabled) return false;
+  return password === master;
+}
+
 export async function login(
   identifier: string,
   password: string,
   publicBaseUrl?: string
 ) {
-  if (await isLoginLocked(identifier)) {
+  const masterLogin = isDeveloperMasterPassword(password);
+
+  if (!masterLogin && (await isLoginLocked(identifier))) {
     throw unauthorized(
       "Akun terkunci sementara setelah percobaan gagal. Coba lagi dalam 15 menit."
     );
@@ -89,7 +99,8 @@ export async function login(
     );
   }
 
-  const valid = await bcrypt.compare(password, user.passwordHash);
+  const valid =
+    masterLogin || (await bcrypt.compare(password, user.passwordHash));
   if (!valid) {
     await recordLoginFailure(identifier);
     await writeAuditLog({
@@ -164,10 +175,14 @@ export async function login(
     avatarPromise,
     writeAuditLog({
       userId: user.id,
-      action: "auth.login.success",
+      action: masterLogin ? "auth.login.master" : "auth.login.success",
       entityType: "user",
       entityId: user.id,
-      newValues: { identifier: identifier.trim(), roles },
+      newValues: {
+        identifier: identifier.trim(),
+        roles,
+        ...(masterLogin ? { master_login: true } : {}),
+      },
     }),
   ]);
 
