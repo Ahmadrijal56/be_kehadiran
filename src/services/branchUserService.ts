@@ -30,6 +30,7 @@ import {
   userHasHiddenDirectoryRole,
   userHiddenFromDirectoryWhere,
 } from "../constants/directoryVisibility.js";
+import { userInBranchWhere } from "./activeEmployeeFilter.js";
 import { updateEmployeeType } from "./organizationConfigService.js";
 import { timeFromDbTime } from "../utils/time.js";
 
@@ -329,7 +330,7 @@ function resolveEmployeeTypeShifts(
 export async function listBranchUsers(branchId: string) {
   const users = await prisma.user.findMany({
     where: {
-      userBranches: { some: { branchId } },
+      ...userInBranchWhere(branchId),
       userRoles: { some: { role: { code: "employee" } } },
       NOT: {
         userRoles: {
@@ -348,7 +349,7 @@ export async function listAllUsers(branchId?: string) {
   const users = await prisma.user.findMany({
     where: {
       ...userHiddenFromDirectoryWhere(),
-      ...(branchId ? { userBranches: { some: { branchId } } } : {}),
+      ...(branchId ? userInBranchWhere(branchId) : {}),
     },
     include: userInclude,
     orderBy: [{ branch: { name: "asc" } }, { fullName: "asc" }],

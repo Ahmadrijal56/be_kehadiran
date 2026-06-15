@@ -6,6 +6,7 @@ import type {
 import { prisma } from "../lib/prisma.js";
 import { approvalTypeLabel } from "../constants/approvalTypes.js";
 import { formatWorkDateLabelLong } from "../utils/format.js";
+import { userInBranchWhere } from "./activeEmployeeFilter.js";
 
 const ACHIEVEMENT_LABELS: Record<AchievementType, string> = {
   top_1: "Juara 1",
@@ -113,7 +114,7 @@ export async function notifyManagersNewApprovalRequest(
   const managers = await prisma.user.findMany({
     where: {
       isActive: true,
-      userBranches: { some: { branchId } },
+      ...userInBranchWhere(branchId),
       userRoles: { some: { role: { code: "manager" } } },
     },
     select: { id: true },

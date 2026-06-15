@@ -22,6 +22,11 @@ import {
   resolveEffectiveShiftId,
 } from "./employeeShiftScheduleService.js";
 import { approvalTypeLabel } from "../constants/approvalTypes.js";
+import {
+  getAttendanceKpiStartDate,
+  isBeforeAttendanceKpiStart,
+  resolveEligibleWorkDateMin,
+} from "./attendanceKpiWindowService.js";
 
 type ShiftSummary = {
   id: number;
@@ -98,15 +103,22 @@ function parseWorkDateInput(value: string): Date {
   return toDateOnly(new Date(`${value}T00:00:00.000Z`));
 }
 
-function assertWorkDateInRange(workDate: Date) {
+function assertWorkDateInRange(workDate: Date, kpiStart: Date) {
   const today = todayWorkDateWib();
   const min = new Date(today);
   min.setUTCDate(min.getUTCDate() - LOOKBACK_DAYS);
+  const effectiveMin =
+    kpiStart > toDateOnly(min) ? kpiStart : toDateOnly(min);
   if (workDate > today) {
     throw validationError("Tanggal tidak boleh di masa depan");
   }
-  if (workDate < min) {
-    throw validationError(`Hanya bisa mengajukan ${LOOKBACK_DAYS} hari ke belakang`);
+  if (workDate < effectiveMin) {
+    throw validationError(
+      `Tanggal di luar periode pengajuan (mulai ${effectiveMin.toISOString().slice(0, 10)})`
+    );
+  }
+  if (isBeforeAttendanceKpiStart(workDate, kpiStart)) {
+    throw validationError("Tanggal sebelum mulai operasional KPI kehadiran");
   }
 }
 
@@ -148,6 +160,9 @@ export async function listEligibleApprovalDates(user: AuthUser) {
   });
 
   const today = todayWorkDateWib();
+  const minDate = await resolveEligibleWorkDateMin(today, LOOKBACK_DAYS);
+  const todayStr = today.toISOString().slice(0, 10);
+
   const dates: Array<{
     work_date: string;
     attendance_id: string | null;
@@ -162,7 +177,9 @@ export async function listEligibleApprovalDates(user: AuthUser) {
     const d = new Date(today);
     d.setUTCDate(d.getUTCDate() - i);
     const workDate = toDateOnly(d);
+    if (workDate < minDate) break;
     const workDateStr = workDate.toISOString().slice(0, 10);
+    const isToday = workDateStr === todayStr;
 
     const attendance = await prisma.attendanceRecord.findUnique({
       where: { employeeId_workDate: { employeeId, workDate } },
@@ -172,6 +189,11 @@ export async function listEligibleApprovalDates(user: AuthUser) {
       where: { employeeId, workDate },
       select: { type: true, status: true },
     });
+
+    const hasCheckIn = Boolean(attendance?.checkInAt);
+    if (existing.length === 0 && !hasCheckIn && !isToday) {
+      continue;
+    }
 
     const pendingOrApproved = new Set(
       existing
@@ -190,7 +212,7 @@ export async function listEligibleApprovalDates(user: AuthUser) {
       canSubmit.push("forgot_checkout");
     }
 
-    if (canSubmit.length === 0 && existing.length === 0 && !attendance?.checkInAt) {
+    if (canSubmit.length === 0 && existing.length === 0) {
       continue;
     }
 
@@ -226,7 +248,8 @@ export async function createApprovalRequest(
   });
 
   const workDate = parseWorkDateInput(data.work_date);
-  assertWorkDateInRange(workDate);
+  const kpiStart = await getAttendanceKpiStartDate();
+  assertWorkDateInRange(workDate, kpiStart);
 
   const reason = data.reason_text?.trim();
   if (!reason || reason.length < 5) {

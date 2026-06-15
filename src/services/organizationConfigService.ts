@@ -17,6 +17,7 @@ import type { AuthUser } from "./authService.js";
 import { hasPermission } from "./authService.js";
 import { writeAuditLog } from "./auditService.js";
 import { assertBranchAccess } from "./branchAccess.js";
+import { invalidateAttendanceKpiStartCache } from "./attendanceKpiWindowService.js";
 
 export type EmployeeTypeRow = {
   code: string;
@@ -43,6 +44,8 @@ export type GamificationSettingsRow = {
   monthly_rewards_enabled: boolean;
   org_wide_ranking_enabled: boolean;
   employee_live_attendance_enabled: boolean;
+  /** YYYY-MM-DD — mulai KPI kehadiran operasional; null = otomatis */
+  attendance_kpi_start_date: string | null;
   top1_amount_idr: number;
   top1_reward_label: string;
   top2_amount_idr: number;
@@ -104,11 +107,9 @@ function assertOwner(actor: AuthUser) {
 }
 
 export async function ensureOrganizationDefaults(): Promise<void> {
-  for (const t of DEFAULT_EMPLOYEE_TYPES) {
-    const exists = await prisma.employeeTypeConfig.findUnique({
-      where: { code: t.code },
-    });
-    if (!exists) {
+  const typeCount = await prisma.employeeTypeConfig.count();
+  if (typeCount === 0) {
+    for (const t of DEFAULT_EMPLOYEE_TYPES) {
       await prisma.employeeTypeConfig.create({
         data: {
           code: t.code,
@@ -117,15 +118,25 @@ export async function ensureOrganizationDefaults(): Promise<void> {
           sortOrder: t.sort_order,
         },
       });
-      continue;
     }
-
-    const legacy = exists.label.match(LEGACY_EMPLOYEE_TYPE_LABEL);
-    if (legacy && legacy[1]!.toUpperCase() === t.code && exists.label !== t.label) {
-      await prisma.employeeTypeConfig.update({
+  } else {
+    for (const t of DEFAULT_EMPLOYEE_TYPES) {
+      const exists = await prisma.employeeTypeConfig.findUnique({
         where: { code: t.code },
-        data: { label: t.label },
       });
+      if (!exists) continue;
+
+      const legacy = exists.label.match(LEGACY_EMPLOYEE_TYPE_LABEL);
+      if (
+        legacy &&
+        legacy[1]!.toUpperCase() === t.code &&
+        exists.label !== t.label
+      ) {
+        await prisma.employeeTypeConfig.update({
+          where: { code: t.code },
+          data: { label: t.label },
+        });
+      }
     }
   }
 
@@ -172,6 +183,7 @@ export async function listEmployeeTypes(): Promise<EmployeeTypeRow[]> {
     });
     return rows.map((r) => ({
       code: r.code,
+      original_code: r.code,
       label: r.label,
       shift_ids: r.shiftIds,
       sort_order: r.sortOrder,
@@ -266,15 +278,15 @@ export async function saveEmployeeTypes(
     select: { code: true, label: true },
   });
 
-  const keptOriginalCodes = new Set(
-    resolved
-      .map((r) => r.original_code)
-      .filter((c): c is string => Boolean(c))
-  );
+  const keptCodes = new Set<string>();
+  for (const item of resolved) {
+    keptCodes.add(item.code);
+    if (item.original_code) keptCodes.add(item.original_code);
+  }
 
   await prisma.$transaction(async (tx) => {
     for (const row of existing) {
-      if (keptOriginalCodes.has(row.code)) continue;
+      if (keptCodes.has(row.code)) continue;
       const inUse = await tx.employee.count({
         where: { employeeTypeCode: row.code, isActive: true },
       });
@@ -358,6 +370,9 @@ export async function getGamificationSettings(): Promise<GamificationSettingsRow
     monthly_rewards_enabled: row.monthlyRewardsEnabled,
     org_wide_ranking_enabled: row.orgWideRankingEnabled,
     employee_live_attendance_enabled: row.employeeLiveAttendanceEnabled,
+    attendance_kpi_start_date: row.attendanceKpiStartDate
+      ? row.attendanceKpiStartDate.toISOString().slice(0, 10)
+      : null,
     top1_amount_idr: row.top1AmountIdr,
     top1_reward_label: row.top1RewardLabel,
     top2_amount_idr: row.top2AmountIdr,
@@ -502,6 +517,7 @@ export function invalidateConfigCache() {
   settingsCacheAt = 0;
   publicRulesCacheAt = 0;
   allRulesCacheAt = 0;
+  invalidateAttendanceKpiStartCache();
   void cacheDel(PUBLIC_RULES_REDIS_KEY);
 }
 
@@ -516,6 +532,7 @@ export async function saveGamificationConfig(
     top2_reward_label?: string;
     top3_amount_idr?: number;
     top3_reward_label?: string;
+    attendance_kpi_start_date?: string | null;
     kpi_rules?: Array<{
       id?: string;
       points: number;
@@ -556,6 +573,18 @@ export async function saveGamificationConfig(
     }
   }
 
+  let attendanceKpiStartDate: Date | null | undefined;
+  if (data.attendance_kpi_start_date !== undefined) {
+    const raw = data.attendance_kpi_start_date;
+    if (raw === null || String(raw).trim() === "") {
+      attendanceKpiStartDate = null;
+    } else if (!/^\d{4}-\d{2}-\d{2}$/.test(String(raw))) {
+      throw validationError("attendance_kpi_start_date format YYYY-MM-DD");
+    } else {
+      attendanceKpiStartDate = new Date(`${String(raw)}T00:00:00.000Z`);
+    }
+  }
+
   await prisma.gamificationSettings.update({
     where: { id: "default" },
     data: {
@@ -567,6 +596,9 @@ export async function saveGamificationConfig(
       top2RewardLabel: data.top2_reward_label?.trim(),
       top3AmountIdr: data.top3_amount_idr,
       top3RewardLabel: data.top3_reward_label?.trim(),
+      ...(attendanceKpiStartDate !== undefined
+        ? { attendanceKpiStartDate }
+        : {}),
     },
   });
 

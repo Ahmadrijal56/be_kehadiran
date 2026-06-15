@@ -14,6 +14,13 @@ export function activeEmployeeUserWhere(): Prisma.UserWhereInput {
   };
 }
 
+/** User terkait cabang — via membership atau branchId utama (data legacy). */
+export function userInBranchWhere(branchId: string): Prisma.UserWhereInput {
+  return {
+    OR: [{ branchId }, { userBranches: { some: { branchId } } }],
+  };
+}
+
 /** @deprecated gunakan activeEmployeeUserWhere() */
 export const ACTIVE_EMPLOYEE_USER_WHERE = activeEmployeeUserWhere();
 
@@ -24,7 +31,7 @@ export async function listActiveEmployeeIdsForBranch(
   const users = await prisma.user.findMany({
     where: {
       ...activeEmployeeUserWhere(),
-      OR: [{ branchId }, { userBranches: { some: { branchId } } }],
+      ...userInBranchWhere(branchId),
     },
     select: { employeeId: true },
   });

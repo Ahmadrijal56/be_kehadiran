@@ -471,6 +471,8 @@ model GamificationSettings {
   monthlyRewardsEnabled Boolean  @default(true) @map("monthly_rewards_enabled")
   orgWideRankingEnabled Boolean  @default(false) @map("org_wide_ranking_enabled")
   employeeLiveAttendanceEnabled Boolean @default(false) @map("employee_live_attendance_enabled")
+  /// Tanggal mulai KPI kehadiran operasional (WIB). Null = otomatis dari data pertama.
+  attendanceKpiStartDate DateTime? @map("attendance_kpi_start_date") @db.Date
   top1AmountIdr         Int      @default(100000) @map("top1_amount_idr")
   top1RewardLabel       String   @default("Voucher Indomaret") @map("top1_reward_label") @db.VarChar(150)
   top2AmountIdr         Int      @default(50000) @map("top2_amount_idr")

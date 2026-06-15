@@ -14,6 +14,11 @@ import {
   formatWorkDurationLabel,
   resolveOvertimeFields,
 } from "../utils/workDuration.js";
+import {
+  getAttendanceKpiStartDate,
+  isBeforeAttendanceKpiStart,
+  resolveEligibleWorkDateMin,
+} from "./attendanceKpiWindowService.js";
 
 const LATE_EXCUSE_LOOKBACK_DAYS = 14;
 
@@ -948,12 +953,19 @@ export async function getAttendanceForLateExcuse(
   if (!row) throw notFound("Absensi tidak ditemukan");
 
   const today = todayWorkDateWib();
-  const oldest = new Date(today);
-  oldest.setUTCDate(oldest.getUTCDate() - (LATE_EXCUSE_LOOKBACK_DAYS - 1));
+  const kpiStart = await getAttendanceKpiStartDate();
+  const minDate = await resolveEligibleWorkDateMin(
+    today,
+    LATE_EXCUSE_LOOKBACK_DAYS - 1
+  );
 
-  if (row.workDate < oldest) {
+  if (isBeforeAttendanceKpiStart(row.workDate, kpiStart)) {
+    throw validationError("Tanggal sebelum mulai operasional KPI kehadiran");
+  }
+
+  if (row.workDate < minDate) {
     throw validationError(
-      `Pengajuan hanya untuk absensi ${LATE_EXCUSE_LOOKBACK_DAYS} hari terakhir`
+      `Pengajuan hanya untuk absensi sejak ${minDate.toISOString().slice(0, 10)}`
     );
   }
 
@@ -971,6 +983,10 @@ export async function listLateExcuseEligibleAttendances(
   currentEmployeeId?: string
 ) {
   const today = todayWorkDateWib();
+  const minDate = await resolveEligibleWorkDateMin(
+    today,
+    LATE_EXCUSE_LOOKBACK_DAYS - 1
+  );
   const current =
     currentEmployeeId ??
     (Array.isArray(employeeIds) ? employeeIds[0] : employeeIds);
@@ -978,13 +994,10 @@ export async function listLateExcuseEligibleAttendances(
     await ensureAttendanceRecordForDate(current, today, { skipOffDay: true });
   }
 
-  const oldest = new Date(today);
-  oldest.setUTCDate(oldest.getUTCDate() - (LATE_EXCUSE_LOOKBACK_DAYS - 1));
-
   const records = await prisma.attendanceRecord.findMany({
     where: {
       ...employeeWhere(employeeIds),
-      workDate: { gte: oldest, lte: today },
+      workDate: { gte: minDate, lte: today },
     },
     include: {
       shift: true,
@@ -996,7 +1009,8 @@ export async function listLateExcuseEligibleAttendances(
     orderBy: { workDate: "desc" },
   });
 
-  return records.map((row) => {
+  return records
+    .map((row) => {
     const workDateStr = row.workDate.toISOString().slice(0, 10);
     const isToday =
       workDateStr === today.toISOString().slice(0, 10);
@@ -1019,5 +1033,12 @@ export async function listLateExcuseEligibleAttendances(
       excuse_status: latestExcuse?.status ?? null,
       pre_checkin: row.status === "absent" && isToday && !row.checkInAt,
     };
-  });
+  })
+    .filter(
+      (row) =>
+        row.can_submit ||
+        row.excuse_status != null ||
+        row.pre_checkin ||
+        row.check_in_at != null
+    );
 }
