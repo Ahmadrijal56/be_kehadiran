@@ -92,6 +92,7 @@ model Branch {
   kpiMonthlyAggregates KpiMonthlyAggregate[]
   announcements      Announcement[]
   branchShifts       BranchShift[]
+  employeeTypes      EmployeeTypeConfig[]
 
   @@map("branches")
 }
@@ -118,6 +119,10 @@ model BranchShift {
   isActive  Boolean  @default(true) @map("is_active")
   startTime DateTime @map("start_time") @db.Time
   endTime   DateTime @map("end_time") @db.Time
+  /// Label kode per cabang (null = pakai shifts.code).
+  code      String?  @db.VarChar(10)
+  /// Label nama per cabang (null = pakai shifts.name).
+  name      String?  @db.VarChar(50)
 
   branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
   shift  Shift  @relation(fields: [shiftId], references: [id])
@@ -161,15 +166,21 @@ model RolePermission {
 }
 
 model EmployeeTypeConfig {
-  code      String   @id @db.VarChar(8)
-  label     String   @db.VarChar(100)
-  shiftIds  Int[]    @map("shift_ids")
-  sortOrder Int      @default(0) @map("sort_order")
-  isActive  Boolean  @default(true) @map("is_active")
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+  id                     String   @id @default(uuid()) @db.Uuid
+  branchId               String   @map("branch_id") @db.Uuid
+  code                   String   @db.VarChar(8)
+  label                  String   @db.VarChar(100)
+  shiftIds               Int[]    @map("shift_ids")
+  sortOrder              Int      @default(0) @map("sort_order")
+  isActive               Boolean  @default(true) @map("is_active")
+  breakAttendanceEnabled Boolean  @default(true) @map("break_attendance_enabled")
+  updatedAt              DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
+  branch    Branch     @relation(fields: [branchId], references: [id], onDelete: Cascade)
   employees Employee[]
 
+  @@unique([branchId, code])
+  @@index([branchId], map: "idx_employee_type_configs_branch")
   @@map("employee_type_configs")
 }
 
@@ -187,7 +198,7 @@ model Employee {
 
   branch              Branch              @relation(fields: [branchId], references: [id])
   defaultShift        Shift               @relation(fields: [defaultShiftId], references: [id])
-  employeeType        EmployeeTypeConfig? @relation(fields: [employeeTypeCode], references: [code])
+  employeeType        EmployeeTypeConfig? @relation(fields: [branchId, employeeTypeCode], references: [branchId, code])
   user                User?
   employeeShifts      EmployeeShift[]
   attendanceRecords   AttendanceRecord[]

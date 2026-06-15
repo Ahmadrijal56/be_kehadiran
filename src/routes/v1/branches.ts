@@ -34,6 +34,8 @@ import {
   listBranchUsers,
 } from "../../services/branchUserService.js";
 import {
+  createBranchShift,
+  deleteBranchShift,
   getBranchShiftSettings,
   saveBranchShiftSettings,
 } from "../../services/branchShiftConfigService.js";
@@ -51,6 +53,8 @@ import { listBranchKpiEvaluations } from "../../services/kpiAdjustmentService.js
 import {
   listBranchEmployeesWithType,
   updateEmployeeType,
+  listEmployeeTypes,
+  saveEmployeeTypes,
 } from "../../services/organizationConfigService.js";
 import {
   buildUserImportTemplateExcel,
@@ -373,6 +377,41 @@ branchesRouter.put(
   })
 );
 
+branchesRouter.post(
+  "/:branchId/shifts",
+  requirePermission("users.manage.branch"),
+  asyncHandler(async (req, res) => {
+    const branchId = branchIdParam(req);
+    assertBranchAccess(req.user!, branchId);
+    const { code, name, start_time, end_time } = req.body ?? {};
+    if (!start_time || !end_time) {
+      throw validationError("start_time dan end_time wajib");
+    }
+    const data = await createBranchShift(req.user!, branchId, {
+      code,
+      name,
+      start_time: String(start_time),
+      end_time: String(end_time),
+    });
+    res.status(201).json({ data });
+  })
+);
+
+branchesRouter.delete(
+  "/:branchId/shifts/:shiftId",
+  requirePermission("users.manage.branch"),
+  asyncHandler(async (req, res) => {
+    const branchId = branchIdParam(req);
+    assertBranchAccess(req.user!, branchId);
+    const shiftId = Number(req.params.shiftId);
+    if (!Number.isInteger(shiftId) || shiftId < 1) {
+      throw validationError("shiftId tidak valid");
+    }
+    const data = await deleteBranchShift(req.user!, branchId, shiftId);
+    res.json({ data });
+  })
+);
+
 branchesRouter.get(
   "/:branchId/shift-schedule",
   requirePermission("users.manage.branch"),
@@ -474,6 +513,29 @@ branchesRouter.get(
     const branchId = branchIdParam(req);
     res.json({
       data: await listBranchEmployeesWithType(req.user!, branchId),
+    });
+  })
+);
+
+branchesRouter.get(
+  "/:branchId/employee-types",
+  requirePermission("users.manage.branch"),
+  asyncHandler(async (req, res) => {
+    const branchId = branchIdParam(req);
+    assertBranchAccess(req.user!, branchId);
+    res.json({ data: await listEmployeeTypes(branchId) });
+  })
+);
+
+branchesRouter.put(
+  "/:branchId/employee-types",
+  requirePermission("users.manage.branch"),
+  asyncHandler(async (req, res) => {
+    const branchId = branchIdParam(req);
+    assertBranchAccess(req.user!, branchId);
+    const { employee_types } = req.body ?? {};
+    res.json({
+      data: await saveEmployeeTypes(req.user!, branchId, employee_types ?? []),
     });
   })
 );

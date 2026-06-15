@@ -5,6 +5,7 @@ import {
   attendanceHasCheckedIn,
   attendanceIsLate,
 } from "./branchAttendanceService.js";
+import { attachTypeShiftsToLeaderboardEntries } from "./leaderboardService.js";
 
 export async function getOwnerDashboardSummary() {
   const workDate = todayWorkDateWib();
@@ -146,18 +147,35 @@ export async function getOwnerTopEmployees(limit = 10) {
   const aggregates = await prisma.kpiMonthlyAggregate.findMany({
     where: { yearMonth: ym },
     include: {
-      employee: { select: { nik: true, fullName: true } },
-      branch: { select: { code: true, name: true } },
+      employee: {
+        select: {
+          id: true,
+          nik: true,
+          fullName: true,
+          employeeTypeCode: true,
+          employeeType: { select: { code: true, label: true } },
+        },
+      },
+      branch: { select: { id: true, code: true, name: true } },
     },
     orderBy: { totalPoints: "desc" },
     take: limit,
   });
 
-  return aggregates.map((a, i) => ({
+  const base = aggregates.map((a, i) => ({
     rank: i + 1,
+    employee_id: a.employeeId,
     nik: a.employee.nik,
     full_name: a.employee.fullName,
+    branch_id: a.branchId,
     branch_code: a.branch.code,
+    branch_name: a.branch.name,
+    employee_type_code:
+      a.employee.employeeTypeCode ?? a.employee.employeeType?.code ?? null,
+    employee_type_label: a.employee.employeeType?.label ?? null,
     total_points: a.totalPoints,
+    total_late_count: a.totalLateCount,
   }));
+
+  return attachTypeShiftsToLeaderboardEntries(base);
 }

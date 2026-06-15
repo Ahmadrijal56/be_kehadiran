@@ -215,13 +215,16 @@ async function enrichUsersWithTypeShifts(
   }
 
   const typeShiftMap = new Map<string, number[]>();
-  if (typeCodes.size > 0) {
+  if (typeCodes.size > 0 && branchIds.size > 0) {
     const typeConfigs = await prisma.employeeTypeConfig.findMany({
-      where: { code: { in: [...typeCodes] } },
-      select: { code: true, shiftIds: true },
+      where: {
+        branchId: { in: [...branchIds] },
+        code: { in: [...typeCodes] },
+      },
+      select: { branchId: true, code: true, shiftIds: true },
     });
     for (const config of typeConfigs) {
-      typeShiftMap.set(config.code, config.shiftIds);
+      typeShiftMap.set(`${config.branchId}:${config.code}`, config.shiftIds);
     }
   }
 
@@ -306,11 +309,13 @@ function resolveEmployeeTypeShifts(
 ): EmployeeTypeShiftInfo[] {
   if (!user.roles.includes("employee") || !user.employee_type_code) return [];
 
-  const shiftIds = typeShiftMap.get(user.employee_type_code);
+  const branchId = user.branch_id ?? user.branch_ids[0] ?? null;
+  if (!branchId) return [];
+
+  const shiftIds = typeShiftMap.get(`${branchId}:${user.employee_type_code}`);
   if (!shiftIds?.length) return [];
 
-  const branchId = user.branch_id ?? user.branch_ids[0] ?? null;
-  const branchDefs = branchId ? shiftDefsByBranch.get(branchId) : undefined;
+  const branchDefs = shiftDefsByBranch.get(branchId);
 
   return [...shiftIds]
     .sort((a, b) => a - b)
@@ -388,7 +393,7 @@ async function ensureEmployeeRecord(
       : null;
     if (normalizedType) {
       const typeConfig = await prisma.employeeTypeConfig.findFirst({
-        where: { code: normalizedType, isActive: true },
+        where: { branchId, code: normalizedType, isActive: true },
       });
       if (typeConfig) {
         await prisma.employee.update({
@@ -417,7 +422,7 @@ async function ensureEmployeeRecord(
 
   if (typeCode) {
     const typeConfig = await prisma.employeeTypeConfig.findFirst({
-      where: { code: typeCode, isActive: true },
+      where: { branchId, code: typeCode, isActive: true },
     });
     if (typeConfig) {
       if (typeConfig.shiftIds.length > 0) {
@@ -944,19 +949,19 @@ export async function updateUserAccountRole(
     throw validationError("account_role tidak valid");
   }
 
-  const typeConfig = await prisma.employeeTypeConfig.findFirst({
-    where: { code: typeCode, isActive: true },
-  });
-  if (!typeConfig) {
-    throw validationError("Tipe karyawan tidak dikenal atau sudah dihapus");
-  }
-
   const branchId =
     data.branch_ids?.length === 1
       ? data.branch_ids[0]!
       : user.branchId ?? targetBranchIds[0];
   if (!branchId) {
     throw validationError("Cabang karyawan tidak ditemukan");
+  }
+
+  const typeConfig = await prisma.employeeTypeConfig.findFirst({
+    where: { branchId, code: typeCode, isActive: true },
+  });
+  if (!typeConfig) {
+    throw validationError("Tipe karyawan tidak dikenal atau sudah dihapus di cabang ini");
   }
 
   if (currentRole === "employee") {

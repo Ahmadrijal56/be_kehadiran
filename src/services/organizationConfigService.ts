@@ -9,7 +9,7 @@ import {
   DEFAULT_KPI_POINT_RULES,
 } from "../constants/defaultKpiRules.js";
 import { formatOffsetRange } from "../lib/kpiOffsetTime.js";
-import { WORK_SHIFT_IDS } from "../constants/shifts.js";
+import { OFF_SHIFT_ID } from "../constants/shifts.js";
 import { forbidden, validationError } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
 import { cacheDel, cacheGet, cacheSet } from "../lib/redis.js";
@@ -27,6 +27,7 @@ export type EmployeeTypeRow = {
   shift_ids: number[];
   sort_order: number;
   is_active: boolean;
+  break_attendance_enabled: boolean;
 };
 
 export type KpiPointRuleRow = {
@@ -106,23 +107,12 @@ function assertOwner(actor: AuthUser) {
   if (!actor.roles.includes("owner")) throw forbidden();
 }
 
-export async function ensureOrganizationDefaults(): Promise<void> {
-  const typeCount = await prisma.employeeTypeConfig.count();
-  if (typeCount === 0) {
-    for (const t of DEFAULT_EMPLOYEE_TYPES) {
-      await prisma.employeeTypeConfig.create({
-        data: {
-          code: t.code,
-          label: t.label,
-          shiftIds: [...t.shift_ids],
-          sortOrder: t.sort_order,
-        },
-      });
-    }
-  } else {
+export async function ensureBranchEmployeeTypeDefaults(branchId: string): Promise<void> {
+  const typeCount = await prisma.employeeTypeConfig.count({ where: { branchId } });
+  if (typeCount > 0) {
     for (const t of DEFAULT_EMPLOYEE_TYPES) {
       const exists = await prisma.employeeTypeConfig.findUnique({
-        where: { code: t.code },
+        where: { branchId_code: { branchId, code: t.code } },
       });
       if (!exists) continue;
 
@@ -133,11 +123,34 @@ export async function ensureOrganizationDefaults(): Promise<void> {
         exists.label !== t.label
       ) {
         await prisma.employeeTypeConfig.update({
-          where: { code: t.code },
+          where: { branchId_code: { branchId, code: t.code } },
           data: { label: t.label },
         });
       }
     }
+    return;
+  }
+
+  for (const t of DEFAULT_EMPLOYEE_TYPES) {
+    await prisma.employeeTypeConfig.create({
+      data: {
+        branchId,
+        code: t.code,
+        label: t.label,
+        shiftIds: [...t.shift_ids],
+        sortOrder: t.sort_order,
+      },
+    });
+  }
+}
+
+export async function ensureOrganizationDefaults(): Promise<void> {
+  const branches = await prisma.branch.findMany({
+    where: { isActive: true },
+    select: { id: true },
+  });
+  for (const branch of branches) {
+    await ensureBranchEmployeeTypeDefaults(branch.id);
   }
 
   const ruleCount = await prisma.kpiPointRule.count();
@@ -175,10 +188,11 @@ export async function ensureOrganizationDefaults(): Promise<void> {
   });
 }
 
-export async function listEmployeeTypes(): Promise<EmployeeTypeRow[]> {
+export async function listEmployeeTypes(branchId: string): Promise<EmployeeTypeRow[]> {
   try {
-    await ensureOrganizationDefaults();
+    await ensureBranchEmployeeTypeDefaults(branchId);
     const rows = await prisma.employeeTypeConfig.findMany({
+      where: { branchId },
       orderBy: { sortOrder: "asc" },
     });
     return rows.map((r) => ({
@@ -188,6 +202,7 @@ export async function listEmployeeTypes(): Promise<EmployeeTypeRow[]> {
       shift_ids: r.shiftIds,
       sort_order: r.sortOrder,
       is_active: r.isActive,
+      break_attendance_enabled: r.breakAttendanceEnabled,
     }));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -210,18 +225,20 @@ function isNewTypeCode(code: string): boolean {
 
 export async function saveEmployeeTypes(
   actor: AuthUser,
+  branchId: string,
   items: EmployeeTypeRow[]
 ) {
   assertCanManageEmployeeTypes(actor);
+  assertBranchAccess(actor, branchId);
   if (!Array.isArray(items) || items.length === 0) {
     throw validationError("Minimal satu tipe karyawan wajib ada");
   }
 
-  const masters = await prisma.shift.findMany({
-    where: { id: { in: [...WORK_SHIFT_IDS] } },
-    select: { id: true },
-  });
-  const validShiftIds = new Set(masters.map((s) => s.id));
+  const { listBranchShiftOptions } = await import("./branchShiftConfigService.js");
+  const branchShifts = await listBranchShiftOptions(branchId);
+  const validShiftIds = new Set(
+    branchShifts.filter((s) => !s.is_off).map((s) => s.id)
+  );
 
   const usedCodes = new Set<string>();
   const resolved: Array<{
@@ -231,6 +248,7 @@ export async function saveEmployeeTypes(
     shift_ids: number[];
     sort_order: number;
     is_active: boolean;
+    break_attendance_enabled: boolean;
   }> = [];
 
   for (let i = 0; i < items.length; i++) {
@@ -244,7 +262,9 @@ export async function saveEmployeeTypes(
       : [];
     for (const sid of shiftIds) {
       if (!validShiftIds.has(sid)) {
-        throw validationError(`Shift ${sid} tidak valid untuk "${label}"`);
+        throw validationError(
+          `Shift ${sid} tidak tersedia di cabang ini untuk "${label}"`
+        );
       }
     }
 
@@ -271,10 +291,12 @@ export async function saveEmployeeTypes(
       shift_ids: shiftIds,
       sort_order: item.sort_order ?? i + 1,
       is_active: item.is_active ?? true,
+      break_attendance_enabled: item.break_attendance_enabled !== false,
     });
   }
 
   const existing = await prisma.employeeTypeConfig.findMany({
+    where: { branchId },
     select: { code: true, label: true },
   });
 
@@ -288,14 +310,16 @@ export async function saveEmployeeTypes(
     for (const row of existing) {
       if (keptCodes.has(row.code)) continue;
       const inUse = await tx.employee.count({
-        where: { employeeTypeCode: row.code, isActive: true },
+        where: { branchId, employeeTypeCode: row.code, isActive: true },
       });
       if (inUse > 0) {
         throw validationError(
-          `Tipe "${row.label}" masih dipakai ${inUse} karyawan — ubah peran mereka dulu sebelum hapus`
+          `Tipe "${row.label}" masih dipakai ${inUse} karyawan di cabang ini — ubah peran mereka dulu sebelum hapus`
         );
       }
-      await tx.employeeTypeConfig.delete({ where: { code: row.code } });
+      await tx.employeeTypeConfig.delete({
+        where: { branchId_code: { branchId, code: row.code } },
+      });
     }
 
     for (const item of resolved) {
@@ -304,25 +328,26 @@ export async function saveEmployeeTypes(
         shiftIds: item.shift_ids,
         sortOrder: item.sort_order ?? 0,
         isActive: item.is_active ?? true,
+        breakAttendanceEnabled: item.break_attendance_enabled,
       };
 
       if (!item.original_code) {
         await tx.employeeTypeConfig.create({
-          data: { code: item.code, ...data },
+          data: { branchId, code: item.code, ...data },
         });
         continue;
       }
 
       if (item.original_code === item.code) {
         await tx.employeeTypeConfig.update({
-          where: { code: item.code },
+          where: { branchId_code: { branchId, code: item.code } },
           data,
         });
         continue;
       }
 
       const oldRow = await tx.employeeTypeConfig.findUnique({
-        where: { code: item.original_code },
+        where: { branchId_code: { branchId, code: item.original_code } },
       });
       if (!oldRow) {
         throw validationError(
@@ -331,21 +356,21 @@ export async function saveEmployeeTypes(
       }
 
       const taken = await tx.employeeTypeConfig.findUnique({
-        where: { code: item.code },
+        where: { branchId_code: { branchId, code: item.code } },
       });
       if (taken) {
         throw validationError(`Kode tipe "${item.code}" sudah dipakai tipe lain`);
       }
 
       await tx.employeeTypeConfig.create({
-        data: { code: item.code, ...data },
+        data: { branchId, code: item.code, ...data },
       });
       await tx.employee.updateMany({
-        where: { employeeTypeCode: item.original_code },
+        where: { branchId, employeeTypeCode: item.original_code },
         data: { employeeTypeCode: item.code },
       });
       await tx.employeeTypeConfig.delete({
-        where: { code: item.original_code },
+        where: { branchId_code: { branchId, code: item.original_code } },
       });
     }
   });
@@ -353,11 +378,12 @@ export async function saveEmployeeTypes(
   await writeAuditLog({
     userId: actor.id,
     action: "employee_types.update",
-    entityType: "employee_type_config",
+    entityType: "branch",
+    entityId: branchId,
     newValues: { count: resolved.length },
   });
 
-  return listEmployeeTypes();
+  return listEmployeeTypes(branchId);
 }
 
 export async function getGamificationSettings(): Promise<GamificationSettingsRow> {
@@ -661,14 +687,19 @@ export async function rewardAmountFromSettings(
 }
 
 async function buildPublicRules(): Promise<PublicRulesPayload> {
+  const defaultBranch = await prisma.branch.findFirst({
+    where: { isActive: true },
+    orderBy: { code: "asc" },
+    select: { id: true },
+  });
   const [types, rules, settings] = await Promise.all([
-    listEmployeeTypes(),
+    defaultBranch ? listEmployeeTypes(defaultBranch.id) : Promise.resolve([]),
     listKpiPointRulesCached({ activeOnly: false }),
     getGamificationSettingsCached(),
   ]);
 
   const shifts = await prisma.shift.findMany({
-    where: { id: { in: [...WORK_SHIFT_IDS] } },
+    where: { id: { not: OFF_SHIFT_ID } },
     orderBy: { id: "asc" },
   });
   const shiftName = (id: number) =>
@@ -787,7 +818,7 @@ export async function updateEmployeeType(
 
   if (employeeTypeCode) {
     const typeConfig = await prisma.employeeTypeConfig.findFirst({
-      where: { code: employeeTypeCode, isActive: true },
+      where: { branchId, code: employeeTypeCode, isActive: true },
     });
     if (!typeConfig) throw validationError("Tipe karyawan tidak dikenal");
 

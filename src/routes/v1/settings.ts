@@ -12,6 +12,8 @@ import {
   saveEmployeeTypes,
   saveGamificationConfig,
 } from "../../services/organizationConfigService.js";
+import { validationError } from "../../lib/errors.js";
+import { assertBranchAccess } from "../../services/branchAccess.js";
 
 export const settingsRouter = Router();
 settingsRouter.use(authenticate);
@@ -19,18 +21,28 @@ settingsRouter.use(authenticate);
 settingsRouter.get(
   "/employee-types",
   requirePermission("users.manage.branch"),
-  asyncHandler(async (_req, res) => {
-    res.json({ data: await listEmployeeTypes() });
+  asyncHandler(async (req, res) => {
+    const branchId = String(req.query.branch_id ?? "");
+    if (!branchId) {
+      throw validationError("branch_id wajib");
+    }
+    assertBranchAccess(req.user!, branchId);
+    res.json({ data: await listEmployeeTypes(branchId) });
   })
 );
 
 settingsRouter.put(
   "/employee-types",
-  requireOwner,
+  requirePermission("users.manage.branch"),
   asyncHandler(async (req, res) => {
+    const branchId = String(req.body?.branch_id ?? "");
+    if (!branchId) {
+      throw validationError("branch_id wajib");
+    }
+    assertBranchAccess(req.user!, branchId);
     const { employee_types } = req.body ?? {};
     res.json({
-      data: await saveEmployeeTypes(req.user!, employee_types ?? []),
+      data: await saveEmployeeTypes(req.user!, branchId, employee_types ?? []),
     });
   })
 );

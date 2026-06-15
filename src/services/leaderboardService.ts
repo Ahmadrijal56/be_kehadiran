@@ -10,7 +10,14 @@ import { compareMonthlyPointsTieBreak } from "./publicRankingSort.js";
 import { activeEmployeeUserWhere } from "./activeEmployeeFilter.js";
 
 const CACHE_TTL = 90;
-const CACHE_VERSION = "v12";
+const CACHE_VERSION = "v13";
+
+export type LeaderboardTypeShift = {
+  shift_id: number;
+  code: string;
+  name: string;
+  time_range: string | null;
+};
 
 type LeaderboardEntryBase = {
   rank: number;
@@ -22,6 +29,7 @@ type LeaderboardEntryBase = {
   branch_name: string;
   employee_type_code: string | null;
   employee_type_label: string | null;
+  employee_type_shifts?: LeaderboardTypeShift[];
   total_points: number;
   total_late_count: number;
 };
@@ -215,6 +223,84 @@ async function loadParticipantsGlobal(): Promise<EmployeeRow[]> {
     .filter((row): row is EmployeeRow => row !== null);
 }
 
+export async function attachTypeShiftsToLeaderboardEntries<
+  T extends { branch_id: string; employee_type_code: string | null },
+>(entries: T[]): Promise<Array<T & { employee_type_shifts: LeaderboardTypeShift[] }>> {
+  if (entries.length === 0) return [];
+
+  const branchIds = [...new Set(entries.map((e) => e.branch_id))];
+  const typeCodes = [
+    ...new Set(
+      entries
+        .map((e) => e.employee_type_code)
+        .filter((code): code is string => Boolean(code))
+    ),
+  ];
+
+  const typeConfigs =
+    typeCodes.length > 0
+      ? await prisma.employeeTypeConfig.findMany({
+          where: {
+            branchId: { in: branchIds },
+            code: { in: typeCodes },
+          },
+          select: { branchId: true, code: true, shiftIds: true },
+        })
+      : [];
+
+  const typeShiftMap = new Map<string, number[]>();
+  for (const config of typeConfigs) {
+    typeShiftMap.set(`${config.branchId}:${config.code}`, config.shiftIds);
+  }
+
+  const { getBranchShiftSettings } = await import("./branchShiftConfigService.js");
+  const shiftDefsByBranch = new Map<
+    string,
+    Map<number, { code: string; name: string; time_range: string | null }>
+  >();
+  await Promise.all(
+    branchIds.map(async (branchId) => {
+      const { shifts } = await getBranchShiftSettings(branchId);
+      const map = new Map<
+        number,
+        { code: string; name: string; time_range: string | null }
+      >();
+      for (const shift of shifts) {
+        if (shift.is_off) continue;
+        map.set(shift.shift_id, {
+          code: shift.code,
+          name: shift.name,
+          time_range:
+            shift.time_range ??
+            (shift.start_time && shift.end_time
+              ? `${shift.start_time} – ${shift.end_time}`
+              : null),
+        });
+      }
+      shiftDefsByBranch.set(branchId, map);
+    })
+  );
+
+  return entries.map((entry) => {
+    const shiftIds = entry.employee_type_code
+      ? (typeShiftMap.get(`${entry.branch_id}:${entry.employee_type_code}`) ?? [])
+      : [];
+    const branchDefs = shiftDefsByBranch.get(entry.branch_id);
+    const employee_type_shifts = [...shiftIds]
+      .sort((a, b) => a - b)
+      .map((id) => {
+        const def = branchDefs?.get(id);
+        return {
+          shift_id: id,
+          code: def?.code ?? `S${id}`,
+          name: def?.name ?? `Shift ${id}`,
+          time_range: def?.time_range ?? null,
+        };
+      });
+    return { ...entry, employee_type_shifts };
+  });
+}
+
 async function buildLeaderboardEntries(
   employees: EmployeeRow[],
   yearMonth: string
@@ -348,7 +434,8 @@ export async function getBranchLeaderboard(
   if (!cached) {
     await cacheSet(cacheKey, baseItems, CACHE_TTL);
   }
-  const items = await attachLeaderboardAvatars(baseItems, user, publicBaseUrl);
+  const withShifts = await attachTypeShiftsToLeaderboardEntries(baseItems);
+  const items = await attachLeaderboardAvatars(withShifts, user, publicBaseUrl);
   return { year_month: ym, branch_id: branchId, items, cached: Boolean(cached) };
 }
 
@@ -364,7 +451,8 @@ export async function getGlobalLeaderboard(
     cached ??
     (await (async () => {
       const participants = await loadParticipantsGlobal();
-      return buildLeaderboardEntries(participants, ym);
+      const built = await buildLeaderboardEntries(participants, ym);
+      return attachTypeShiftsToLeaderboardEntries(built);
     })());
   if (!cached) {
     await cacheSet(cacheKey, baseItems, CACHE_TTL);

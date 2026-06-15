@@ -1,5 +1,6 @@
 import type { AttendanceApprovalType, AttendanceType } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
+import { resolveBreakAttendanceEnabled } from "../lib/breakAttendance.js";
 import { notFound, validationError } from "../lib/errors.js";
 import {
   formatWibIso,
@@ -337,11 +338,13 @@ export async function getTodayAttendance(employeeId: string) {
     where: { id: employeeId },
     select: {
       branch: { select: { breakAttendanceEnabled: true } },
-      employeeType: { select: { label: true } },
+      employeeType: { select: { label: true, breakAttendanceEnabled: true } },
     },
   });
-  const breakAttendanceEnabled =
-    employee?.branch.breakAttendanceEnabled ?? true;
+  const breakAttendanceEnabled = resolveBreakAttendanceEnabled(
+    employee?.branch.breakAttendanceEnabled ?? true,
+    employee?.employeeType?.breakAttendanceEnabled
+  );
   const employee_type_label =
     employee?.employeeType?.label?.trim() ?? null;
 
@@ -560,7 +563,7 @@ export async function listAttendanceTimeline(
         select: {
           nik: true,
           fullName: true,
-          employeeType: { select: { label: true } },
+          employeeType: { select: { label: true, breakAttendanceEnabled: true } },
         },
       },
       branch: { select: { name: true, breakAttendanceEnabled: true } },
@@ -599,7 +602,10 @@ export async function listAttendanceTimeline(
       records.map(async (row) => {
         const workDateStr = row.workDate.toISOString().slice(0, 10);
         const approvalType = approvalByDate.get(workDateStr) ?? null;
-        const breakAttendanceEnabled = row.branch.breakAttendanceEnabled;
+        const breakAttendanceEnabled = resolveBreakAttendanceEnabled(
+          row.branch.breakAttendanceEnabled,
+          row.employee.employeeType?.breakAttendanceEnabled
+        );
         const twoScanFromApproval =
           approvalType === "early_leave" || approvalType === "no_break";
         const twoScan = !breakAttendanceEnabled || twoScanFromApproval;

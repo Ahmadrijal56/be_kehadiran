@@ -82,6 +82,9 @@ export async function createBranch(
   const { seedBranchShiftsForNewBranch } = await import("./branchShiftConfigService.js");
   await seedBranchShiftsForNewBranch(branch.id);
 
+  const { ensureBranchEmployeeTypeDefaults } = await import("./organizationConfigService.js");
+  await ensureBranchEmployeeTypeDefaults(branch.id);
+
   return mapBranch(branch);
 }
 

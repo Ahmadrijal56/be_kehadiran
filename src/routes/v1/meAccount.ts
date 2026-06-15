@@ -15,6 +15,7 @@ import {
   updateAvatarVisibility,
   uploadUserAvatar,
 } from "../../services/avatarService.js";
+import { resolveBreakAttendanceEnabled } from "../../lib/breakAttendance.js";
 import { prisma } from "../../lib/prisma.js";
 
 const avatarUpload = multer({
@@ -54,6 +55,11 @@ meAccountRouter.get(
             breakAttendanceEnabled: true,
           },
         },
+        employee: {
+          select: {
+            employeeType: { select: { label: true, breakAttendanceEnabled: true } },
+          },
+        },
       },
     });
 
@@ -65,21 +71,18 @@ meAccountRouter.get(
           has_avatar: false,
         };
 
-    const employee_type_label = profile?.employeeId
-      ? (
-          await prisma.employee.findUnique({
-            where: { id: profile.employeeId },
-            select: { employeeType: { select: { label: true } } },
-          })
-        )?.employeeType?.label?.trim() ?? null
-      : null;
+    const employee_type_label =
+      profile?.employee?.employeeType?.label?.trim() ?? null;
 
     const branchPayload = profile?.branch
       ? {
           id: profile.branch.id,
           code: profile.branch.code,
           name: profile.branch.name,
-          break_attendance_enabled: profile.branch.breakAttendanceEnabled,
+          break_attendance_enabled: resolveBreakAttendanceEnabled(
+            profile.branch.breakAttendanceEnabled,
+            profile.employee?.employeeType?.breakAttendanceEnabled
+          ),
         }
       : null;
 

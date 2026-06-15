@@ -1,6 +1,7 @@
 import type { Employee, Prisma } from "@prisma/client";
 import { env } from "../config/env.js";
 import { log } from "../lib/logger.js";
+import { resolveBreakAttendanceEnabled } from "../lib/breakAttendance.js";
 import { prisma } from "../lib/prisma.js";
 import { toDateOnly } from "../utils/time.js";
 import { processCheckIn, resolveShiftId } from "./attendanceService.js";
@@ -550,6 +551,22 @@ async function applyParsedAttendance(
   );
   const resolvedBranch = branch;
 
+  const typeConfig = employee.employeeTypeCode
+    ? await prisma.employeeTypeConfig.findUnique({
+        where: {
+          branchId_code: {
+            branchId: resolvedBranch.id,
+            code: employee.employeeTypeCode,
+          },
+        },
+        select: { breakAttendanceEnabled: true },
+      })
+    : null;
+  const breakAttendanceEnabled = resolveBreakAttendanceEnabled(
+    resolvedBranch.breakAttendanceEnabled,
+    typeConfig?.breakAttendanceEnabled
+  );
+
   let photoUrl: string | null = null;
   if (photoFileId) {
     photoUrl = await downloadAndStoreTelegramPhoto(
@@ -567,7 +584,7 @@ async function applyParsedAttendance(
 
   let parsed = await reconcileParsedScan(employee.id, workDate, parsedInput);
 
-  if (!resolvedBranch.breakAttendanceEnabled) {
+  if (!breakAttendanceEnabled) {
     parsed = {
       ...parsed,
       istirahatMulai: undefined,
@@ -651,8 +668,6 @@ async function applyParsedAttendance(
   const duplicateCheckOut =
     parsed.jamPulang &&
     (await isDuplicateAttendanceEvent(employee.id, parsed.jamPulang, "check_out"));
-
-  const breakAttendanceEnabled = resolvedBranch.breakAttendanceEnabled;
 
   const shouldUpdateAttendance =
     (parsed.jamPulang && !duplicateCheckOut) ||
