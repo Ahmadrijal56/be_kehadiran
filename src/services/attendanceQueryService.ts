@@ -654,10 +654,10 @@ export async function listAttendanceTimeline(
             (approvalType === "early_leave" || approvalType === "no_break")
               ? APPROVAL_LABELS[approvalType]
               : null,
-          attendance_mode_label: !breakAttendanceEnabled
-            ? "Cabang tanpa absen istirahat (masuk & pulang)"
-            : twoScanFromApproval &&
-                (approvalType === "early_leave" || approvalType === "no_break")
+          attendance_mode_label:
+            breakAttendanceEnabled &&
+            twoScanFromApproval &&
+            (approvalType === "early_leave" || approvalType === "no_break")
               ? APPROVAL_LABELS[approvalType]
               : null,
           work_duration_minutes: workDurationMinutes,
@@ -895,7 +895,8 @@ export async function listBranchBreakHistory(
 
 export async function ensureAttendanceRecordForDate(
   employeeId: string,
-  workDate: Date
+  workDate: Date,
+  options?: { skipOffDay?: boolean }
 ) {
   const dateOnly = toDateOnly(workDate);
   const existing = await prisma.attendanceRecord.findUnique({
@@ -908,6 +909,7 @@ export async function ensureAttendanceRecordForDate(
   });
   const shiftId = await resolveEffectiveShiftId(employeeId, dateOnly);
   if (isOffShift(shiftId)) {
+    if (options?.skipOffDay) return null;
     throw validationError("Hari libur — tidak perlu pengajuan keterlambatan");
   }
 
@@ -972,7 +974,9 @@ export async function listLateExcuseEligibleAttendances(
   const current =
     currentEmployeeId ??
     (Array.isArray(employeeIds) ? employeeIds[0] : employeeIds);
-  if (current) await ensureAttendanceRecordForDate(current, today);
+  if (current) {
+    await ensureAttendanceRecordForDate(current, today, { skipOffDay: true });
+  }
 
   const oldest = new Date(today);
   oldest.setUTCDate(oldest.getUTCDate() - (LATE_EXCUSE_LOOKBACK_DAYS - 1));
