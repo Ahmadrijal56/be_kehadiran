@@ -340,6 +340,43 @@ export async function resolveShiftDayStatesForEmployees(
   if (employees.length === 0) return result;
 
   const dateOnly = toDateOnly(workDate);
+  const employeeRows = await prisma.employee.findMany({
+    where: { id: { in: employees.map((e) => e.id) } },
+    select: {
+      id: true,
+      branchId: true,
+      employeeTypeCode: true,
+      defaultShiftId: true,
+    },
+  });
+  const profileById = new Map(employeeRows.map((r) => [r.id, r]));
+  const typePairs = [...new Set(
+    employeeRows
+      .filter((r) => r.employeeTypeCode)
+      .map((r) => `${r.branchId}:${r.employeeTypeCode!}`)
+  )];
+  const typeConfigs =
+    typePairs.length > 0
+      ? await prisma.employeeTypeConfig.findMany({
+          where: {
+            OR: typePairs.map((pair) => {
+              const [branchId, code] = pair.split(":");
+              return {
+                branchId: branchId!,
+                code: code!,
+                isActive: true,
+              };
+            }),
+          },
+          select: { branchId: true, code: true, shiftIds: true },
+        })
+      : [];
+  const primaryShiftByType = new Map(
+    typeConfigs
+      .filter((cfg) => cfg.shiftIds.length > 0)
+      .map((cfg) => [`${cfg.branchId}:${cfg.code}`, cfg.shiftIds[0] as number])
+  );
+
   const overrides = await prisma.employeeShift.findMany({
     where: {
       employeeId: { in: employees.map((e) => e.id) },
@@ -366,9 +403,16 @@ export async function resolveShiftDayStatesForEmployees(
         isUnscheduled: false,
       });
     } else {
+      const profile = profileById.get(emp.id);
+      const typeShiftId =
+        profile?.employeeTypeCode != null
+          ? primaryShiftByType.get(`${profile.branchId}:${profile.employeeTypeCode}`)
+          : undefined;
+      const effectiveDefaultShiftId =
+        typeShiftId ?? profile?.defaultShiftId ?? emp.defaultShiftId;
       const usesDailyGrid = emp.shiftScheduleAssigned === true;
       result.set(emp.id, {
-        shiftId: emp.defaultShiftId,
+        shiftId: effectiveDefaultShiftId,
         isExplicitOff: false,
         isUnscheduled: usesDailyGrid,
       });
