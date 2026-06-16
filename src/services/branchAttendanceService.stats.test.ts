@@ -3,10 +3,12 @@ import {
   attendanceHasCheckedIn,
   attendanceIsLate,
   computeBranchStatsFromRows,
+  monitoringOverviewSortGroup,
   rowHasLeft,
   rowIsActiveAtWork,
   rowIsLate,
   rowIsOff,
+  sortMonitoringOverviewRows,
   type BranchEmployeeAttendance,
 } from "./branchAttendanceService.js";
 
@@ -112,5 +114,50 @@ describe("branch attendance stats", () => {
     expect(attendanceIsLate("left", 577)).toBe(true);
     expect(attendanceIsLate("present", 0)).toBe(false);
     expect(attendanceHasCheckedIn("left", new Date())).toBe(true);
+  });
+
+  it("urutan tab Semua — masuk, terlambat, belum absen, pulang, libur", () => {
+    const unsorted = [
+      row({ status: "off", full_name: "Zara Libur" }),
+      row({ status: "absent", full_name: "Ahmad Belum" }),
+      row({
+        status: "late",
+        full_name: "Rendi Telat",
+        check_in_at: "2026-06-16T07:41:00+07:00",
+        late_minutes: 41,
+      }),
+      row({
+        status: "left",
+        full_name: "Budi Pulang",
+        check_in_at: "2026-06-16T07:00:00+07:00",
+        check_out_at: "2026-06-16T15:00:00+07:00",
+      }),
+      row({
+        status: "present",
+        full_name: "Indah Masuk",
+        check_in_at: "2026-06-16T06:54:00+07:00",
+      }),
+      row({
+        status: "on_break",
+        full_name: "Anggit Masuk",
+        check_in_at: "2026-06-16T06:51:00+07:00",
+      }),
+    ];
+
+    expect(monitoringOverviewSortGroup(unsorted[4]!)).toBe(1);
+    expect(monitoringOverviewSortGroup(unsorted[2]!)).toBe(2);
+    expect(monitoringOverviewSortGroup(unsorted[1]!)).toBe(3);
+    expect(monitoringOverviewSortGroup(unsorted[3]!)).toBe(4);
+    expect(monitoringOverviewSortGroup(unsorted[0]!)).toBe(5);
+
+    const sorted = sortMonitoringOverviewRows(unsorted);
+    expect(sorted.map((r) => r.full_name)).toEqual([
+      "Anggit Masuk",
+      "Indah Masuk",
+      "Rendi Telat",
+      "Ahmad Belum",
+      "Budi Pulang",
+      "Zara Libur",
+    ]);
   });
 });

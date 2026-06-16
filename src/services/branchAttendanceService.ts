@@ -76,6 +76,33 @@ export function rowIsLate(row: BranchEmployeeAttendance): boolean {
   return attendanceIsLate(row.status, row.late_minutes);
 }
 
+/** Urutan tampilan tab Semua: masuk → terlambat → belum absen → pulang → libur. */
+export function monitoringOverviewSortGroup(
+  row: BranchEmployeeAttendance
+): number {
+  if (rowIsOff(row)) return 5;
+  if (rowHasLeft(row)) return 4;
+  if (row.status === "absent") return 3;
+  if (rowIsLate(row)) return 2;
+  return 1;
+}
+
+export function compareMonitoringOverviewRows(
+  a: BranchEmployeeAttendance,
+  b: BranchEmployeeAttendance
+): number {
+  const groupDiff =
+    monitoringOverviewSortGroup(a) - monitoringOverviewSortGroup(b);
+  if (groupDiff !== 0) return groupDiff;
+  return a.full_name.localeCompare(b.full_name, "id");
+}
+
+export function sortMonitoringOverviewRows(
+  rows: BranchEmployeeAttendance[]
+): BranchEmployeeAttendance[] {
+  return [...rows].sort(compareMonitoringOverviewRows);
+}
+
 type ShiftRow = { id: number; code: string; name: string };
 
 let shiftsCache: ShiftRow[] | null = null;
@@ -283,7 +310,7 @@ export async function listBranchAttendanceToday(
   const rows = await loadBranchRows(branchId, preloadedBranchShifts);
   return {
     work_date: todayWorkDateWib().toISOString().slice(0, 10),
-    items: rows,
+    items: sortMonitoringOverviewRows(rows),
   };
 }
 

@@ -16,6 +16,7 @@ export type RankableTodayRow = {
   today_check_in: string | null;
   today_status: string;
   total_points: number;
+  total_late_count?: number;
   nik: string;
 };
 
@@ -25,14 +26,16 @@ function statusBucket(status: string): number {
   return 0;
 }
 
-/** Poin hari ini ↓, absen paling awal ↑, lalu poin bulan & ID. */
+/** Total poin bulan ↓ — tie-break: telat ↓, absen awal ↑, status, NIK. */
 export function compareTodayLeaderboard<T extends RankableTodayRow>(
   a: T,
   b: T
 ): number {
-  const ptsA = a.today_points ?? -9999;
-  const ptsB = b.today_points ?? -9999;
-  if (ptsB !== ptsA) return ptsB - ptsA;
+  if (b.total_points !== a.total_points) return b.total_points - a.total_points;
+
+  const lateA = a.total_late_count ?? 0;
+  const lateB = b.total_late_count ?? 0;
+  if (lateA !== lateB) return lateA - lateB;
 
   const inA = checkInSortKey(a.today_check_in);
   const inB = checkInSortKey(b.today_check_in);
@@ -41,7 +44,6 @@ export function compareTodayLeaderboard<T extends RankableTodayRow>(
   const statusDiff = statusBucket(a.today_status) - statusBucket(b.today_status);
   if (statusDiff !== 0) return statusDiff;
 
-  if (b.total_points !== a.total_points) return b.total_points - a.total_points;
   return a.nik.localeCompare(b.nik, "id");
 }
 
