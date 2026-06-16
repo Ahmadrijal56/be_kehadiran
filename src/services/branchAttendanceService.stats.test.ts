@@ -4,6 +4,7 @@ import {
   attendanceIsLate,
   computeBranchStatsFromRows,
   monitoringOverviewSortGroup,
+  resolveMonitoringStatus,
   rowHasLeft,
   rowIsActiveAtWork,
   rowIsLate,
@@ -35,6 +36,62 @@ function row(
 }
 
 describe("branch attendance stats", () => {
+  it("resolveMonitoringStatus — check_out_at memaksa status pulang", () => {
+    const checkout = new Date("2026-06-16T15:08:00+07:00");
+    expect(
+      resolveMonitoringStatus(
+        {
+          status: "present",
+          checkOutAt: checkout,
+          breakSessions: [],
+        },
+        false
+      )
+    ).toBe("left");
+    expect(
+      resolveMonitoringStatus(
+        {
+          status: "late",
+          checkOutAt: checkout,
+          breakSessions: [],
+        },
+        false
+      )
+    ).toBe("left");
+    expect(
+      resolveMonitoringStatus(
+        {
+          status: "forgot_checkout",
+          checkOutAt: checkout,
+          breakSessions: [],
+        },
+        false
+      )
+    ).toBe("forgot_checkout");
+  });
+
+  it("statistik bulletin — yang sudah pulang tidak dihitung hadir", () => {
+    const rows = [
+      row({
+        status: "left",
+        check_in_at: "2026-06-16T06:51:00+07:00",
+        check_out_at: "2026-06-16T15:08:00+07:00",
+      }),
+      row({
+        status: "left",
+        check_in_at: "2026-06-16T06:54:00+07:00",
+        check_out_at: "2026-06-16T15:08:00+07:00",
+      }),
+      row({ status: "present", check_in_at: "2026-06-16T09:44:00+07:00" }),
+      row({ status: "absent" }),
+      row({ status: "off" }),
+    ];
+    const stats = computeBranchStatsFromRows(rows, "2026-06-16");
+    expect(stats.present).toBe(1);
+    expect(stats.left).toBe(2);
+    expect(stats.absent).toBe(1);
+  });
+
   const rows = [
     row({ status: "absent" }),
     row({

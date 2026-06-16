@@ -129,6 +129,30 @@ async function getShiftsById(): Promise<Record<number, ShiftRow>> {
   return Object.fromEntries(shiftsCache.map((s) => [s.id, s]));
 }
 
+/** Status monitoring — jika sudah scan pulang, tampil sebagai pulang. */
+export function resolveMonitoringStatus(
+  att:
+    | {
+        status: string;
+        checkOutAt: Date | null;
+        breakSessions: Array<{ breakEndAt: Date | null }>;
+      }
+    | undefined,
+  scheduledOff: boolean
+): string {
+  if (scheduledOff) return "off";
+  if (!att) return "absent";
+
+  const onBreak = att.breakSessions.some((b) => !b.breakEndAt);
+  if (onBreak) return "on_break";
+
+  if (att.checkOutAt) {
+    return att.status === "forgot_checkout" ? "forgot_checkout" : "left";
+  }
+
+  return att.status;
+}
+
 function mapRow(
   emp: {
     id: string;
@@ -176,7 +200,7 @@ function mapRow(
       name: shiftName,
       time_range: timeRange,
     },
-    status: scheduledOff ? "off" : att?.status ?? "absent",
+    status: resolveMonitoringStatus(att, scheduledOff),
     check_in_at: formatWibIso(att?.checkInAt ?? null),
     check_out_at: formatWibIso(att?.checkOutAt ?? null),
     late_minutes: att?.lateMinutes ?? 0,
@@ -240,6 +264,17 @@ export async function reconcileBranchAttendanceLateForDate(
   for (const att of records) {
     const dayState = dayStates.get(att.employeeId);
     if (dayState?.isExplicitOff) continue;
+
+    if (att.checkOutAt) {
+      if (att.status !== "left" && att.status !== "forgot_checkout") {
+        await prisma.attendanceRecord.update({
+          where: { id: att.id },
+          data: { status: "left" },
+        });
+        updated += 1;
+      }
+      continue;
+    }
 
     const shiftId = shiftMap.get(att.employeeId) ?? att.shiftId;
     if (isOffShift(shiftId)) continue;

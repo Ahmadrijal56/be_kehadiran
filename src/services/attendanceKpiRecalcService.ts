@@ -130,12 +130,18 @@ export async function recalculateAttendanceKpiForShiftChange(input: {
   const adjustmentPoints = attendance.kpiDailyScore?.adjustmentPoints ?? 0;
 
   await prisma.$transaction(async (tx) => {
+    const statusAfterShift = attendance.checkOutAt
+      ? attendance.status === "forgot_checkout"
+        ? "forgot_checkout"
+        : "left"
+      : scored.status;
+
     await tx.attendanceRecord.update({
       where: { id: attendance.id },
       data: {
         shiftId: input.newShiftId,
         lateMinutes: scored.lateMinutesAttendance,
-        status: scored.status,
+        status: statusAfterShift,
       },
     });
 
