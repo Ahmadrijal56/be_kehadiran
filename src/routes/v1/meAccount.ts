@@ -15,7 +15,7 @@ import {
   updateAvatarVisibility,
   uploadUserAvatar,
 } from "../../services/avatarService.js";
-import { resolveBreakAttendanceEnabled } from "../../lib/breakAttendance.js";
+import { mapBranchBreakPayload } from "../../lib/breakAttendance.js";
 import { prisma } from "../../lib/prisma.js";
 
 const avatarUpload = multer({
@@ -57,6 +57,14 @@ meAccountRouter.get(
         },
         employee: {
           select: {
+            branch: {
+              select: {
+                id: true,
+                code: true,
+                name: true,
+                breakAttendanceEnabled: true,
+              },
+            },
             employeeType: { select: { label: true, breakAttendanceEnabled: true } },
           },
         },
@@ -74,16 +82,13 @@ meAccountRouter.get(
     const employee_type_label =
       profile?.employee?.employeeType?.label?.trim() ?? null;
 
-    const branchPayload = profile?.branch
-      ? {
-          id: profile.branch.id,
-          code: profile.branch.code,
-          name: profile.branch.name,
-          break_attendance_enabled: resolveBreakAttendanceEnabled(
-            profile.branch.breakAttendanceEnabled,
-            profile.employee?.employeeType?.breakAttendanceEnabled
-          ),
-        }
+    const branchSource =
+      profile?.employee?.branch ?? profile?.branch ?? null;
+    const branchPayload = branchSource
+      ? mapBranchBreakPayload(
+          branchSource,
+          profile?.employee?.employeeType?.breakAttendanceEnabled
+        )
       : null;
 
     res.json({

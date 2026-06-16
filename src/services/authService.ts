@@ -25,6 +25,9 @@ import {
 } from "./accountIdentityService.js";
 import { getAvatarProfile } from "./avatarService.js";
 import {
+  mapBranchBreakPayload,
+} from "../lib/breakAttendance.js";
+import {
   getBranchIdsForUser,
   listBranchesForUser,
 } from "./branchMembershipService.js";
@@ -152,21 +155,11 @@ export async function login(
     permissions: permissionCodes,
   };
 
-  const branchPromise = branchId
-    ? prisma.branch.findUnique({
-        where: { id: branchId },
-        select: {
-          id: true,
-          code: true,
-          name: true,
-          breakAttendanceEnabled: true,
-        },
-      })
-    : Promise.resolve(null);
+  const branchPromise = loadAuthBranchContext(branchId, user.employeeId);
 
   const avatarPromise = getAvatarProfile(user.id, publicBaseUrl);
 
-  const [, branch, avatar] = await Promise.all([
+  const [, branchContext, avatar] = await Promise.all([
     prisma.user.update({
       where: { id: user.id },
       data: { lastLoginAt: new Date() },
@@ -193,14 +186,8 @@ export async function login(
     user: {
       ...mapAuthUserResponse(authUser),
       ...avatar,
-      branch: branch
-        ? {
-            id: branch.id,
-            code: branch.code,
-            name: branch.name,
-            break_attendance_enabled: branch.breakAttendanceEnabled,
-          }
-        : null,
+      branch: branchContext.branch,
+      employee_type_label: branchContext.employee_type_label,
     },
   };
 }
@@ -219,15 +206,57 @@ export function mapAuthUserResponse(user: AuthUser) {
   };
 }
 
-async function loadEmployeeTypeLabel(
+async function loadAuthBranchContext(
+  branchId: string | null,
   employeeId: string | null
-): Promise<string | null> {
-  if (!employeeId) return null;
-  const employee = await prisma.employee.findUnique({
-    where: { id: employeeId },
-    select: { employeeType: { select: { label: true } } },
+): Promise<{
+  branch: ReturnType<typeof mapBranchBreakPayload> | null;
+  employee_type_label: string | null;
+}> {
+  if (employeeId) {
+    const employee = await prisma.employee.findUnique({
+      where: { id: employeeId },
+      select: {
+        branch: {
+          select: {
+            id: true,
+            code: true,
+            name: true,
+            breakAttendanceEnabled: true,
+          },
+        },
+        employeeType: { select: { label: true, breakAttendanceEnabled: true } },
+      },
+    });
+    if (employee?.branch) {
+      return {
+        branch: mapBranchBreakPayload(
+          employee.branch,
+          employee.employeeType?.breakAttendanceEnabled
+        ),
+        employee_type_label: employee.employeeType?.label?.trim() ?? null,
+      };
+    }
+  }
+
+  if (!branchId) {
+    return { branch: null, employee_type_label: null };
+  }
+
+  const branch = await prisma.branch.findUnique({
+    where: { id: branchId },
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      breakAttendanceEnabled: true,
+    },
   });
-  return employee?.employeeType?.label?.trim() ?? null;
+
+  return {
+    branch: branch ? mapBranchBreakPayload(branch, null) : null,
+    employee_type_label: null,
+  };
 }
 
 export async function enrichAuthUserResponse(
@@ -235,33 +264,15 @@ export async function enrichAuthUserResponse(
   publicBaseUrl?: string
 ) {
   const base = mapAuthUserResponse(user);
-  const [branch, avatar, employee_type_label] = await Promise.all([
-    user.branchId
-      ? prisma.branch.findUnique({
-          where: { id: user.branchId },
-          select: {
-            id: true,
-            code: true,
-            name: true,
-            breakAttendanceEnabled: true,
-          },
-        })
-      : Promise.resolve(null),
+  const [branchContext, avatar] = await Promise.all([
+    loadAuthBranchContext(user.branchId, user.employeeId),
     getAvatarProfile(user.id, publicBaseUrl),
-    loadEmployeeTypeLabel(user.employeeId),
   ]);
   return {
     ...base,
     ...avatar,
-    employee_type_label,
-    branch: branch
-      ? {
-          id: branch.id,
-          code: branch.code,
-          name: branch.name,
-          break_attendance_enabled: branch.breakAttendanceEnabled,
-        }
-      : null,
+    employee_type_label: branchContext.employee_type_label,
+    branch: branchContext.branch,
   };
 }
 
