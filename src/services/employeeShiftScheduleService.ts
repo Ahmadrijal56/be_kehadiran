@@ -8,6 +8,7 @@ import type { AuthUser } from "./authService.js";
 import { hasPermission } from "./authService.js";
 import { writeAuditLog } from "./auditService.js";
 import { OFF_SHIFT_ID } from "../constants/shifts.js";
+import { shiftAllowedForType } from "./organizationConfigService.js";
 import { currentYearMonthWib } from "../utils/format.js";
 import { timeFromDbTime, toDateOnly } from "../utils/time.js";
 import { invalidatePapanCaches } from "./papanCacheInvalidation.js";
@@ -20,6 +21,113 @@ export type ShiftOption = {
   time_range: string | null;
   is_off: boolean;
 };
+
+export type ScheduleEmployeeRow = {
+  employee_id: string;
+  nik: string;
+  full_name: string;
+  default_shift_id: number;
+  shift_schedule_assigned?: boolean;
+  employee_type_code: string | null;
+  employee_type_label: string | null;
+  allowed_shift_ids: number[];
+  schedule: Record<string, number>;
+  overrides: Record<string, number>;
+};
+
+/** Shift kerja yang boleh dipilih + libur (OFF). */
+export function resolveEmployeeAllowedShiftIds(
+  typeShiftIds: number[] | null | undefined,
+  branchWorkShiftIds: number[]
+): number[] {
+  const workIds =
+    typeShiftIds && typeShiftIds.length > 0
+      ? typeShiftIds.filter((id) => id !== OFF_SHIFT_ID)
+      : [...branchWorkShiftIds];
+  const sorted = [...new Set(workIds)].sort((a, b) => a - b);
+  return [...sorted, OFF_SHIFT_ID];
+}
+
+export function assertShiftAllowedForEmployee(
+  shiftId: number,
+  allowedShiftIds: number[],
+  employeeLabel: string
+): void {
+  if (shiftId === OFF_SHIFT_ID) return;
+  if (!shiftAllowedForType(
+    allowedShiftIds.filter((id) => id !== OFF_SHIFT_ID),
+    shiftId
+  )) {
+    const options = allowedShiftIds
+      .filter((id) => id !== OFF_SHIFT_ID)
+      .map((id) => `S${id}`)
+      .join(", ");
+    throw validationError(
+      `Shift tidak diperbolehkan untuk ${employeeLabel}. Pilihan: ${options || "—"}, Libur (L)`
+    );
+  }
+}
+
+export function shiftListFormulaForAllowed(allowedShiftIds: number[]): string {
+  const cells = allowedShiftIds
+    .filter((id) => id !== OFF_SHIFT_ID)
+    .map((id) => String(id));
+  cells.push("L");
+  return `"${cells.join(",")}"`;
+}
+
+export type BranchEmployeeTypeEntry = {
+  label: string;
+  shiftIds: number[];
+};
+
+/** Tipe karyawan aktif untuk satu cabang — kunci map = kode tipe di cabang itu. */
+export async function loadBranchEmployeeTypeMap(
+  branchId: string
+): Promise<Map<string, BranchEmployeeTypeEntry>> {
+  const rows = await prisma.employeeTypeConfig.findMany({
+    where: { branchId, isActive: true },
+    select: { code: true, label: true, shiftIds: true },
+    orderBy: { sortOrder: "asc" },
+  });
+  return new Map(
+    rows.map((r) => [
+      r.code,
+      { label: r.label.trim(), shiftIds: r.shiftIds },
+    ])
+  );
+}
+
+export function resolveBranchEmployeeType(
+  employeeTypeCode: string | null | undefined,
+  typeByCode: Map<string, BranchEmployeeTypeEntry>
+): {
+  employee_type_code: string | null;
+  employee_type_label: string | null;
+  typeShiftIds: number[] | null;
+} {
+  const code = employeeTypeCode?.trim() || null;
+  if (!code) {
+    return {
+      employee_type_code: null,
+      employee_type_label: null,
+      typeShiftIds: null,
+    };
+  }
+  const typeConfig = typeByCode.get(code);
+  if (!typeConfig) {
+    return {
+      employee_type_code: null,
+      employee_type_label: null,
+      typeShiftIds: null,
+    };
+  }
+  return {
+    employee_type_code: code,
+    employee_type_label: typeConfig.label || null,
+    typeShiftIds: typeConfig.shiftIds,
+  };
+}
 
 function pad2(n: number) {
   return String(n).padStart(2, "0");
@@ -91,7 +199,7 @@ export async function getBranchShiftSchedule(branchId: string, yearMonth: string
     `${year}-${pad2(month)}-${pad2(days.length)}T00:00:00.000Z`
   );
 
-  const [employees, overrides, shiftOptions] = await Promise.all([
+  const [employees, overrides, shiftOptions, typeByCode] = await Promise.all([
     prisma.employee.findMany({
       where: { branchId, isActive: true },
       orderBy: { fullName: "asc" },
@@ -101,6 +209,7 @@ export async function getBranchShiftSchedule(branchId: string, yearMonth: string
         fullName: true,
         defaultShiftId: true,
         shiftScheduleAssigned: true,
+        employeeTypeCode: true,
       },
     }),
     prisma.employeeShift.findMany({
@@ -110,6 +219,7 @@ export async function getBranchShiftSchedule(branchId: string, yearMonth: string
       },
     }),
     listShiftOptions(branchId),
+    loadBranchEmployeeTypeMap(branchId),
   ]);
 
   const overrideMap = new Map<string, number>();
@@ -118,19 +228,39 @@ export async function getBranchShiftSchedule(branchId: string, yearMonth: string
     overrideMap.set(key, o.shiftId);
   }
 
+  const branchWorkShiftIds = shiftOptions
+    .filter((s) => !s.is_off)
+    .map((s) => s.id);
+
   return {
+    branch_id: branchId,
     year_month: yearMonth,
     editable_from: currentYearMonthWib(),
     editable_until: addMonths(currentYearMonthWib(), 3),
     days,
     shifts: shiftOptions,
     employees: employees.map((emp) => {
+      const typeResolved = resolveBranchEmployeeType(
+        emp.employeeTypeCode,
+        typeByCode
+      );
+      const allowed_shift_ids = resolveEmployeeAllowedShiftIds(
+        typeResolved.typeShiftIds,
+        branchWorkShiftIds
+      );
+      const base = {
+        employee_id: emp.id,
+        nik: emp.nik,
+        full_name: emp.fullName,
+        default_shift_id: emp.defaultShiftId,
+        employee_type_code: typeResolved.employee_type_code,
+        employee_type_label: typeResolved.employee_type_label,
+        allowed_shift_ids,
+      };
+
       if (!emp.shiftScheduleAssigned) {
         return {
-          employee_id: emp.id,
-          nik: emp.nik,
-          full_name: emp.fullName,
-          default_shift_id: emp.defaultShiftId,
+          ...base,
           shift_schedule_assigned: false,
           schedule: {},
           overrides: {},
@@ -148,10 +278,7 @@ export async function getBranchShiftSchedule(branchId: string, yearMonth: string
         }
       }
       return {
-        employee_id: emp.id,
-        nik: emp.nik,
-        full_name: emp.fullName,
-        default_shift_id: emp.defaultShiftId,
+        ...base,
         shift_schedule_assigned: true,
         schedule,
         overrides: overridesByDate,
@@ -179,13 +306,39 @@ export async function saveBranchShiftSchedule(
   const validDays = new Set(daysInMonth(yearMonth));
   const employees = await prisma.employee.findMany({
     where: { branchId, isActive: true },
-    select: { id: true, defaultShiftId: true },
+    select: {
+      id: true,
+      nik: true,
+      fullName: true,
+      defaultShiftId: true,
+      employeeTypeCode: true,
+    },
   });
   const empIds = new Set(employees.map((e) => e.id));
   const empById = new Map(employees.map((e) => [e.id, e]));
 
-  const allowedShiftIds = new Set(
-    (await listShiftOptions(branchId)).map((s) => s.id)
+  const [shiftOptions, typeByCode] = await Promise.all([
+    listShiftOptions(branchId),
+    loadBranchEmployeeTypeMap(branchId),
+  ]);
+  const allowedShiftIds = new Set(shiftOptions.map((s) => s.id));
+  const branchWorkShiftIds = shiftOptions
+    .filter((s) => !s.is_off)
+    .map((s) => s.id);
+  const allowedByEmployee = new Map(
+    employees.map((emp) => {
+      const typeResolved = resolveBranchEmployeeType(
+        emp.employeeTypeCode,
+        typeByCode
+      );
+      return [
+        emp.id,
+        resolveEmployeeAllowedShiftIds(
+          typeResolved.typeShiftIds,
+          branchWorkShiftIds
+        ),
+      ] as const;
+    })
   );
 
   for (const ch of changes) {
@@ -197,6 +350,15 @@ export async function saveBranchShiftSchedule(
     }
     if (ch.shift_id !== null && !allowedShiftIds.has(ch.shift_id)) {
       throw validationError(`Shift tidak valid: ${ch.shift_id}`);
+    }
+    if (ch.shift_id !== null) {
+      const emp = empById.get(ch.employee_id)!;
+      const label = `${emp.fullName} (${emp.nik})`;
+      assertShiftAllowedForEmployee(
+        ch.shift_id,
+        allowedByEmployee.get(ch.employee_id) ?? [],
+        label
+      );
     }
   }
 

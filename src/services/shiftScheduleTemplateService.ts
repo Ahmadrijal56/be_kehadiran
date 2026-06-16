@@ -5,8 +5,10 @@ import type { AuthUser } from "./authService.js";
 import {
   type ScheduleChange,
   assertEditableYearMonth,
+  assertShiftAllowedForEmployee,
   getBranchShiftSchedule,
   saveBranchShiftSchedule,
+  shiftListFormulaForAllowed,
 } from "./employeeShiftScheduleService.js";
 import { prisma } from "../lib/prisma.js";
 
@@ -96,7 +98,7 @@ export async function buildShiftScheduleTemplateExcel(
     timeZone: "UTC",
   }).format(new Date(`${yearMonth}-01T00:00:00.000Z`));
 
-  sheet.mergeCells(1, 1, 1, 4 + schedule.days.length);
+  sheet.mergeCells(1, 1, 1, 5 + schedule.days.length);
   const title = sheet.getCell(1, 1);
   title.value = `JADWAL SHIFT — ${branch.name.toUpperCase()} — ${monthLabel.toUpperCase()}`;
   title.font = { bold: true, size: 14 };
@@ -106,19 +108,20 @@ export async function buildShiftScheduleTemplateExcel(
   sheet.getCell(2, 3).value = "branch_id";
   sheet.getCell(2, 4).value = branchId;
   sheet.getCell(2, 5).value =
-    "Petunjuk: isi 1–5 (shift) atau L (libur). Kosongkan sel untuk hapus jadwal hari itu. Jangan ubah employee_id / ID.";
+    "Petunjuk: isi shift sesuai tipe karyawan (1–5) atau L (libur). Kosongkan sel untuk hapus jadwal. Jangan ubah employee_id / ID / tipe.";
 
   const headers = [
     "employee_id",
     "id",
     "nama_lengkap",
+    "tipe_karyawan",
     "shift_default",
     ...schedule.days,
   ];
   const headerRow = sheet.getRow(4);
   headers.forEach((h, i) => {
     const cell = headerRow.getCell(i + 1);
-    if (i >= 4) {
+    if (i >= 5) {
       cell.value = `${h}\n${weekdayShort(h)}\n${dDay(h)}`;
     } else {
       cell.value = h;
@@ -139,10 +142,20 @@ export async function buildShiftScheduleTemplateExcel(
     row.getCell(1).value = emp.employee_id;
     row.getCell(2).value = emp.nik;
     row.getCell(3).value = emp.full_name;
-    row.getCell(4).value = emp.default_shift_id;
+    const typeLabel = emp.employee_type_label?.trim() ?? "—";
+    const typeCell = row.getCell(4);
+    typeCell.value = typeLabel;
+    typeCell.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFF3F4F6" },
+    };
+    row.getCell(5).value = emp.default_shift_id;
+
+    const allowedFormula = shiftListFormulaForAllowed(emp.allowed_shift_ids);
 
     schedule.days.forEach((day, dayIdx) => {
-      const col = 5 + dayIdx;
+      const col = 6 + dayIdx;
       const shiftId = emp.schedule[day];
       const cell = row.getCell(col);
       cell.value = shiftId === undefined ? "" : shiftToCellValue(shiftId);
@@ -150,10 +163,10 @@ export async function buildShiftScheduleTemplateExcel(
       cell.dataValidation = {
         type: "list",
         allowBlank: true,
-        formulae: ['"1,2,3,4,5,L"'],
+        formulae: [allowedFormula],
         showErrorMessage: true,
         errorTitle: "Shift tidak valid",
-        error: "Gunakan angka 1–5, L (libur), atau kosongkan sel",
+        error: `Gunakan shift tipe ${typeLabel}: ${allowedFormula.replace(/"/g, "")}`,
       };
     });
   });
@@ -161,8 +174,9 @@ export async function buildShiftScheduleTemplateExcel(
   sheet.getColumn(1).width = 38;
   sheet.getColumn(2).width = 14;
   sheet.getColumn(3).width = 22;
-  sheet.getColumn(4).width = 12;
-  for (let c = 5; c <= 4 + schedule.days.length; c++) {
+  sheet.getColumn(4).width = 18;
+  sheet.getColumn(5).width = 12;
+  for (let c = 6; c <= 5 + schedule.days.length; c++) {
     sheet.getColumn(c).width = 10;
   }
 
@@ -238,7 +252,7 @@ export async function importShiftScheduleTemplateExcel(
   const headerRow = sheet.getRow(headerRowNum);
   const dateColumns: Array<{ col: number; workDate: string }> = [];
   headerRow.eachCell({ includeEmpty: false }, (cell, colNumber) => {
-    if (colNumber <= 4) return;
+    if (colNumber <= 5) return;
     const workDate = parseHeaderWorkDate(cell.value, validDays);
     if (workDate) dateColumns.push({ col: colNumber, workDate });
   });
@@ -310,6 +324,12 @@ export async function importShiftScheduleTemplateExcel(
 
         const shiftId = parseShiftScheduleCell(cellVal);
         if (shiftId === null) continue;
+
+        assertShiftAllowedForEmployee(
+          shiftId,
+          emp.allowed_shift_ids,
+          `${emp.full_name} (${emp.nik})`
+        );
 
         if (serverEffective !== undefined && shiftId === serverEffective) continue;
 
