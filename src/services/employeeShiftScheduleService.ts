@@ -366,10 +366,11 @@ export async function resolveShiftDayStatesForEmployees(
         isUnscheduled: false,
       });
     } else {
+      const usesDailyGrid = emp.shiftScheduleAssigned === true;
       result.set(emp.id, {
         shiftId: emp.defaultShiftId,
         isExplicitOff: false,
-        isUnscheduled: true,
+        isUnscheduled: usesDailyGrid,
       });
     }
   }

@@ -2,9 +2,11 @@ import { prisma } from "../lib/prisma.js";
 import { formatWibIso, todayWorkDateWib } from "../utils/format.js";
 import { OFF_SHIFT_ID } from "../constants/shifts.js";
 import { cacheDeleteByPrefix, cacheGet, cacheSet } from "../lib/redis.js";
-import { resolveEffectiveShiftIdsForEmployees, resolveShiftDayStatesForEmployees } from "./employeeShiftScheduleService.js";
+import { resolveEffectiveShiftIdsForEmployees, resolveShiftDayStatesForEmployees, isOffShift } from "./employeeShiftScheduleService.js";
 import { listActiveEmployeeIdsForBranch } from "./activeEmployeeFilter.js";
 import { getBranchShiftSettings } from "./branchShiftConfigService.js";
+import { computeCheckInKpiFields } from "./attendanceKpiRecalcService.js";
+import { invalidatePapanCaches } from "./papanCacheInvalidation.js";
 import {
   computeWorkDurationMinutes,
   formatWorkDurationLabel,
@@ -191,6 +193,119 @@ function mapRow(
   };
 }
 
+/** Koreksi late_minutes/status absensi yang sudah check-in tapi belum terscore telat. */
+export async function reconcileBranchAttendanceLateForDate(
+  branchId: string,
+  workDate: Date
+): Promise<void> {
+  const records = await prisma.attendanceRecord.findMany({
+    where: {
+      branchId,
+      workDate,
+      checkInAt: { not: null },
+    },
+    include: { kpiDailyScore: true },
+  });
+  if (records.length === 0) return;
+
+  const employees = await prisma.employee.findMany({
+    where: { id: { in: records.map((r) => r.employeeId) } },
+    select: {
+      id: true,
+      defaultShiftId: true,
+      shiftScheduleAssigned: true,
+    },
+  });
+
+  const dayStates = await resolveShiftDayStatesForEmployees(
+    employees.map((e) => ({
+      id: e.id,
+      defaultShiftId: e.defaultShiftId,
+      shiftScheduleAssigned: e.shiftScheduleAssigned,
+    })),
+    workDate
+  );
+
+  const shiftMap = await resolveEffectiveShiftIdsForEmployees(
+    employees.map((e) => ({
+      id: e.id,
+      defaultShiftId: e.defaultShiftId,
+      shiftScheduleAssigned: e.shiftScheduleAssigned,
+    })),
+    workDate
+  );
+
+  let updated = 0;
+
+  for (const att of records) {
+    const dayState = dayStates.get(att.employeeId);
+    if (dayState?.isExplicitOff) continue;
+
+    const shiftId = shiftMap.get(att.employeeId) ?? att.shiftId;
+    if (isOffShift(shiftId)) continue;
+    if (att.status === "late" && att.lateMinutes > 0) continue;
+
+    const scored = await computeCheckInKpiFields(
+      branchId,
+      shiftId,
+      workDate,
+      att.checkInAt!
+    );
+
+    if (
+      scored.lateMinutesAttendance === att.lateMinutes &&
+      scored.status === att.status
+    ) {
+      continue;
+    }
+
+    const adjustmentPoints = att.kpiDailyScore?.adjustmentPoints ?? 0;
+
+    await prisma.$transaction(async (tx) => {
+      await tx.attendanceRecord.update({
+        where: { id: att.id },
+        data: {
+          shiftId,
+          lateMinutes: scored.lateMinutesAttendance,
+          status: scored.status,
+        },
+      });
+
+      if (dayState?.isUnscheduled) return;
+
+      await tx.kpiDailyScore.upsert({
+        where: {
+          employeeId_workDate: {
+            employeeId: att.employeeId,
+            workDate,
+          },
+        },
+        create: {
+          employeeId: att.employeeId,
+          workDate,
+          checkInPoints: scored.kpi.points,
+          adjustmentPoints: 0,
+          totalPoints: scored.kpi.points,
+          lateMinutes: scored.deltaMinutes,
+          ruleApplied: scored.kpi.ruleCode,
+        },
+        update: {
+          checkInPoints: scored.kpi.points,
+          totalPoints: scored.kpi.points + adjustmentPoints,
+          lateMinutes: scored.deltaMinutes,
+          ruleApplied: scored.kpi.ruleCode,
+        },
+      });
+    });
+
+    updated += 1;
+  }
+
+  if (updated > 0) {
+    await invalidatePapanCaches(branchId);
+  }
+}
+
 async function loadBranchRows(
   branchId: string,
   preloadedBranchShifts?: Awaited<
@@ -228,6 +343,8 @@ async function loadBranchRows(
     if (activeEmployeeIds.length === 0) {
       return [];
     }
+
+    await reconcileBranchAttendanceLateForDate(branchId, workDate);
 
     const shiftTimeRangeById = new Map(
       branchShifts.map((s) => [s.shift_id, s.time_range])
