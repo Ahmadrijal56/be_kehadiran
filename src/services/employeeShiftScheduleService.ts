@@ -12,6 +12,7 @@ import { currentYearMonthWib } from "../utils/format.js";
 import { timeFromDbTime, toDateOnly } from "../utils/time.js";
 import { invalidatePapanCaches } from "./papanCacheInvalidation.js";
 import { recalculateAttendanceKpiForShiftChange, syncAttendanceShiftFromSchedule } from "./attendanceKpiRecalcService.js";
+import { shiftAllowedForType } from "./organizationConfigService.js";
 
 export type ShiftOption = {
   id: number;
@@ -179,10 +180,25 @@ export async function saveBranchShiftSchedule(
   const validDays = new Set(daysInMonth(yearMonth));
   const employees = await prisma.employee.findMany({
     where: { branchId, isActive: true },
-    select: { id: true, defaultShiftId: true },
+    select: { id: true, defaultShiftId: true, employeeTypeCode: true },
   });
   const empIds = new Set(employees.map((e) => e.id));
   const empById = new Map(employees.map((e) => [e.id, e]));
+  const typeCodes = [...new Set(
+    employees
+      .map((e) => e.employeeTypeCode)
+      .filter((code): code is string => Boolean(code))
+  )];
+  const typeConfigs =
+    typeCodes.length > 0
+      ? await prisma.employeeTypeConfig.findMany({
+          where: { branchId, code: { in: typeCodes }, isActive: true },
+          select: { code: true, shiftIds: true },
+        })
+      : [];
+  const typeShiftIdsByCode = new Map(
+    typeConfigs.map((cfg) => [cfg.code, cfg.shiftIds] as const)
+  );
 
   const allowedShiftIds = new Set(
     (await listShiftOptions(branchId)).map((s) => s.id)
@@ -197,6 +213,21 @@ export async function saveBranchShiftSchedule(
     }
     if (ch.shift_id !== null && !allowedShiftIds.has(ch.shift_id)) {
       throw validationError(`Shift tidak valid: ${ch.shift_id}`);
+    }
+    if (ch.shift_id !== null && ch.shift_id !== OFF_SHIFT_ID) {
+      const employee = empById.get(ch.employee_id);
+      const allowedTypeShiftIds =
+        employee?.employeeTypeCode != null
+          ? typeShiftIdsByCode.get(employee.employeeTypeCode) ?? []
+          : [];
+      if (
+        employee?.employeeTypeCode &&
+        !shiftAllowedForType(allowedTypeShiftIds, ch.shift_id)
+      ) {
+        throw validationError(
+          `Shift ${ch.shift_id} tidak diizinkan untuk tipe karyawan ${employee.employeeTypeCode}`
+        );
+      }
     }
   }
 
