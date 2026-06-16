@@ -10,6 +10,12 @@ import {
 import type { KpiScoreResult } from "./kpiScoringService.js";
 import { invalidatePapanCaches } from "./papanCacheInvalidation.js";
 import { computeCheckInKpiFields } from "./attendanceKpiRecalcService.js";
+import {
+  notifyLateAttendanceForReview,
+  type AttendanceShiftContext,
+} from "./notificationService.js";
+import { getBranchShiftWindow } from "./branchShiftConfigService.js";
+import { timeFromDbTime } from "../utils/time.js";
 
 export type ProcessCheckInInput = {
   employeeId: string;
@@ -154,6 +160,24 @@ export async function processCheckIn(
     });
   }
 
+  if (!pendingSchedule && (status === "late" || lateMinutes > 0)) {
+    const shiftWindow = await getBranchShiftWindow(employee.branchId, shiftId);
+    const shift: AttendanceShiftContext = {
+      shift_id: shiftId,
+      shift_code: shiftWindow.code,
+      shift_name: shiftWindow.name,
+      time_range: formatShiftTimeRange(shiftWindow.startTime, shiftWindow.endTime),
+    };
+    await notifyLateAttendanceForReview(employee.branchId, {
+      attendanceId: attendance.id,
+      employeeId: employee.id,
+      employeeName: employee.fullName,
+      workDate: workDate.toISOString().slice(0, 10),
+      lateMinutes,
+      shift,
+    });
+  }
+
   await invalidatePapanCaches(employee.branchId);
 
   return {
@@ -170,4 +194,10 @@ export async function listTables(): Promise<string[]> {
     ORDER BY tablename
   `;
   return rows.map((r) => r.tablename);
+}
+
+function formatShiftTimeRange(start: Date, end: Date): string {
+  const s = timeFromDbTime(start);
+  const e = timeFromDbTime(end);
+  return `${String(s.hours).padStart(2, "0")}:${String(s.minutes).padStart(2, "0")}–${String(e.hours).padStart(2, "0")}:${String(e.minutes).padStart(2, "0")}`;
 }

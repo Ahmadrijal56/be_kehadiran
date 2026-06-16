@@ -273,3 +273,87 @@ export async function notifyAttendanceLate(
     },
   });
 }
+
+export async function notifyLateAttendanceForReview(
+  branchId: string,
+  payload: {
+    attendanceId: string;
+    employeeId: string;
+    employeeName: string;
+    workDate: string;
+    lateMinutes: number;
+    shift: AttendanceShiftContext;
+  }
+): Promise<void> {
+  const managers = await prisma.user.findMany({
+    where: {
+      isActive: true,
+      ...userInBranchWhere(branchId),
+      userRoles: { some: { role: { code: "manager" } } },
+    },
+    select: { id: true },
+  });
+
+  const owners = await prisma.user.findMany({
+    where: {
+      isActive: true,
+      userRoles: { some: { role: { code: "owner" } } },
+    },
+    select: { id: true },
+  });
+
+  const dateLabel = formatWorkDateLabelLong(payload.workDate);
+  const lateText =
+    payload.lateMinutes > 0 ? `${payload.lateMinutes} menit` : "terlambat";
+  const shiftText = `${payload.shift.shift_name} (${payload.shift.time_range})`;
+
+  for (const { id: userId } of managers) {
+    await prisma.notification.create({
+      data: {
+        userId,
+        type: "staff_late_needs_evaluation",
+        title: "Staff terlambat perlu evaluasi",
+        body:
+          `${payload.employeeName} tercatat terlambat ${lateText} ` +
+          `pada ${dateLabel} (shift ${shiftText}). Buka menu Review Telat untuk evaluasi.`,
+        dataJson: {
+          attendance_id: payload.attendanceId,
+          employee_id: payload.employeeId,
+          employee_name: payload.employeeName,
+          branch_id: branchId,
+          work_date: payload.workDate,
+          late_minutes: payload.lateMinutes,
+          shift_id: payload.shift.shift_id,
+          shift_code: payload.shift.shift_code,
+          shift_name: payload.shift.shift_name,
+          time_range: payload.shift.time_range,
+        },
+      },
+    });
+  }
+
+  for (const { id: userId } of owners) {
+    await prisma.notification.create({
+      data: {
+        userId,
+        type: "staff_late_report_copy",
+        title: "Salinan laporan keterlambatan staff",
+        body:
+          `${payload.employeeName} tercatat terlambat ${lateText} ` +
+          `pada ${dateLabel} (shift ${shiftText}). Salinan laporan tersedia untuk monitoring owner.`,
+        dataJson: {
+          attendance_id: payload.attendanceId,
+          employee_id: payload.employeeId,
+          employee_name: payload.employeeName,
+          branch_id: branchId,
+          work_date: payload.workDate,
+          late_minutes: payload.lateMinutes,
+          shift_id: payload.shift.shift_id,
+          shift_code: payload.shift.shift_code,
+          shift_name: payload.shift.shift_name,
+          time_range: payload.shift.time_range,
+        },
+      },
+    });
+  }
+}

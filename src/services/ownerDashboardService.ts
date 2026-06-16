@@ -4,11 +4,20 @@ import { todayWorkDateWib } from "../utils/format.js";
 import {
   attendanceHasCheckedIn,
   attendanceIsLate,
+  reconcileBranchAttendanceLateForDate,
 } from "./branchAttendanceService.js";
 import { attachTypeShiftsToLeaderboardEntries } from "./leaderboardService.js";
 
 export async function getOwnerDashboardSummary() {
   const workDate = todayWorkDateWib();
+  const branches = await prisma.branch.findMany({
+    where: { isActive: true },
+    select: { id: true },
+  });
+  await Promise.all(
+    branches.map((b) => reconcileBranchAttendanceLateForDate(b.id, workDate))
+  );
+
   const [employees, records] = await Promise.all([
     prisma.employee.count({ where: { isActive: true } }),
     prisma.attendanceRecord.findMany({
@@ -44,6 +53,10 @@ export async function getOwnerBranchesComparison() {
     where: { isActive: true },
     orderBy: { code: "asc" },
   });
+
+  await Promise.all(
+    branches.map((b) => reconcileBranchAttendanceLateForDate(b.id, workDate))
+  );
 
   const [employeeCounts, attendanceRecords] = await Promise.all([
     prisma.employee.groupBy({

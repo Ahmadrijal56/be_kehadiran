@@ -373,6 +373,18 @@ export async function saveEmployeeTypes(
         where: { branchId_code: { branchId, code: item.original_code } },
       });
     }
+
+    for (const item of resolved) {
+      if (item.shift_ids.length === 0) continue;
+      await tx.employee.updateMany({
+        where: {
+          branchId,
+          employeeTypeCode: item.code,
+          isActive: true,
+        },
+        data: { defaultShiftId: item.shift_ids[0] ?? 1 },
+      });
+    }
   });
 
   await writeAuditLog({
