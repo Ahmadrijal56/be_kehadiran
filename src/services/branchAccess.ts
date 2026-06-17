@@ -8,10 +8,19 @@ export function assertBranchAccess(user: AuthUser, branchId: string): void {
   }
 }
 
+export function isDeveloperActor(actor: AuthUser): boolean {
+  return actor.roles.includes("developer");
+}
+
+export function isPrivilegedSupportActor(actor: AuthUser): boolean {
+  return actor.roles.includes("owner") || isDeveloperActor(actor);
+}
+
 export function actorSharesBranchWith(
   actor: AuthUser,
   targetBranchIds: string[]
 ): boolean {
-  if (actor.roles.includes("owner")) return true;
+  if (isPrivilegedSupportActor(actor)) return true;
+  if (targetBranchIds.length === 0) return false;
   return actor.branchIds.some((id) => targetBranchIds.includes(id));
 }

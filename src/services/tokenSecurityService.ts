@@ -104,6 +104,72 @@ export async function clearLoginFailures(identifier: string): Promise<void> {
   await redis.del(`login:fail:${key}`, `login:lock:${key}`);
 }
 
+export type LoginLockStatus = {
+  locked: boolean;
+  fail_count: number;
+  remaining_sec: number | null;
+  /** Lock hanya aktif di production (NODE_ENV=production). */
+  applies_in_production: boolean;
+};
+
+export async function getLoginLockStatus(
+  identifier: string
+): Promise<LoginLockStatus> {
+  if (env.nodeEnv !== "production") {
+    return {
+      locked: false,
+      fail_count: 0,
+      remaining_sec: null,
+      applies_in_production: false,
+    };
+  }
+  const redis = await redisReady();
+  if (!redis) {
+    return {
+      locked: false,
+      fail_count: 0,
+      remaining_sec: null,
+      applies_in_production: true,
+    };
+  }
+  const key = identifier.trim().toLowerCase();
+  const [lock, fails, ttl] = await Promise.all([
+    redis.get(`login:lock:${key}`),
+    redis.get(`login:fail:${key}`),
+    redis.ttl(`login:lock:${key}`),
+  ]);
+  const failCount = fails ? Number.parseInt(fails, 10) : 0;
+  return {
+    locked: lock === "1",
+    fail_count: Number.isFinite(failCount) ? failCount : 0,
+    remaining_sec: lock === "1" && ttl > 0 ? ttl : null,
+    applies_in_production: true,
+  };
+}
+
+export async function clearLoginFailuresForUser(user: {
+  nik: string;
+  email: string | null;
+}): Promise<string[]> {
+  const cleared: string[] = [];
+  await clearLoginFailures(user.nik);
+  cleared.push(user.nik);
+  const email = user.email?.trim();
+  if (email) {
+    await clearLoginFailures(email);
+    cleared.push(email);
+  }
+  return cleared;
+}
+
+export function loginLockMaxAttempts(): number {
+  return LOGIN_MAX_ATTEMPTS;
+}
+
+export function loginLockDurationSec(): number {
+  return LOGIN_LOCK_SEC;
+}
+
 /** Hapus semua lock login (dev/support). */
 export async function clearAllLoginLocks(): Promise<number> {
   const redis = await redisReady();

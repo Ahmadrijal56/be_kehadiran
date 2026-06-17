@@ -13,6 +13,7 @@ enum TelegramSyncStatus {
   pending
   processed
   failed
+  pending_schedule
 }
 
 enum AttendanceStatus {

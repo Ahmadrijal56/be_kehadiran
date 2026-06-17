@@ -36,6 +36,15 @@ import { setDeveloperKpiBatch } from "../../services/developerToolsService.js";
 import { getDeveloperMonitorSnapshot } from "../../services/developerMonitorService.js";
 import { setOrgWideRankingEnabled, setEmployeeLiveAttendanceEnabled } from "../../services/organizationConfigService.js";
 import { executeFactoryReset } from "../../services/factoryResetService.js";
+import {
+  getDeveloperSupportLoginLock,
+  searchDeveloperSupportUsers,
+  unlockDeveloperSupportLogin,
+} from "../../services/branchUserService.js";
+import {
+  fillMissingDeveloperSupportAttendance,
+  getDeveloperSupportAttendance,
+} from "../../services/developerSupportAttendanceService.js";
 import { handleDeveloperMonitorStream } from "./developerMonitorStream.js";
 
 const avatarUpload = multer({
@@ -57,6 +66,87 @@ meDeveloperRouter.get(
   "/branches",
   asyncHandler(async (_req, res) => {
     res.json({ data: await listDeveloperBranches() });
+  })
+);
+
+meDeveloperRouter.get(
+  "/support/users",
+  asyncHandler(async (req, res) => {
+    const q = String(req.query.q ?? "");
+    const limitRaw = req.query.limit;
+    const limit =
+      limitRaw != null && limitRaw !== "" ? Number(limitRaw) : undefined;
+    res.json({
+      data: await searchDeveloperSupportUsers(
+        q,
+        Number.isFinite(limit) ? limit : undefined
+      ),
+    });
+  })
+);
+
+meDeveloperRouter.get(
+  "/support/users/:userId/login-lock",
+  asyncHandler(async (req, res) => {
+    res.json({
+      data: await getDeveloperSupportLoginLock(String(req.params.userId)),
+    });
+  })
+);
+
+meDeveloperRouter.post(
+  "/support/users/:userId/unlock-login",
+  asyncHandler(async (req, res) => {
+    const { reason } = (req.body ?? {}) as { reason?: string };
+    res.json({
+      data: await unlockDeveloperSupportLogin(
+        req.user!,
+        String(req.params.userId),
+        reason
+      ),
+    });
+  })
+);
+
+meDeveloperRouter.get(
+  "/support/users/:userId/attendance",
+  asyncHandler(async (req, res) => {
+    const work_date = req.query.work_date
+      ? String(req.query.work_date)
+      : undefined;
+    res.json({
+      data: await getDeveloperSupportAttendance(
+        String(req.params.userId),
+        work_date
+      ),
+    });
+  })
+);
+
+meDeveloperRouter.post(
+  "/support/users/:userId/attendance/fill-missing",
+  asyncHandler(async (req, res) => {
+    const body = (req.body ?? {}) as {
+      work_date?: string;
+      check_in_at?: string;
+      check_out_at?: string;
+      reason?: string;
+    };
+    if (!body.work_date) {
+      throw validationError("work_date wajib (YYYY-MM-DD)");
+    }
+    res.json({
+      data: await fillMissingDeveloperSupportAttendance(
+        req.user!,
+        String(req.params.userId),
+        {
+          work_date: body.work_date,
+          check_in_at: body.check_in_at,
+          check_out_at: body.check_out_at,
+          reason: body.reason ?? "",
+        }
+      ),
+    });
   })
 );
 

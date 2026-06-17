@@ -9,8 +9,17 @@ import {
 } from "../lib/errors.js";
 import type { AuthUser } from "./authService.js";
 import { hasPermission } from "./authService.js";
+import {
+  actorSharesBranchWith,
+  isPrivilegedSupportActor,
+} from "./branchAccess.js";
 import { writeAuditLog } from "./auditService.js";
-import { actorSharesBranchWith } from "./branchAccess.js";
+import {
+  clearLoginFailuresForUser,
+  getLoginLockStatus,
+  loginLockDurationSec,
+  loginLockMaxAttempts,
+} from "./tokenSecurityService.js";
 import {
   assertBranchesExist,
   getBranchIdsForUser,
@@ -335,6 +344,127 @@ function resolveEmployeeTypeShifts(
     });
 }
 
+function developerSupportUserWhere(search: string) {
+  const needle = trimStr(search);
+  const base = {
+    ...userHiddenFromDirectoryWhere(),
+    userRoles: { some: { role: { code: "employee" } } },
+    NOT: {
+      userRoles: {
+        some: { role: { code: { in: ["manager", "owner"] } } },
+      },
+    },
+  };
+  if (!needle) return base;
+  return {
+    AND: [
+      base,
+      {
+        OR: [
+          { fullName: { contains: needle, mode: "insensitive" as const } },
+          { nik: { contains: needle, mode: "insensitive" as const } },
+          { email: { contains: needle, mode: "insensitive" as const } },
+          {
+            branch: {
+              OR: [
+                { code: { contains: needle, mode: "insensitive" as const } },
+                { name: { contains: needle, mode: "insensitive" as const } },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  };
+}
+
+export async function searchDeveloperSupportUsers(query: string, limit = 40) {
+  const needle = trimStr(query);
+  if (needle.length < 2) return [];
+
+  const users = await prisma.user.findMany({
+    where: developerSupportUserWhere(needle),
+    include: userInclude,
+    take: Math.min(Math.max(limit, 1), 80),
+    orderBy: { fullName: "asc" },
+  });
+  return enrichUsersWithTypeShifts(users.map(mapUser));
+}
+
+export async function getDeveloperSupportLoginLock(userId: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, nik: true, email: true },
+  });
+  if (!user) throw notFound("User tidak ditemukan");
+
+  const nikStatus = await getLoginLockStatus(user.nik);
+  const emailStatus = user.email
+    ? await getLoginLockStatus(user.email)
+    : null;
+
+  const locked = nikStatus.locked || Boolean(emailStatus?.locked);
+  const fail_count = Math.max(
+    nikStatus.fail_count,
+    emailStatus?.fail_count ?? 0
+  );
+  const remainingCandidates = [
+    nikStatus.remaining_sec,
+    emailStatus?.remaining_sec ?? null,
+  ].filter((v): v is number => v != null && v > 0);
+  const remaining_sec =
+    remainingCandidates.length > 0
+      ? Math.max(...remainingCandidates)
+      : null;
+
+  return {
+    locked,
+    fail_count,
+    remaining_sec,
+    applies_in_production: nikStatus.applies_in_production,
+    max_attempts: loginLockMaxAttempts(),
+    lock_duration_sec: loginLockDurationSec(),
+  };
+}
+
+export async function unlockDeveloperSupportLogin(
+  actor: AuthUser,
+  userId: string,
+  reason?: string
+) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    include: { userRoles: { include: { role: true } } },
+  });
+  if (!user) throw notFound("User tidak ditemukan");
+
+  if (userHasHiddenDirectoryRole(user.userRoles)) {
+    throw forbidden("Akun sistem tidak dapat dibuka kuncinya dari sini");
+  }
+
+  const identifiers = await clearLoginFailuresForUser({
+    nik: user.nik,
+    email: user.email,
+  });
+
+  await writeAuditLog({
+    userId: actor.id,
+    action: "auth.login.unlock",
+    entityType: "user",
+    entityId: userId,
+    newValues: {
+      identifiers,
+      reason: reason?.trim() || null,
+    },
+  });
+
+  return {
+    unlocked: true,
+    identifiers,
+    ...(await getDeveloperSupportLoginLock(userId)),
+  };
+}
+
 export async function listBranchUsers(branchId: string) {
   const users = await prisma.user.findMany({
     where: {
@@ -598,7 +728,8 @@ export async function updateUserBranches(
   branchIds: string[]
 ) {
   const isOwner = actor.roles.includes("owner");
-  if (!isOwner && !hasPermission(actor, "users.manage.branch")) {
+  const isPrivileged = isPrivilegedSupportActor(actor);
+  if (!isPrivileged && !hasPermission(actor, "users.manage.branch")) {
     throw forbidden("Tidak memiliki izin mengatur cabang pengguna");
   }
 
@@ -631,7 +762,7 @@ export async function updateUserBranches(
       throw businessError("Akun karyawan tidak terhubung ke data HR");
     }
 
-    if (!isOwner) {
+    if (!isPrivileged) {
       if (roles.includes("manager")) {
         throw forbidden("Manager hanya dapat memindahkan cabang karyawan");
       }
@@ -1077,7 +1208,11 @@ export async function updateBranchUser(
 
   const isOwnerRole = user.userRoles.some((ur) => ur.role.code === "owner");
   const isManager = user.userRoles.some((ur) => ur.role.code === "manager");
-  if (isOwnerRole || (isManager && actor.id !== user.id && !actor.roles.includes("owner"))) {
+  const privileged = isPrivilegedSupportActor(actor);
+  if (
+    isOwnerRole ||
+    (isManager && actor.id !== user.id && !privileged)
+  ) {
     throw forbidden("Tidak dapat mengubah akun owner/manager lain");
   }
 
@@ -1220,7 +1355,11 @@ async function assertCanManageUser(actor: AuthUser, userId: string) {
 
   const isOwnerRole = user.userRoles.some((ur) => ur.role.code === "owner");
   const isManager = user.userRoles.some((ur) => ur.role.code === "manager");
-  if (isOwnerRole || (isManager && actor.id !== user.id && !actor.roles.includes("owner"))) {
+  const privileged = isPrivilegedSupportActor(actor);
+  if (
+    isOwnerRole ||
+    (isManager && actor.id !== user.id && !privileged)
+  ) {
     throw forbidden("Tidak dapat mengubah akun owner/manager lain");
   }
 

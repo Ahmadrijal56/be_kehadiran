@@ -245,7 +245,7 @@ export function userHasBranchAccess(
   roles: string[],
   branchId: string
 ): boolean {
-  if (roles.includes("owner")) return true;
+  if (roles.includes("owner") || roles.includes("developer")) return true;
   return branchIds.includes(branchId);
 }
 

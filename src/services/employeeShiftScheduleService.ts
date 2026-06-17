@@ -14,6 +14,7 @@ import { timeFromDbTime, toDateOnly } from "../utils/time.js";
 import { assertShiftWorkDateEditable } from "./attendanceIntegrity.js";
 import { invalidatePapanCaches } from "./papanCacheInvalidation.js";
 import { recalculateAttendanceKpiForShiftChange, syncAttendanceShiftFromSchedule } from "./attendanceKpiRecalcService.js";
+import { reprocessPendingScheduleAfterGridUpdate } from "./pendingScheduleReprocessService.js";
 
 export type ShiftOption = {
   id: number;
@@ -22,6 +23,24 @@ export type ShiftOption = {
   time_range: string | null;
   is_off: boolean;
 };
+
+export function pickPrimaryShiftId(
+  typeShiftIds: number[],
+  shiftStartMinuteById: Map<number, number>
+): number | undefined {
+  let bestId: number | undefined;
+  let bestMinute = Number.POSITIVE_INFINITY;
+  for (const id of typeShiftIds) {
+    if (id === OFF_SHIFT_ID) continue;
+    const minute = shiftStartMinuteById.get(id);
+    if (minute == null) continue;
+    if (minute < bestMinute || (minute === bestMinute && (bestId == null || id < bestId))) {
+      bestMinute = minute;
+      bestId = id;
+    }
+  }
+  return bestId;
+}
 
 export type ScheduleEmployeeRow = {
   employee_id: string;
@@ -423,6 +442,11 @@ export async function saveBranchShiftSchedule(
     await invalidatePapanCaches(branchId);
   }
 
+  const reprocessResult = await reprocessPendingScheduleAfterGridUpdate(
+    changes,
+    branchId
+  );
+
   const assignedEmployeeIds = [...new Set(changes.map((ch) => ch.employee_id))];
   if (assignedEmployeeIds.length > 0) {
     await prisma.employee.updateMany({
@@ -440,6 +464,7 @@ export async function saveBranchShiftSchedule(
       year_month: yearMonth,
       change_count: changes.length,
       kpi_recalculated: kpiRecalculated,
+      pending_attendance_reprocessed: reprocessResult.processed,
     },
   });
 
@@ -535,10 +560,28 @@ export async function resolveShiftDayStatesForEmployees(
           select: { branchId: true, code: true, shiftIds: true },
         })
       : [];
+  const uniqueTypeShiftIds = [...new Set(
+    typeConfigs.flatMap((cfg) => cfg.shiftIds).filter((id) => id !== OFF_SHIFT_ID)
+  )];
+  const shifts = uniqueTypeShiftIds.length
+    ? await prisma.shift.findMany({
+        where: { id: { in: uniqueTypeShiftIds } },
+        select: { id: true, startTime: true },
+      })
+    : [];
+  const shiftStartMinuteById = new Map<number, number>(
+    shifts.map((s) => {
+      const start = timeFromDbTime(s.startTime);
+      return [s.id, start.hours * 60 + start.minutes];
+    })
+  );
   const primaryShiftByType = new Map(
     typeConfigs
-      .filter((cfg) => cfg.shiftIds.length > 0)
-      .map((cfg) => [`${cfg.branchId}:${cfg.code}`, cfg.shiftIds[0] as number])
+      .map((cfg) => {
+        const primary = pickPrimaryShiftId(cfg.shiftIds, shiftStartMinuteById);
+        return primary != null ? [`${cfg.branchId}:${cfg.code}`, primary] : null;
+      })
+      .filter((entry): entry is [string, number] => entry != null)
   );
 
   const overrides = await prisma.employeeShift.findMany({

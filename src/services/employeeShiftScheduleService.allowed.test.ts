@@ -3,6 +3,7 @@ import { OFF_SHIFT_ID } from "../constants/shifts.js";
 import {
   assertShiftAllowedForEmployee,
   loadBranchEmployeeTypeMap,
+  pickPrimaryShiftId,
   resolveBranchEmployeeType,
   resolveEmployeeAllowedShiftIds,
   shiftListFormulaForAllowed,
@@ -65,5 +66,23 @@ describe("resolveBranchEmployeeType", () => {
 describe("loadBranchEmployeeTypeMap", () => {
   it("diekspor sebagai fungsi async", () => {
     expect(typeof loadBranchEmployeeTypeMap).toBe("function");
+  });
+});
+
+describe("pickPrimaryShiftId", () => {
+  it("memilih shift dengan jam mulai paling awal", () => {
+    const shiftStartMinuteById = new Map<number, number>([
+      [1, 7 * 60],
+      [2, 9 * 60],
+      [5, 13 * 60],
+    ]);
+    expect(pickPrimaryShiftId([2, 5, 1], shiftStartMinuteById)).toBe(1);
+  });
+
+  it("mengabaikan OFF dan shift yang tidak dikenal", () => {
+    const shiftStartMinuteById = new Map<number, number>([[5, 13 * 60]]);
+    expect(
+      pickPrimaryShiftId([OFF_SHIFT_ID, 9, 5], shiftStartMinuteById)
+    ).toBe(5);
   });
 });

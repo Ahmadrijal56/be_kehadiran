@@ -4,7 +4,7 @@ import { log } from "../lib/logger.js";
 import { resolveBreakAttendanceEnabled } from "../lib/breakAttendance.js";
 import { prisma } from "../lib/prisma.js";
 import { toDateOnly } from "../utils/time.js";
-import { processCheckIn, resolveShiftId } from "./attendanceService.js";
+import { processCheckIn, resolveShiftId, assertGridScheduleForAttendance } from "./attendanceService.js";
 import { assertIngestWorkDateAllowed } from "./attendanceIntegrity.js";
 import { ensureUserAccountForEmployee } from "./employeeAccountService.js";
 import { findCrossBranchAttendanceOnDate } from "./accountIdentityService.js";
@@ -19,6 +19,9 @@ import {
   namesMatch,
 } from "./employeeMatching.js";
 import { invalidatePapanCaches } from "./papanCacheInvalidation.js";
+import {
+  isPendingScheduleError,
+} from "../lib/pendingScheduleError.js";
 
 type DailyScanSlot = "check_in" | "break_start" | "break_end" | "check_out";
 
@@ -243,6 +246,29 @@ export async function processTelegramMessageById(
       cabang: parsed.cabang ?? parsed.perusahaan ?? "-",
     });
   } catch (err) {
+    if (isPendingScheduleError(err)) {
+      const parsed = correctBiofingerDateSkew(
+        parseTelegramMessageText(message.rawText),
+        message.receivedAt
+      );
+      await prisma.telegramMessage.update({
+        where: { id: message.id },
+        data: {
+          syncStatus: "pending_schedule",
+          processedAt: new Date(),
+          parsedJson: parsed as unknown as Prisma.InputJsonValue,
+          errorMessage: err.message,
+        },
+      });
+      log("info", "Absensi BioFinger menunggu jadwal shift grid", {
+        messageId: telegramMessageDbId,
+        employeeId: err.employeeId,
+        workDate: err.workDate,
+        nik: parsed.nik,
+      });
+      return;
+    }
+
     const errorMessage = err instanceof Error ? err.message : String(err);
 
     if (errorMessage.includes("DUPLICATE_ATTENDANCE")) {
@@ -525,6 +551,19 @@ export async function ingestManualAttendanceFromText(rawText: string): Promise<{
       telegram_message_id: record.id,
     };
   } catch (err) {
+    if (isPendingScheduleError(err)) {
+      await prisma.telegramMessage.update({
+        where: { id: record.id },
+        data: {
+          syncStatus: "pending_schedule",
+          processedAt: new Date(),
+          parsedJson: parsed as unknown as Prisma.InputJsonValue,
+          errorMessage: err.message,
+        },
+      });
+      throw err;
+    }
+
     const errorMessage = err instanceof Error ? err.message : String(err);
     await prisma.telegramMessage.update({
       where: { id: record.id },
@@ -578,6 +617,7 @@ async function applyParsedAttendance(
 
   const workDate = toDateOnly(parsedInput.workDate);
   assertIngestWorkDateAllowed(workDate);
+  await assertGridScheduleForAttendance(employee, workDate);
 
   const crossBranch = await findCrossBranchAttendanceOnDate(employee.id, workDate);
   if (crossBranch) {
