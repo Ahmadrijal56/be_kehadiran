@@ -1,5 +1,32 @@
 import { prisma } from "../lib/prisma.js";
+import { forbidden } from "../lib/errors.js";
 import { BRANCH_MANAGER_PERMISSIONS } from "../constants/branchManagerPermissions.js";
+import type { AuthUser } from "./authService.js";
+
+/** Hanya owner atau manager penuh — bukan kepala toko (toggle manajer shift). */
+export function actorCanConfigureBranchManagerFeatures(actor: AuthUser): boolean {
+  return actor.roles.includes("owner") || actor.roles.includes("manager");
+}
+
+export async function assertActorMayAssignEmployeeType(
+  actor: AuthUser,
+  branchId: string,
+  employeeTypeCode: string | null | undefined
+): Promise<void> {
+  const code = employeeTypeCode?.trim();
+  if (!code) return;
+  if (actorCanConfigureBranchManagerFeatures(actor)) return;
+
+  const typeConfig = await prisma.employeeTypeConfig.findFirst({
+    where: { branchId, code: code.toUpperCase(), isActive: true },
+    select: { managerFeaturesEnabled: true },
+  });
+  if (typeConfig?.managerFeaturesEnabled) {
+    throw forbidden(
+      "Hanya owner atau manager yang dapat menetapkan tipe dengan fitur kelola cabang"
+    );
+  }
+}
 
 export async function employeeHasBranchManagerFeatures(
   employeeId: string | null | undefined

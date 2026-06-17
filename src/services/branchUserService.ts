@@ -32,6 +32,9 @@ import {
 } from "../constants/directoryVisibility.js";
 import { userInBranchWhere } from "./activeEmployeeFilter.js";
 import { updateEmployeeType } from "./organizationConfigService.js";
+import {
+  assertActorMayAssignEmployeeType,
+} from "./branchManagerFeaturesService.js";
 import { timeFromDbTime } from "../utils/time.js";
 
 export type BranchUserRole = "employee" | "manager";
@@ -518,6 +521,11 @@ export async function createBranchUser(
 
   let employeeId: string | null = null;
   if (role === "employee") {
+    await assertActorMayAssignEmployeeType(
+      actor,
+      branchId,
+      data.employee_type_code
+    );
     employeeId = await ensureEmployeeRecord(
       branchId,
       nik,
@@ -957,6 +965,8 @@ export async function updateUserAccountRole(
   if (!branchId) {
     throw validationError("Cabang karyawan tidak ditemukan");
   }
+
+  await assertActorMayAssignEmployeeType(actor, branchId, typeCode);
 
   const typeConfig = await prisma.employeeTypeConfig.findFirst({
     where: { branchId, code: typeCode, isActive: true },

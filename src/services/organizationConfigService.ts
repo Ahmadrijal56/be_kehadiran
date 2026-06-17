@@ -18,6 +18,10 @@ import { hasPermission } from "./authService.js";
 import { writeAuditLog } from "./auditService.js";
 import { assertBranchAccess } from "./branchAccess.js";
 import { invalidateAttendanceKpiStartCache } from "./attendanceKpiWindowService.js";
+import {
+  actorCanConfigureBranchManagerFeatures,
+  assertActorMayAssignEmployeeType,
+} from "./branchManagerFeaturesService.js";
 
 export type EmployeeTypeRow = {
   code: string;
@@ -303,8 +307,19 @@ export async function saveEmployeeTypes(
 
   const existing = await prisma.employeeTypeConfig.findMany({
     where: { branchId },
-    select: { code: true, label: true },
+    select: { code: true, label: true, managerFeaturesEnabled: true },
   });
+
+  if (!actorCanConfigureBranchManagerFeatures(actor)) {
+    const byCode = new Map(
+      existing.map((e) => [e.code, e.managerFeaturesEnabled])
+    );
+    for (const item of resolved) {
+      const prevCode = item.original_code ?? item.code;
+      item.manager_features_enabled =
+        byCode.get(prevCode) ?? byCode.get(item.code) ?? false;
+    }
+  }
 
   const keptCodes = new Set<string>();
   for (const item of resolved) {
@@ -837,6 +852,8 @@ export async function updateEmployeeType(
 ) {
   assertCanManageEmployeeTypes(actor);
   assertBranchAccess(actor, branchId);
+
+  await assertActorMayAssignEmployeeType(actor, branchId, employeeTypeCode);
 
   const employee = await prisma.employee.findFirst({
     where: { id: employeeId, branchId, isActive: true },
