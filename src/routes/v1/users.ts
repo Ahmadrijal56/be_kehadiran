@@ -4,6 +4,7 @@ import { asyncHandler } from "../../middleware/asyncHandler.js";
 import {
   deactivateUser,
   deleteUserPermanently,
+  reactivateUser,
   resetUserPassword,
   updateBranchUser,
   updateUserBranches,
@@ -50,6 +51,16 @@ usersRouter.patch(
   asyncHandler(async (req, res) => {
     const userId = String(req.params.userId);
     const data = await deactivateUser(req.user!, userId);
+    res.json({ data });
+  })
+);
+
+usersRouter.patch(
+  "/:userId/activate",
+  requirePermission("users.manage.branch"),
+  asyncHandler(async (req, res) => {
+    const userId = String(req.params.userId);
+    const data = await reactivateUser(req.user!, userId);
     res.json({ data });
   })
 );

@@ -1430,6 +1430,26 @@ export async function deactivateUser(actor: AuthUser, userId: string) {
   return result;
 }
 
+export async function reactivateUser(actor: AuthUser, userId: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { isActive: true },
+  });
+  if (!user) throw notFound("User tidak ditemukan");
+  if (user.isActive) {
+    throw businessError("Akun sudah aktif");
+  }
+
+  const result = await updateBranchUser(actor, userId, { is_active: true });
+  await writeAuditLog({
+    userId: actor.id,
+    action: "user.reactivate",
+    entityType: "user",
+    entityId: userId,
+  });
+  return result;
+}
+
 export async function deleteUserPermanently(actor: AuthUser, userId: string) {
   if (
     !hasPermission(actor, "users.manage.branch") &&
