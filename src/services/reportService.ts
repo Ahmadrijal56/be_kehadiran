@@ -317,8 +317,23 @@ function reportTypeTitle(type: "daily" | "monthly" | "late"): string {
   return "LAPORAN KETERLAMBATAN";
 }
 
-function displayTime(iso: string | null | undefined): string {
-  return formatWibTime(iso) ?? "—";
+const EMPTY_TYPE_LABEL = "Belum diatur";
+
+function printedAtLabel(): string {
+  return `${formatWibDateTimeLabel(new Date()) ?? ""} WIB`.trim();
+}
+
+function displayEmployeeType(label: string | null | undefined): string {
+  const trimmed = label?.trim();
+  return trimmed || EMPTY_TYPE_LABEL;
+}
+
+function displayOptionalTime(iso: string | null | undefined): string | null {
+  return formatWibTime(iso);
+}
+
+function displayLateMinutes(minutes: number): number | null {
+  return minutes > 0 ? minutes : null;
 }
 
 function writeTitleBlock(
@@ -383,8 +398,10 @@ function writeDataRows(
   sheet: Worksheet,
   columns: ExcelColumnDef[],
   rows: Record<string, unknown>[],
-  opts?: { statusKey?: string }
+  opts?: { statusKey?: string; statusLabelKey?: string }
 ): void {
+  const statusLabelKey = opts?.statusLabelKey ?? "status_label";
+
   rows.forEach((data, rowIdx) => {
     const rowNum = HEADER_ROW + 1 + rowIdx;
     const row = sheet.getRow(rowNum);
@@ -393,7 +410,9 @@ function writeDataRows(
     columns.forEach((col, colIdx) => {
       const cell = row.getCell(colIdx + 1);
       const raw = data[col.key];
-      cell.value = raw === null || raw === undefined ? "—" : raw;
+      const isEmpty =
+        raw === null || raw === undefined || raw === "";
+      cell.value = isEmpty ? null : raw;
       if (col.text) cell.numFmt = "@";
       cell.alignment = {
         vertical: "middle",
@@ -402,9 +421,13 @@ function writeDataRows(
       };
       cell.border = thinBorder();
 
+      if (col.key === "employee_type_label" && cell.value === EMPTY_TYPE_LABEL) {
+        cell.font = { italic: true, size: 10, color: { argb: "FF94A3B8" } };
+      }
+
       const fills: string[] = [];
       if (alt) fills.push(EXCEL.altRow);
-      if (opts?.statusKey && col.key === opts.statusKey) {
+      if (opts?.statusKey && col.key === statusLabelKey) {
         const statusFill = statusFillArgb(String(data[opts.statusKey] ?? ""));
         if (statusFill) fills.push(statusFill);
       }
@@ -424,6 +447,27 @@ function writeDataRows(
     from: { row: HEADER_ROW, column: 1 },
     to: { row: Math.max(lastRow, HEADER_ROW), column: columns.length },
   };
+}
+
+function writeEmptyBranchState(
+  sheet: Worksheet,
+  columns: ExcelColumnDef[],
+  message: string
+): void {
+  const rowNum = HEADER_ROW;
+  sheet.mergeCells(rowNum, 1, rowNum + 1, columns.length);
+  const cell = sheet.getCell(rowNum, 1);
+  cell.value = message;
+  cell.font = { size: 12, italic: true, color: { argb: "FF64748B" } };
+  cell.fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FFF1F5F9" },
+  };
+  cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+  cell.border = thinBorder();
+  sheet.getRow(rowNum).height = 36;
+  sheet.getRow(rowNum + 1).height = 36;
 }
 
 function configureColumns(sheet: Worksheet, columns: ExcelColumnDef[]): void {
@@ -472,30 +516,43 @@ function addDailyBranchSheet(
   ];
 
   const sheet = workbook.addWorksheet(sanitizeSheetName(branch.code));
+  const hasData = items.length > 0;
   writeTitleBlock(sheet, {
     title: reportTypeTitle("daily"),
     meta: [
       `Cabang: ${branch.name} (${branch.code})`,
       `Periode: ${periodLabel}`,
-      `Dicetak: ${formatWibDateTimeLabel(new Date()) ?? "—"} WIB`,
-      `Total baris: ${items.length}`,
+      `Dicetak: ${printedAtLabel()}`,
+      hasData
+        ? `Total baris: ${items.length}`
+        : "Status: Belum ada data absensi pada periode ini",
     ],
     colSpan: columns.length,
   });
   configureColumns(sheet, columns);
+
+  if (!hasData) {
+    writeEmptyBranchState(
+      sheet,
+      columns,
+      "Tidak ada catatan kehadiran untuk cabang ini pada periode yang dipilih."
+    );
+    return;
+  }
+
   styleHeaderRow(sheet, columns);
 
   const rows = items.map((item) => ({
     work_date: item.work_date,
     nik: item.nik,
     full_name: item.full_name,
-    employee_type_label: item.employee_type_label ?? "—",
+    employee_type_label: displayEmployeeType(item.employee_type_label),
     shift_code: item.shift_code,
     status: item.status,
     status_label: attendanceStatusLabel(item.status),
-    check_in_time: displayTime(item.check_in_at),
-    check_out_time: displayTime(item.check_out_at),
-    late_minutes: item.late_minutes > 0 ? item.late_minutes : "—",
+    check_in_time: displayOptionalTime(item.check_in_at),
+    check_out_time: displayOptionalTime(item.check_out_at),
+    late_minutes: displayLateMinutes(item.late_minutes),
   }));
 
   writeDataRows(sheet, columns, rows, { statusKey: "status" });
@@ -526,17 +583,30 @@ function addMonthlyBranchSheet(
   ];
 
   const sheet = workbook.addWorksheet(sanitizeSheetName(branch.code));
+  const hasData = items.length > 0;
   writeTitleBlock(sheet, {
     title: reportTypeTitle("monthly"),
     meta: [
       `Cabang: ${branch.name} (${branch.code})`,
       `Periode: ${periodLabel}`,
-      `Dicetak: ${formatWibDateTimeLabel(new Date()) ?? "—"} WIB`,
-      `Total karyawan: ${items.length}`,
+      `Dicetak: ${printedAtLabel()}`,
+      hasData
+        ? `Total karyawan: ${items.length}`
+        : "Status: Belum ada data KPI pada periode ini",
     ],
     colSpan: columns.length,
   });
   configureColumns(sheet, columns);
+
+  if (!hasData) {
+    writeEmptyBranchState(
+      sheet,
+      columns,
+      "Tidak ada data KPI bulanan untuk cabang ini pada periode yang dipilih."
+    );
+    return;
+  }
+
   styleHeaderRow(sheet, columns);
   writeDataRows(sheet, columns, items as unknown as Record<string, unknown>[]);
 }
@@ -562,22 +632,35 @@ function addLateBranchSheet(
   ];
 
   const sheet = workbook.addWorksheet(sanitizeSheetName(branch.code));
+  const hasData = items.length > 0;
   writeTitleBlock(sheet, {
     title: reportTypeTitle("late"),
     meta: [
       `Cabang: ${branch.name} (${branch.code})`,
       `Periode: ${periodLabel}`,
-      `Dicetak: ${formatWibDateTimeLabel(new Date()) ?? "—"} WIB`,
-      `Total kejadian telat: ${items.length}`,
+      `Dicetak: ${printedAtLabel()}`,
+      hasData
+        ? `Total kejadian telat: ${items.length}`
+        : "Status: Tidak ada kejadian keterlambatan pada periode ini",
     ],
     colSpan: columns.length,
   });
   configureColumns(sheet, columns);
+
+  if (!hasData) {
+    writeEmptyBranchState(
+      sheet,
+      columns,
+      "Tidak ada catatan keterlambatan untuk cabang ini pada periode yang dipilih."
+    );
+    return;
+  }
+
   styleHeaderRow(sheet, columns);
 
   const rows = items.map((item) => ({
     ...item,
-    check_in_time: displayTime(item.check_in_at),
+    check_in_time: displayOptionalTime(item.check_in_at),
   }));
   writeDataRows(sheet, columns, rows as unknown as Record<string, unknown>[]);
 }
