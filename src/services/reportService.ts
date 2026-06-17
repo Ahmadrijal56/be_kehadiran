@@ -28,7 +28,28 @@ function iterWorkDates(fromDate: Date, toDate: Date): Date[] {
 
 const MAX_DAILY_REPORT_DAYS = 93;
 
-export async function getDailyReport(from?: string, to?: string) {
+async function resolveBranchFilter(branchId?: string) {
+  const id = branchId?.trim();
+  if (!id) return undefined;
+  const branch = await prisma.branch.findFirst({
+    where: { id, isActive: true },
+    select: { id: true, code: true },
+  });
+  if (!branch) throw validationError("Cabang tidak ditemukan");
+  return branch;
+}
+
+export async function reportBranchCode(branchId?: string): Promise<string | null> {
+  const branch = await resolveBranchFilter(branchId);
+  return branch?.code ?? null;
+}
+
+export async function getDailyReport(
+  from?: string,
+  to?: string,
+  branchId?: string
+) {
+  const branch = await resolveBranchFilter(branchId);
   const { fromDate, toDate } = parseRange(from, to);
   const dates = iterWorkDates(fromDate, toDate);
   if (dates.length > MAX_DAILY_REPORT_DAYS) {
@@ -38,7 +59,10 @@ export async function getDailyReport(from?: string, to?: string) {
   }
 
   const employees = await prisma.employee.findMany({
-    where: { isActive: true },
+    where: {
+      isActive: true,
+      ...(branch ? { branchId: branch.id } : {}),
+    },
     include: {
       defaultShift: { select: { code: true, name: true } },
       employeeType: { select: { label: true } },
@@ -147,11 +171,13 @@ export async function getDailyReport(from?: string, to?: string) {
   return {
     from: fromDate.toISOString().slice(0, 10),
     to: toDate.toISOString().slice(0, 10),
+    branch_code: branch?.code ?? null,
     items,
   };
 }
 
-export async function getMonthlyReport(yearMonth?: string) {
+export async function getMonthlyReport(yearMonth?: string, branchId?: string) {
+  const branch = await resolveBranchFilter(branchId);
   const ym =
     yearMonth ??
     new Date().toISOString().slice(0, 7);
@@ -160,16 +186,22 @@ export async function getMonthlyReport(yearMonth?: string) {
   }
 
   const items = await prisma.kpiMonthlyAggregate.findMany({
-    where: { yearMonth: ym },
+    where: {
+      yearMonth: ym,
+      ...(branch ? { branchId: branch.id } : {}),
+    },
     include: {
       employee: { select: { nik: true, fullName: true } },
       branch: { select: { code: true, name: true } },
     },
-    orderBy: { totalPoints: "desc" },
+    orderBy: branch
+      ? { totalPoints: "desc" }
+      : [{ branch: { code: "asc" } }, { totalPoints: "desc" }],
   });
 
   return {
     year_month: ym,
+    branch_code: branch?.code ?? null,
     items: items.map((a) => ({
       nik: a.employee.nik,
       full_name: a.employee.fullName,
@@ -183,12 +215,18 @@ export async function getMonthlyReport(yearMonth?: string) {
   };
 }
 
-export async function getLateReport(from?: string, to?: string) {
+export async function getLateReport(
+  from?: string,
+  to?: string,
+  branchId?: string
+) {
+  const branch = await resolveBranchFilter(branchId);
   const { fromDate, toDate } = parseRange(from, to);
   const rows = await prisma.attendanceRecord.findMany({
     where: {
       workDate: { gte: fromDate, lte: toDate },
       status: "late",
+      ...(branch ? { branchId: branch.id } : {}),
     },
     include: {
       employee: { select: { nik: true, fullName: true } },
@@ -200,6 +238,7 @@ export async function getLateReport(from?: string, to?: string) {
   return {
     from: fromDate.toISOString().slice(0, 10),
     to: toDate.toISOString().slice(0, 10),
+    branch_code: branch?.code ?? null,
     items: rows.map((r) => ({
       work_date: r.workDate.toISOString().slice(0, 10),
       nik: r.employee.nik,
@@ -216,12 +255,17 @@ export async function buildReportExcel(params: {
   from?: string;
   to?: string;
   year_month?: string;
+  branch_id?: string;
 }): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("Laporan");
 
   if (params.type === "daily") {
-    const report = await getDailyReport(params.from, params.to);
+    const report = await getDailyReport(
+      params.from,
+      params.to,
+      params.branch_id
+    );
     sheet.columns = [
       { header: "Tanggal", key: "work_date", width: 12 },
       { header: "ID", key: "nik", width: 12 },
@@ -236,7 +280,10 @@ export async function buildReportExcel(params: {
     ];
     sheet.addRows(report.items);
   } else if (params.type === "monthly") {
-    const report = await getMonthlyReport(params.year_month);
+    const report = await getMonthlyReport(
+      params.year_month,
+      params.branch_id
+    );
     sheet.columns = [
       { header: "ID", key: "nik", width: 12 },
       { header: "Nama", key: "full_name", width: 24 },
@@ -249,7 +296,11 @@ export async function buildReportExcel(params: {
     ];
     sheet.addRows(report.items);
   } else {
-    const report = await getLateReport(params.from, params.to);
+    const report = await getLateReport(
+      params.from,
+      params.to,
+      params.branch_id
+    );
     sheet.columns = [
       { header: "Tanggal", key: "work_date", width: 12 },
       { header: "ID", key: "nik", width: 12 },

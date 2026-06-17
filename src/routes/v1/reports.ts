@@ -7,6 +7,7 @@ import {
   getDailyReport,
   getLateReport,
   getMonthlyReport,
+  reportBranchCode,
 } from "../../services/reportService.js";
 
 export const reportsRouter = Router();
@@ -21,7 +22,8 @@ reportsRouter.get(
     res.json({
       data: await getDailyReport(
         req.query.from as string | undefined,
-        req.query.to as string | undefined
+        req.query.to as string | undefined,
+        req.query.branch_id as string | undefined
       ),
     });
   })
@@ -32,7 +34,10 @@ reportsRouter.get(
   reportGuard,
   asyncHandler(async (req, res) => {
     res.json({
-      data: await getMonthlyReport(req.query.year_month as string | undefined),
+      data: await getMonthlyReport(
+        req.query.year_month as string | undefined,
+        req.query.branch_id as string | undefined
+      ),
     });
   })
 );
@@ -44,7 +49,8 @@ reportsRouter.get(
     res.json({
       data: await getLateReport(
         req.query.from as string | undefined,
-        req.query.to as string | undefined
+        req.query.to as string | undefined,
+        req.query.branch_id as string | undefined
       ),
     });
   })
@@ -64,12 +70,18 @@ reportsRouter.get(
       from: req.query.from as string | undefined,
       to: req.query.to as string | undefined,
       year_month: req.query.year_month as string | undefined,
+      branch_id: req.query.branch_id as string | undefined,
     });
+
+    const branchCode = await reportBranchCode(
+      req.query.branch_id as string | undefined
+    );
+    const branchSuffix = branchCode ? `-${branchCode}` : "";
 
     const filename =
       type === "monthly"
-        ? `laporan-${req.query.year_month ?? "bulanan"}.xlsx`
-        : `laporan-${type}-${req.query.from ?? ""}-${req.query.to ?? ""}.xlsx`;
+        ? `laporan-${req.query.year_month ?? "bulanan"}${branchSuffix}.xlsx`
+        : `laporan-${type}-${req.query.from ?? ""}-${req.query.to ?? ""}${branchSuffix}.xlsx`;
 
     res.setHeader(
       "Content-Type",
