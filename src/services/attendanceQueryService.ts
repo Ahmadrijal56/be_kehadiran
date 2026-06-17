@@ -146,6 +146,7 @@ type AttendanceRecordForEvents = {
   status: string;
   checkInAt: Date | null;
   checkOutAt: Date | null;
+  checkOutIsAuto: boolean;
   lateMinutes: number;
   attendanceType: AttendanceType | null;
   shift: { code: string; name: string };
@@ -225,7 +226,9 @@ function buildCheckInOutEvents(row: AttendanceRecordForEvents): AttendanceEventR
     const overtime = resolveOvertimeFields(
       workMinutes,
       row.checkInAt,
-      row.checkOutAt
+      row.checkOutAt,
+      row.status,
+      row.checkOutIsAuto
     );
     events.push({
       id: `${row.id}:out`,
@@ -380,7 +383,9 @@ export async function getTodayAttendance(employeeId: string) {
   const overtime = resolveOvertimeFields(
     workDurationMinutes,
     row.checkInAt,
-    row.checkOutAt
+    row.checkOutAt,
+    row.status,
+    row.checkOutIsAuto
   );
 
   return {
@@ -623,7 +628,9 @@ export async function listAttendanceTimeline(
         const overtime = resolveOvertimeFields(
           workDurationMinutes,
           row.checkInAt,
-          row.checkOutAt
+          row.checkOutAt,
+          row.status,
+          row.checkOutIsAuto
         );
 
         const shiftWindow = await getShiftWindowCached(row.branchId, row.shiftId);

@@ -25,6 +25,7 @@ export async function processForgotCheckoutsForDate(workDate: Date): Promise<num
       where: { id: record.id },
       data: {
         checkOutAt: checkoutAt,
+        checkOutIsAuto: true,
         status: "forgot_checkout",
       },
     });

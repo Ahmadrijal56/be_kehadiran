@@ -46,7 +46,30 @@ export async function adjustEmployeeKpi(
     );
   }
 
-  const adjustmentPoints = score.adjustmentPoints + bonus;
+  const todayAdjustments = await prisma.managerEvaluation.count({
+    where: {
+      employeeId,
+      managerId: manager.id,
+      createdAt: {
+        gte: workDate,
+        lt: new Date(workDate.getTime() + 24 * 60 * 60 * 1000),
+      },
+    },
+  });
+  if (todayAdjustments >= 3) {
+    throw businessError(
+      "Batas penyesuaian KPI untuk karyawan ini hari ini sudah tercapai (maks. 3)"
+    );
+  }
+
+  const nextAdjustment = score.adjustmentPoints + bonus;
+  if (nextAdjustment < -10 || nextAdjustment > 10) {
+    throw businessError(
+      "Total penyesuaian KPI hari ini harus antara -10 dan +10 poin"
+    );
+  }
+
+  const adjustmentPoints = nextAdjustment;
   const totalPoints = score.checkInPoints + adjustmentPoints;
 
   const updated = await prisma.$transaction(async (tx) => {

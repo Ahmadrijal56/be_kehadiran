@@ -13,12 +13,21 @@ import {
 /** Chat ID sintetis untuk data dari mesin (bukan Telegram). */
 const MACHINE_CHAT_ID = BigInt(1);
 
-function syntheticMessageId(source: string, pin: string, eventAt: Date, status: string): bigint {
-  const hash = createHash("sha256")
-    .update(`${source}:${pin}:${eventAt.toISOString()}:${status}`)
-    .digest("hex")
-    .slice(0, 15);
+function stableMessageId(payload: string): bigint {
+  const hash = createHash("sha256").update(payload).digest("hex").slice(0, 15);
   return BigInt(`0x${hash}`);
+}
+
+function admsMessageId(entry: AdmsAttendanceLog): bigint {
+  return stableMessageId(
+    `adms:${entry.pin}:${entry.eventAt.toISOString()}:${entry.status}:${entry.deviceSn ?? ""}`
+  );
+}
+
+export function validateAdmsDeviceSn(deviceSn: string | undefined): boolean {
+  const allowed = env.admsAllowedDeviceSns;
+  if (allowed.length === 0) return true;
+  return Boolean(deviceSn && allowed.includes(deviceSn));
 }
 
 export async function ingestBiofingerRawText(
@@ -26,12 +35,7 @@ export async function ingestBiofingerRawText(
   meta?: { deviceSn?: string; source?: string }
 ): Promise<{ id: string; duplicate: boolean }> {
   const source = meta?.source ?? "biofinger";
-  const messageId = syntheticMessageId(
-    source,
-    rawText.slice(0, 32),
-    new Date(),
-    String(rawText.length)
-  );
+  const messageId = stableMessageId(`${source}:${meta?.deviceSn ?? ""}:${rawText}`);
 
   const { id, duplicate } = await saveTelegramWebhookMessage({
     messageId,
@@ -61,12 +65,7 @@ export async function ingestAdmsLogs(
   let count = 0;
   for (const entry of logs) {
     const rawText = admsLogToVt490Text(entry);
-    const messageId = syntheticMessageId(
-      "adms",
-      entry.pin,
-      entry.eventAt,
-      entry.status
-    );
+    const messageId = admsMessageId(entry);
 
     const { id, duplicate } = await saveTelegramWebhookMessage({
       messageId,

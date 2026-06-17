@@ -27,6 +27,7 @@ import {
   isBeforeAttendanceKpiStart,
   resolveEligibleWorkDateMin,
 } from "./attendanceKpiWindowService.js";
+import { assertReviewerNotSubject } from "./attendanceIntegrity.js";
 
 type ShiftSummary = {
   id: number;
@@ -285,6 +286,15 @@ export async function createApprovalRequest(
 
   if (
     (type === "early_leave" || type === "no_break") &&
+    attendance.checkOutAt
+  ) {
+    throw businessError(
+      "Pengajuan pulang awal / tidak istirahat tidak berlaku setelah sudah absen pulang"
+    );
+  }
+
+  if (
+    (type === "early_leave" || type === "no_break") &&
     !attendance.checkInAt
   ) {
     throw businessError("Pengajuan ini membutuhkan absen masuk terlebih dahulu");
@@ -444,6 +454,8 @@ export async function reviewApprovalRequest(
     throw forbidden();
   }
 
+  assertReviewerNotSubject(reviewer, request.employeeId);
+
   if (request.type === "shift_swap" && data.status === "approved") {
     throw businessError(
       "Tukar shift: ubah jadwal di halaman Shift terlebih dahulu, lalu konfirmasi perubahan"
@@ -517,6 +529,8 @@ export async function confirmShiftSwapApproval(
   ) {
     throw forbidden();
   }
+
+  assertReviewerNotSubject(reviewer, request.employeeId);
 
   const override = await prisma.employeeShift.findFirst({
     where: {

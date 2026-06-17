@@ -21,9 +21,9 @@ achievementsRouter.get(
     if (!month) {
       const now = new Date();
       const ym = now.toISOString().slice(0, 7);
-      res.json({ data: await listMonthlyAchievements(ym) });
+      res.json({ data: await listMonthlyAchievements(ym, req.user!) });
       return;
     }
-    res.json({ data: await listMonthlyAchievements(month) });
+    res.json({ data: await listMonthlyAchievements(month, req.user!) });
   })
 );

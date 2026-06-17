@@ -4,6 +4,7 @@ import { parseAdmsAttlogBody } from "../../services/biofingerAdmsParser.js";
 import {
   ingestAdmsLogs,
   ingestBiofingerRawText,
+  validateAdmsDeviceSn,
   validateBiofingerWebhookSecret,
 } from "../../services/biofingerIngestService.js";
 
@@ -76,6 +77,12 @@ biofingerAdmsRouter.all("/cdata", async (req: Request, res: Response) => {
 
   const rawBody = typeof req.body === "string" ? req.body : "";
   if (!rawBody.trim()) {
+    res.type("text/plain").send("OK");
+    return;
+  }
+
+  if (!validateAdmsDeviceSn(sn)) {
+    log("warn", "ADMS ATTLOG rejected — SN tidak diizinkan", { sn });
     res.type("text/plain").send("OK");
     return;
   }

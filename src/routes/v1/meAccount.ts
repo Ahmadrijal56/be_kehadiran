@@ -106,7 +106,10 @@ meAccountRouter.get(
   "/branches",
   asyncHandler(async (req, res) => {
     const user = req.user!;
-    const branches = await listBranchesForUser(user.id, user.roles);
+    const branches = await listBranchesForUser(user.id, user.roles, {
+      employeeId: user.employeeId,
+      branchManagerEnabled: user.branchManagerEnabled,
+    });
     res.json({ data: branches });
   })
 );

@@ -672,6 +672,7 @@ export async function updateUserBranches(
   });
 
   await invalidateLeaderboardCaches();
+  invalidateAuthUserCache(userId);
 
   return mapUser(refreshed);
 }

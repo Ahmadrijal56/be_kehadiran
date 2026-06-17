@@ -11,6 +11,7 @@ import { OFF_SHIFT_ID } from "../constants/shifts.js";
 import { shiftAllowedForType } from "./organizationConfigService.js";
 import { currentYearMonthWib } from "../utils/format.js";
 import { timeFromDbTime, toDateOnly } from "../utils/time.js";
+import { assertShiftWorkDateEditable } from "./attendanceIntegrity.js";
 import { invalidatePapanCaches } from "./papanCacheInvalidation.js";
 import { recalculateAttendanceKpiForShiftChange, syncAttendanceShiftFromSchedule } from "./attendanceKpiRecalcService.js";
 
@@ -348,6 +349,7 @@ export async function saveBranchShiftSchedule(
     if (!validDays.has(ch.work_date)) {
       throw validationError(`Tanggal di luar bulan ${yearMonth}: ${ch.work_date}`);
     }
+    assertShiftWorkDateEditable(ch.work_date);
     if (ch.shift_id !== null && !allowedShiftIds.has(ch.shift_id)) {
       throw validationError(`Shift tidak valid: ${ch.shift_id}`);
     }

@@ -31,6 +31,10 @@ import {
   getBranchIdsForUser,
   listBranchesForUser,
 } from "./branchMembershipService.js";
+import {
+  branchManagerPermissionCodes,
+  employeeHasBranchManagerFeatures,
+} from "./branchManagerFeaturesService.js";
 
 export type AuthUser = {
   id: string;
@@ -43,6 +47,8 @@ export type AuthUser = {
   employeeId: string | null;
   roles: string[];
   permissions: string[];
+  /** Karyawan dengan tipe yang mengaktifkan fitur manager cabang. */
+  branchManagerEnabled: boolean;
 };
 
 type TokenPayload = {
@@ -126,20 +132,34 @@ export async function login(
     if (linked) user.employeeId = linked;
   }
 
+  const branchManagerEnabled = await employeeHasBranchManagerFeatures(
+    user.employeeId
+  );
+
   const [permissions, branchIds, tokens] = await Promise.all([
     prisma.rolePermission.findMany({
       where: { roleId: { in: roleIds } },
       include: { permission: true },
     }),
-    getBranchIdsForUser(user.id, roles),
+    getBranchIdsForUser(user.id, roles, {
+      employeeId: user.employeeId,
+      branchManagerEnabled,
+    }),
     issueTokenPair(user.id),
   ]);
 
   const branchId = user.branchId ?? branchIds[0] ?? null;
-  const permissionCodes = [...new Set(permissions.map((p) => p.permission.code))];
   const accountCode = await ensureUserAccountCode(user.id);
   if (user.employeeId) {
     await attachEmployeeToUserAccount(user.id, user.employeeId);
+  }
+  const permissionCodes = new Set(
+    permissions.map((p) => p.permission.code)
+  );
+  if (branchManagerEnabled) {
+    for (const code of branchManagerPermissionCodes()) {
+      permissionCodes.add(code);
+    }
   }
 
   const authUser: AuthUser = {
@@ -152,7 +172,8 @@ export async function login(
     branchIds,
     employeeId: user.employeeId,
     roles,
-    permissions: permissionCodes,
+    permissions: [...permissionCodes],
+    branchManagerEnabled,
   };
 
   const branchPromise = loadAuthBranchContext(branchId, user.employeeId);
@@ -203,6 +224,7 @@ export function mapAuthUserResponse(user: AuthUser) {
     branch_id: user.branchId,
     branch_ids: user.branchIds,
     permissions: user.permissions,
+    branch_manager_enabled: user.branchManagerEnabled,
   };
 }
 
@@ -379,7 +401,21 @@ export async function resolveAuthUser(userId: string): Promise<AuthUser> {
     where: { roleId: { in: roleIds } },
     include: { permission: true },
   });
-  const branchIds = await getBranchIdsForUser(user.id, roles);
+  const branchManagerEnabled = await employeeHasBranchManagerFeatures(
+    user.employeeId
+  );
+  const branchIds = await getBranchIdsForUser(user.id, roles, {
+    employeeId: user.employeeId,
+    branchManagerEnabled,
+  });
+  const permissionCodes = new Set(
+    permissions.map((p) => p.permission.code)
+  );
+  if (branchManagerEnabled) {
+    for (const code of branchManagerPermissionCodes()) {
+      permissionCodes.add(code);
+    }
+  }
 
   const authUser: AuthUser = {
     id: user.id,
@@ -391,7 +427,8 @@ export async function resolveAuthUser(userId: string): Promise<AuthUser> {
     branchIds,
     employeeId: user.employeeId,
     roles,
-    permissions: [...new Set(permissions.map((p) => p.permission.code))],
+    permissions: [...permissionCodes],
+    branchManagerEnabled,
   };
 
   setCachedAuthUser(userId, authUser);

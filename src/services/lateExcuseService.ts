@@ -3,6 +3,7 @@ import { prisma } from "../lib/prisma.js";
 import { businessError, forbidden, notFound } from "../lib/errors.js";
 import type { AuthUser } from "./authService.js";
 import { userHasBranchAccess } from "./branchMembershipService.js";
+import { assertReviewerNotSubject } from "./attendanceIntegrity.js";
 import { getAttendanceForLateExcuse } from "./attendanceQueryService.js";
 import { notifyLateExcuseReviewed } from "./notificationService.js";
 import { getSignedFileUrl, uploadPrivateFile } from "./storageService.js";
@@ -90,6 +91,8 @@ export async function reviewLateExcuse(
   if (!userHasBranchAccess(reviewer.branchIds, reviewer.roles, excuse.employee.branchId)) {
     throw forbidden();
   }
+
+  assertReviewerNotSubject(reviewer, excuse.employeeId);
 
   const updated = await prisma.lateExcuse.update({
     where: { id: excuseId },

@@ -28,6 +28,7 @@ export type EmployeeTypeRow = {
   sort_order: number;
   is_active: boolean;
   break_attendance_enabled: boolean;
+  manager_features_enabled: boolean;
 };
 
 export type KpiPointRuleRow = {
@@ -139,6 +140,8 @@ export async function ensureBranchEmployeeTypeDefaults(branchId: string): Promis
         label: t.label,
         shiftIds: [...t.shift_ids],
         sortOrder: t.sort_order,
+        managerFeaturesEnabled:
+          "manager_features_enabled" in t && t.manager_features_enabled === true,
       },
     });
   }
@@ -203,6 +206,7 @@ export async function listEmployeeTypes(branchId: string): Promise<EmployeeTypeR
       sort_order: r.sortOrder,
       is_active: r.isActive,
       break_attendance_enabled: r.breakAttendanceEnabled,
+      manager_features_enabled: r.managerFeaturesEnabled,
     }));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -249,6 +253,7 @@ export async function saveEmployeeTypes(
     sort_order: number;
     is_active: boolean;
     break_attendance_enabled: boolean;
+    manager_features_enabled: boolean;
   }> = [];
 
   for (let i = 0; i < items.length; i++) {
@@ -292,6 +297,7 @@ export async function saveEmployeeTypes(
       sort_order: item.sort_order ?? i + 1,
       is_active: item.is_active ?? true,
       break_attendance_enabled: item.break_attendance_enabled !== false,
+      manager_features_enabled: item.manager_features_enabled === true,
     });
   }
 
@@ -329,6 +335,7 @@ export async function saveEmployeeTypes(
         sortOrder: item.sort_order ?? 0,
         isActive: item.is_active ?? true,
         breakAttendanceEnabled: item.break_attendance_enabled,
+        managerFeaturesEnabled: item.manager_features_enabled,
       };
 
       if (!item.original_code) {
@@ -394,6 +401,14 @@ export async function saveEmployeeTypes(
     entityId: branchId,
     newValues: { count: resolved.length },
   });
+
+  const { invalidateAuthCacheForBranchEmployeeTypes } = await import(
+    "./branchManagerFeaturesService.js"
+  );
+  await invalidateAuthCacheForBranchEmployeeTypes(
+    branchId,
+    resolved.map((r) => r.code)
+  );
 
   return listEmployeeTypes(branchId);
 }

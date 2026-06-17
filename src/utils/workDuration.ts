@@ -25,6 +25,15 @@ export function isOvertimeWorkDuration(
   return minutes != null && minutes >= OVERTIME_THRESHOLD_MINUTES;
 }
 
+/** Lembur hanya untuk pulang nyata (mesin/app), bukan auto 23:59 lupa absen. */
+export function isOvertimeEligible(
+  attendanceStatus?: string | null,
+  checkOutIsAuto?: boolean
+): boolean {
+  if (checkOutIsAuto) return false;
+  return attendanceStatus !== "forgot_checkout";
+}
+
 export function formatClockHHmmWib(date: Date): string {
   return new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Jakarta",
@@ -54,8 +63,13 @@ export function buildOvertimeLabel(
 export function resolveOvertimeFields(
   minutes: number | null,
   checkInAt?: Date | null,
-  checkOutAt?: Date | null
+  checkOutAt?: Date | null,
+  attendanceStatus?: string | null,
+  checkOutIsAuto?: boolean
 ): { is_overtime: boolean; overtime_label: string | null } {
+  if (!isOvertimeEligible(attendanceStatus, checkOutIsAuto)) {
+    return { is_overtime: false, overtime_label: null };
+  }
   if (!isOvertimeWorkDuration(minutes)) {
     return { is_overtime: false, overtime_label: null };
   }

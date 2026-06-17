@@ -3,7 +3,7 @@ export const DEFAULT_EMPLOYEE_TYPES = [
   { code: "A", label: "Kasir", shift_ids: [1, 2, 3, 4, 5], sort_order: 1 },
   { code: "B", label: "Frontliner", shift_ids: [1, 2, 3, 4, 5], sort_order: 2 },
   { code: "C", label: "Kurir", shift_ids: [1, 2, 3, 4, 5], sort_order: 3 },
-  { code: "D", label: "Manajer shift", shift_ids: [1, 2, 3, 4, 5], sort_order: 4 },
+  { code: "D", label: "Manajer shift", shift_ids: [1, 2, 3, 4, 5], sort_order: 4, manager_features_enabled: true },
 ] as const;
 
 /** Label seed lama dari migration — di-upgrade otomatis ke label default di atas. */

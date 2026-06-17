@@ -115,6 +115,23 @@ meRouter.get(
 
     if (scope === "organization" || scope === "all") {
       await assertEmployeeLiveAttendanceEnabled();
+      const actor = req.user!;
+      // Manajer shift (toggle): tidak boleh lihat live lintas cabang
+      if (
+        actor.branchManagerEnabled &&
+        !actor.roles.includes("manager") &&
+        !actor.roles.includes("owner") &&
+        !actor.roles.includes("developer")
+      ) {
+        const employee = await prisma.employee.findUniqueOrThrow({
+          where: { id: employeeId },
+          select: { branchId: true },
+        });
+        res.json({
+          data: await getBranchLiveAttendanceBoard(employee.branchId),
+        });
+        return;
+      }
       res.json({ data: await getOrganizationLiveAttendanceBoard() });
       return;
     }

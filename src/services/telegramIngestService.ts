@@ -5,6 +5,7 @@ import { resolveBreakAttendanceEnabled } from "../lib/breakAttendance.js";
 import { prisma } from "../lib/prisma.js";
 import { toDateOnly } from "../utils/time.js";
 import { processCheckIn, resolveShiftId } from "./attendanceService.js";
+import { assertIngestWorkDateAllowed } from "./attendanceIntegrity.js";
 import { ensureUserAccountForEmployee } from "./employeeAccountService.js";
 import { findCrossBranchAttendanceOnDate } from "./accountIdentityService.js";
 import { downloadAndStoreTelegramPhoto } from "./telegramPhotoService.js";
@@ -576,6 +577,7 @@ async function applyParsedAttendance(
   }
 
   const workDate = toDateOnly(parsedInput.workDate);
+  assertIngestWorkDateAllowed(workDate);
 
   const crossBranch = await findCrossBranchAttendanceOnDate(employee.id, workDate);
   if (crossBranch) {
@@ -684,7 +686,7 @@ async function applyParsedAttendance(
         deviceId: parsed.deviceId ?? undefined,
         photoUrl: photoUrl ?? undefined,
         ...(parsed.jamPulang && !duplicateCheckOut
-          ? { checkOutAt: parsed.jamPulang }
+          ? { checkOutAt: parsed.jamPulang, checkOutIsAuto: false }
           : {}),
         status: parsed.jamPulang
           ? "left"

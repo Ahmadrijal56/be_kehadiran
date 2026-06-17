@@ -1,6 +1,7 @@
 import { prisma } from "../lib/prisma.js";
 import { validationError } from "../lib/errors.js";
 import { rewardAmountForType } from "../constants/rewards.js";
+import type { AuthUser } from "./authService.js";
 
 function mapAchievement(
   a: {
@@ -56,13 +57,25 @@ export async function listEmployeeAchievements(employeeIds: string | string[]) {
   return items.map((a) => mapAchievement(a));
 }
 
-export async function listMonthlyAchievements(yearMonth: string) {
+export async function listMonthlyAchievements(
+  yearMonth: string,
+  user?: AuthUser
+) {
   if (!/^\d{4}-\d{2}$/.test(yearMonth)) {
     throw validationError("month format YYYY-MM");
   }
 
+  const orgWide =
+    user &&
+    (user.roles.includes("owner") || user.roles.includes("developer"));
+
   const items = await prisma.achievement.findMany({
-    where: { yearMonth },
+    where: {
+      yearMonth,
+      ...(orgWide || !user?.branchIds.length
+        ? {}
+        : { employee: { branchId: { in: user.branchIds } } }),
+    },
     include: {
       rewards: true,
       employee: { select: { nik: true, fullName: true } },

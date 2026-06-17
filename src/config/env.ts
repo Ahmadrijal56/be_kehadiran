@@ -81,6 +81,11 @@ export const env = {
 
   biofingerWebhookSecret: process.env.BIOFINGER_WEBHOOK_SECRET ?? "",
   admsPort: Number(process.env.ADMS_PORT ?? 7792),
+  /** SN mesin ADMS yang diizinkan push ATTLOG (koma). Kosong = izinkan semua (dev). Production: wajib diisi. */
+  admsAllowedDeviceSns: (process.env.ADMS_ALLOWED_DEVICE_SNS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
 
   /** Kode aktivasi owner (OWNER_LICENSE_TOKEN) — biasanya nomor HP admin. */
   ownerLicenseToken: process.env.OWNER_LICENSE_TOKEN ?? "",
@@ -116,4 +121,10 @@ export const env = {
 
 if (env.nodeEnv === "production" && env.jwtSecret === "dev-only-change-in-production") {
   required("JWT_SECRET");
+}
+
+if (env.nodeEnv === "production" && env.admsAllowedDeviceSns.length === 0) {
+  console.warn(
+    "[security] ADMS_ALLOWED_DEVICE_SNS kosong — semua SN mesin diterima. Set di production."
+  );
 }

@@ -166,6 +166,7 @@ function mapRow(
     status: string;
     checkInAt: Date | null;
     checkOutAt: Date | null;
+    checkOutIsAuto: boolean;
     lateMinutes: number;
     shift: { code: string; name: string };
     breakSessions: Array<{ breakStartAt: Date; breakEndAt: Date | null }>;
@@ -183,7 +184,9 @@ function mapRow(
   const overtime = resolveOvertimeFields(
     workMinutes,
     att?.checkInAt,
-    att?.checkOutAt
+    att?.checkOutAt,
+    att?.status,
+    att?.checkOutIsAuto
   );
   const shiftCode =
     scheduledShift?.code ?? att?.shift.code ?? emp.defaultShift.code;

@@ -35,12 +35,39 @@ export function invalidateActiveBranchIdsCache(): void {
   activeBranchIdsCache = null;
 }
 
+export type BranchScopeOptions = {
+  employeeId?: string | null;
+  branchManagerEnabled?: boolean;
+};
+
 export async function getBranchIdsForUser(
   userId: string,
-  roles: string[]
+  roles: string[],
+  opts?: BranchScopeOptions
 ): Promise<string[]> {
   if (roles.includes("owner") || roles.includes("developer")) {
     return listActiveBranchIds();
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { branchId: true, employeeId: true },
+  });
+  if (!user) return [];
+
+  const employeeId = opts?.employeeId ?? user.employeeId;
+
+  // Manajer shift (toggle fitur manager, bukan role manager penuh): hanya cabang HR
+  if (
+    opts?.branchManagerEnabled &&
+    employeeId &&
+    !roles.includes("manager")
+  ) {
+    const employee = await prisma.employee.findUnique({
+      where: { id: employeeId },
+      select: { branchId: true },
+    });
+    return employee?.branchId ? [employee.branchId] : [];
   }
 
   const memberships = await prisma.userBranch.findMany({
@@ -51,18 +78,15 @@ export async function getBranchIdsForUser(
     return memberships.map((m) => m.branchId);
   }
 
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { branchId: true },
-  });
-  return user?.branchId ? [user.branchId] : [];
+  return user.branchId ? [user.branchId] : [];
 }
 
 export async function listBranchesForUser(
   userId: string,
-  roles: string[]
+  roles: string[],
+  opts?: BranchScopeOptions
 ): Promise<BranchSummary[]> {
-  const ids = await getBranchIdsForUser(userId, roles);
+  const ids = await getBranchIdsForUser(userId, roles, opts);
   if (ids.length === 0) return [];
 
   const branches = await prisma.branch.findMany({
