@@ -1,5 +1,35 @@
 const WIB = "Asia/Jakarta";
 
+/** Jam:menit WIB untuk tampilan laporan/Excel. */
+export function formatWibTime(date: Date | string | null | undefined): string | null {
+  if (!date) return null;
+  const d = typeof date === "string" ? new Date(date) : date;
+  if (Number.isNaN(d.getTime())) return null;
+  return new Intl.DateTimeFormat("id-ID", {
+    timeZone: WIB,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(d);
+}
+
+export function formatWibDateTimeLabel(
+  date: Date | string | null | undefined
+): string | null {
+  if (!date) return null;
+  const d = typeof date === "string" ? new Date(date) : date;
+  if (Number.isNaN(d.getTime())) return null;
+  return new Intl.DateTimeFormat("id-ID", {
+    timeZone: WIB,
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(d);
+}
+
 export function formatWibIso(date: Date | null | undefined): string | null {
   if (!date) return null;
   return new Intl.DateTimeFormat("sv-SE", {
