@@ -1,5 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { forbidden } from "../lib/errors.js";
+import { normalizeTypeCode } from "../constants/employeeTypes.js";
 import { BRANCH_MANAGER_PERMISSIONS } from "../constants/branchManagerPermissions.js";
 import type { AuthUser } from "./authService.js";
 
@@ -17,8 +18,9 @@ export async function assertActorMayAssignEmployeeType(
   if (!code) return;
   if (actorCanConfigureBranchManagerFeatures(actor)) return;
 
+  const normalized = normalizeTypeCode(code);
   const typeConfig = await prisma.employeeTypeConfig.findFirst({
-    where: { branchId, code: code.toUpperCase(), isActive: true },
+    where: { branchId, code: normalized, isActive: true },
     select: { managerFeaturesEnabled: true },
   });
   if (typeConfig?.managerFeaturesEnabled) {

@@ -244,21 +244,31 @@ async function enrichUsersWithTypeShifts(
   const shiftDefsByBranch = new Map<string, Map<number, BranchShiftTimeDef>>();
   await Promise.all(
     [...branchIds].map(async (branchId) => {
-      const { shifts } = await getBranchShiftSettings(branchId);
-      const map = new Map<number, BranchShiftTimeDef>();
-      for (const shift of shifts) {
-        if (shift.is_off) continue;
-        map.set(shift.shift_id, {
-          code: shift.code,
-          name: shift.name,
-          time_range:
-            shift.time_range ??
-            (shift.start_time && shift.end_time
-              ? `${shift.start_time} – ${shift.end_time}`
-              : null),
+      try {
+        const branch = await prisma.branch.findUnique({
+          where: { id: branchId },
+          select: { id: true },
         });
+        if (!branch) return;
+
+        const { shifts } = await getBranchShiftSettings(branchId);
+        const map = new Map<number, BranchShiftTimeDef>();
+        for (const shift of shifts) {
+          if (shift.is_off) continue;
+          map.set(shift.shift_id, {
+            code: shift.code,
+            name: shift.name,
+            time_range:
+              shift.time_range ??
+              (shift.start_time && shift.end_time
+                ? `${shift.start_time} – ${shift.end_time}`
+                : null),
+          });
+        }
+        shiftDefsByBranch.set(branchId, map);
+      } catch {
+        // Cabang/shift rusak tidak boleh memblokir daftar user.
       }
-      shiftDefsByBranch.set(branchId, map);
     })
   );
 
@@ -356,25 +366,36 @@ function developerSupportUserWhere(search: string) {
     },
   };
   if (!needle) return base;
-  return {
-    AND: [
-      base,
+
+  const textMatch = {
+    OR: [
+      { fullName: { contains: needle, mode: "insensitive" as const } },
+      { nik: { contains: needle, mode: "insensitive" as const } },
+      { email: { contains: needle, mode: "insensitive" as const } },
       {
-        OR: [
-          { fullName: { contains: needle, mode: "insensitive" as const } },
-          { nik: { contains: needle, mode: "insensitive" as const } },
-          { email: { contains: needle, mode: "insensitive" as const } },
-          {
-            branch: {
-              OR: [
-                { code: { contains: needle, mode: "insensitive" as const } },
-                { name: { contains: needle, mode: "insensitive" as const } },
-              ],
-            },
-          },
-        ],
+        branch: {
+          OR: [
+            { code: { contains: needle, mode: "insensitive" as const } },
+            { name: { contains: needle, mode: "insensitive" as const } },
+          ],
+        },
       },
     ],
+  };
+
+  if (/^\d+$/.test(needle)) {
+    return {
+      AND: [
+        base,
+        {
+          OR: [{ nik: needle }, textMatch],
+        },
+      ],
+    };
+  }
+
+  return {
+    AND: [base, textMatch],
   };
 }
 
@@ -386,9 +407,9 @@ export async function searchDeveloperSupportUsers(query: string, limit = 40) {
     where: developerSupportUserWhere(needle),
     include: userInclude,
     take: Math.min(Math.max(limit, 1), 80),
-    orderBy: { fullName: "asc" },
+    orderBy: [{ nik: "asc" }, { fullName: "asc" }],
   });
-  return enrichUsersWithTypeShifts(users.map(mapUser));
+  return users.map(mapUser);
 }
 
 export async function getDeveloperSupportLoginLock(userId: string) {

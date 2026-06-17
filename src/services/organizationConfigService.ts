@@ -112,6 +112,28 @@ function assertOwner(actor: AuthUser) {
   if (!actor.roles.includes("owner")) throw forbidden();
 }
 
+function managerFeaturesLookup(
+  rows: Array<{ code: string; managerFeaturesEnabled: boolean }>
+): Map<string, boolean> {
+  const map = new Map<string, boolean>();
+  for (const row of rows) {
+    map.set(normalizeTypeCode(row.code).toLowerCase(), row.managerFeaturesEnabled);
+  }
+  return map;
+}
+
+function resolveManagerFeaturesEnabled(
+  lookup: Map<string, boolean>,
+  ...codes: Array<string | null | undefined>
+): boolean {
+  for (const raw of codes) {
+    if (!raw) continue;
+    const hit = lookup.get(normalizeTypeCode(raw).toLowerCase());
+    if (hit !== undefined) return hit;
+  }
+  return false;
+}
+
 export async function ensureBranchEmployeeTypeDefaults(branchId: string): Promise<void> {
   const typeCount = await prisma.employeeTypeConfig.count({ where: { branchId } });
   if (typeCount > 0) {
@@ -310,14 +332,20 @@ export async function saveEmployeeTypes(
     select: { code: true, label: true, managerFeaturesEnabled: true },
   });
 
+  const managerFeaturesByCode = managerFeaturesLookup(existing);
   if (!actorCanConfigureBranchManagerFeatures(actor)) {
-    const byCode = new Map(
-      existing.map((e) => [e.code, e.managerFeaturesEnabled])
-    );
     for (const item of resolved) {
-      const prevCode = item.original_code ?? item.code;
-      item.manager_features_enabled =
-        byCode.get(prevCode) ?? byCode.get(item.code) ?? false;
+      const existingValue = resolveManagerFeaturesEnabled(
+        managerFeaturesByCode,
+        item.original_code,
+        item.code
+      );
+      if (item.manager_features_enabled !== existingValue) {
+        throw forbidden(
+          "Hanya owner atau manager pusat yang dapat mengubah fitur kelola cabang pada tipe karyawan."
+        );
+      }
+      item.manager_features_enabled = existingValue;
     }
   }
 
