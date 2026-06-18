@@ -11,7 +11,8 @@ describe("employeeShiftScheduleService", () => {
     expect(daysInMonth("2026-06")[0]).toBe("2026-06-01");
   });
 
-  it("assertEditableYearMonth rejects past months", () => {
+  it("assertEditableYearMonth rejects months outside editable window", () => {
     expect(() => assertEditableYearMonth("2020-01")).toThrow();
+    expect(() => assertEditableYearMonth("2099-12")).toThrow();
   });
 });

@@ -11,7 +11,6 @@ import { OFF_SHIFT_ID } from "../constants/shifts.js";
 import { shiftAllowedForType } from "./organizationConfigService.js";
 import { currentYearMonthWib } from "../utils/format.js";
 import { timeFromDbTime, toDateOnly } from "../utils/time.js";
-import { assertShiftWorkDateEditable } from "./attendanceIntegrity.js";
 import { invalidatePapanCaches } from "./papanCacheInvalidation.js";
 import { recalculateAttendanceKpiForShiftChange, syncAttendanceShiftFromSchedule } from "./attendanceKpiRecalcService.js";
 import { reprocessPendingScheduleAfterGridUpdate } from "./pendingScheduleReprocessService.js";
@@ -182,15 +181,31 @@ function addMonths(yearMonth: string, delta: number): string {
   return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}`;
 }
 
+/** Berapa bulan ke belakang manager boleh koreksi jadwal + KPI. */
+export const SCHEDULE_EDITABLE_PAST_MONTHS = 24;
+export const SCHEDULE_EDITABLE_FUTURE_MONTHS = 3;
+
+export function scheduleEditableFromYearMonth(): string {
+  return addMonths(currentYearMonthWib(), -SCHEDULE_EDITABLE_PAST_MONTHS);
+}
+
+export function scheduleEditableUntilYearMonth(): string {
+  return addMonths(currentYearMonthWib(), SCHEDULE_EDITABLE_FUTURE_MONTHS);
+}
+
 export function assertEditableYearMonth(yearMonth: string) {
   parseYearMonth(yearMonth);
-  const current = currentYearMonthWib();
-  if (yearMonth < current) {
-    throw validationError("Tidak dapat mengubah jadwal bulan yang sudah lewat");
+  const minMonth = scheduleEditableFromYearMonth();
+  const maxMonth = scheduleEditableUntilYearMonth();
+  if (yearMonth < minMonth) {
+    throw validationError(
+      `Tidak dapat mengubah jadwal lebih dari ${SCHEDULE_EDITABLE_PAST_MONTHS} bulan ke belakang`
+    );
   }
-  const maxMonth = addMonths(current, 3);
   if (yearMonth > maxMonth) {
-    throw validationError("Jadwal hanya dapat diatur hingga 3 bulan ke depan");
+    throw validationError(
+      `Jadwal hanya dapat diatur hingga ${SCHEDULE_EDITABLE_FUTURE_MONTHS} bulan ke depan`
+    );
   }
 }
 
@@ -260,8 +275,8 @@ export async function getBranchShiftSchedule(branchId: string, yearMonth: string
   return {
     branch_id: branchId,
     year_month: yearMonth,
-    editable_from: currentYearMonthWib(),
-    editable_until: addMonths(currentYearMonthWib(), 3),
+    editable_from: scheduleEditableFromYearMonth(),
+    editable_until: scheduleEditableUntilYearMonth(),
     days,
     shifts: shiftOptions,
     employees: employees.map((emp) => {
@@ -373,7 +388,6 @@ export async function saveBranchShiftSchedule(
     if (!validDays.has(ch.work_date)) {
       throw validationError(`Tanggal di luar bulan ${yearMonth}: ${ch.work_date}`);
     }
-    assertShiftWorkDateEditable(ch.work_date);
     if (ch.shift_id !== null && !allowedShiftIds.has(ch.shift_id)) {
       throw validationError(`Shift tidak valid: ${ch.shift_id}`);
     }
