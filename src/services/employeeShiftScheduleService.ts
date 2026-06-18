@@ -135,7 +135,12 @@ export function resolveBranchEmployeeType(
     };
   }
   const typeConfig = typeByCode.get(code);
-  if (!typeConfig) {
+  const resolvedConfig =
+    typeConfig ??
+    [...typeByCode.entries()].find(
+      ([key]) => key.toLowerCase() === code.toLowerCase()
+    )?.[1];
+  if (!resolvedConfig) {
     return {
       employee_type_code: null,
       employee_type_label: null,
@@ -144,8 +149,8 @@ export function resolveBranchEmployeeType(
   }
   return {
     employee_type_code: code,
-    employee_type_label: typeConfig.label || null,
-    typeShiftIds: typeConfig.shiftIds,
+    employee_type_label: resolvedConfig.label || null,
+    typeShiftIds: resolvedConfig.shiftIds,
   };
 }
 

@@ -580,13 +580,17 @@ async function ensureEmployeeRecord(
       : null;
     if (normalizedType) {
       const typeConfig = await prisma.employeeTypeConfig.findFirst({
-        where: { branchId, code: normalizedType, isActive: true },
+        where: {
+          branchId,
+          code: { equals: normalizedType, mode: "insensitive" },
+          isActive: true,
+        },
       });
       if (typeConfig) {
         await prisma.employee.update({
           where: { id: existingEmp.id },
           data: {
-            employeeTypeCode: normalizedType,
+            employeeTypeCode: typeConfig.code,
             ...(typeConfig.shiftIds.length > 0
               ? {
                   defaultShiftId:
@@ -609,9 +613,14 @@ async function ensureEmployeeRecord(
 
   if (typeCode) {
     const typeConfig = await prisma.employeeTypeConfig.findFirst({
-      where: { branchId, code: typeCode, isActive: true },
+      where: {
+        branchId,
+        code: { equals: typeCode, mode: "insensitive" },
+        isActive: true,
+      },
     });
     if (typeConfig) {
+      typeCode = typeConfig.code;
       if (typeConfig.shiftIds.length > 0) {
         defaultShiftId = typeConfig.shiftIds[0] ?? 1;
       }
@@ -1154,7 +1163,11 @@ export async function updateUserAccountRole(
   await assertActorMayAssignEmployeeType(actor, branchId, typeCode);
 
   const typeConfig = await prisma.employeeTypeConfig.findFirst({
-    where: { branchId, code: typeCode, isActive: true },
+    where: {
+      branchId,
+      code: { equals: typeCode, mode: "insensitive" },
+      isActive: true,
+    },
   });
   if (!typeConfig) {
     throw validationError("Tipe karyawan tidak dikenal atau sudah dihapus di cabang ini");
@@ -1163,7 +1176,10 @@ export async function updateUserAccountRole(
   if (currentRole === "employee") {
     const currentType =
       user.employee?.employeeTypeCode ?? user.employee?.employeeType?.code ?? null;
-    if (currentType === typeCode) {
+    if (
+      currentType &&
+      normalizeTypeCode(currentType).toLowerCase() === typeCode.toLowerCase()
+    ) {
       throw validationError(`Akun sudah berperan sebagai ${typeConfig.label}`);
     }
   }
@@ -1198,7 +1214,7 @@ export async function updateUserAccountRole(
       data: { shiftScheduleAssigned: false },
     });
   } else {
-    await updateEmployeeType(actor, branchId, working.employeeId, typeCode);
+    await updateEmployeeType(actor, branchId, working.employeeId, typeConfig.code);
   }
 
   invalidateAuthUserCache(userId);

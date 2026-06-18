@@ -890,15 +890,20 @@ export async function updateEmployeeType(
   if (!employee) throw validationError("Karyawan tidak ditemukan");
 
   if (employeeTypeCode) {
+    const normalized = normalizeTypeCode(employeeTypeCode);
     const typeConfig = await prisma.employeeTypeConfig.findFirst({
-      where: { branchId, code: employeeTypeCode, isActive: true },
+      where: {
+        branchId,
+        code: { equals: normalized, mode: "insensitive" },
+        isActive: true,
+      },
     });
     if (!typeConfig) throw validationError("Tipe karyawan tidak dikenal");
 
     await prisma.employee.update({
       where: { id: employeeId },
       data: {
-        employeeTypeCode,
+        employeeTypeCode: typeConfig.code,
         ...(typeConfig.shiftIds.length > 0
           ? {
               defaultShiftId:
