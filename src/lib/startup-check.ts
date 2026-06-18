@@ -34,6 +34,21 @@ async function assertDatabaseHasShiftScheduleColumn(): Promise<void> {
   throw new Error(msg);
 }
 
+async function assertDatabaseHasManagerFeaturesColumn(): Promise<void> {
+  const rows = await prisma.$queryRaw<Array<{ column_name: string }>>`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'employee_type_configs'
+      AND column_name = 'manager_features_enabled'
+  `;
+  if (rows.length > 0) return;
+
+  log("warn", "Kolom manager_features_enabled belum ada — toggle kelola cabang tidak tersimpan", {
+    hint: "Jalankan: npx prisma migrate deploy",
+  });
+}
+
 export async function checkStartupHealth(): Promise<void> {
   assertPrismaClientMatchesSchema();
 
@@ -46,6 +61,8 @@ export async function checkStartupHealth(): Promise<void> {
     checks.push("shift_schedule_assigned FAIL");
     throw err;
   }
+
+  await assertDatabaseHasManagerFeaturesColumn();
 
   try {
     await prisma.$queryRaw`SELECT 1`;

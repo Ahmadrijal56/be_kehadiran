@@ -18,6 +18,7 @@ import { hasPermission } from "./authService.js";
 import { writeAuditLog } from "./auditService.js";
 import { assertBranchAccess } from "./branchAccess.js";
 import { invalidateAttendanceKpiStartCache } from "./attendanceKpiWindowService.js";
+import { parseBooleanFlag } from "../lib/parseBooleanFlag.js";
 import {
   actorCanConfigureBranchManagerFeatures,
   assertActorMayAssignEmployeeType,
@@ -322,8 +323,8 @@ export async function saveEmployeeTypes(
       shift_ids: shiftIds,
       sort_order: item.sort_order ?? i + 1,
       is_active: item.is_active ?? true,
-      break_attendance_enabled: item.break_attendance_enabled !== false,
-      manager_features_enabled: item.manager_features_enabled === true,
+      break_attendance_enabled: parseBooleanFlag(item.break_attendance_enabled, true),
+      manager_features_enabled: parseBooleanFlag(item.manager_features_enabled, false),
     });
   }
 

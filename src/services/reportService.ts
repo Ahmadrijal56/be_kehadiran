@@ -412,7 +412,7 @@ function writeDataRows(
       const raw = data[col.key];
       const isEmpty =
         raw === null || raw === undefined || raw === "";
-      cell.value = isEmpty ? null : raw;
+      cell.value = isEmpty ? null : (raw as typeof cell.value);
       if (col.text) cell.numFmt = "@";
       cell.alignment = {
         vertical: "middle",

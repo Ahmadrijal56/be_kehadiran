@@ -356,14 +356,17 @@ function resolveEmployeeTypeShifts(
 
 function developerSupportUserWhere(search: string) {
   const needle = trimStr(search);
-  const base = {
+  const base: Record<string, unknown> = {
     ...userHiddenFromDirectoryWhere(),
-    userRoles: { some: { role: { code: "employee" } } },
     NOT: {
       userRoles: {
         some: { role: { code: { in: ["manager", "owner"] } } },
       },
     },
+    OR: [
+      { userRoles: { some: { role: { code: "employee" } } } },
+      { employeeId: { not: null } },
+    ],
   };
   if (!needle) return base;
 
@@ -372,6 +375,12 @@ function developerSupportUserWhere(search: string) {
       { fullName: { contains: needle, mode: "insensitive" as const } },
       { nik: { contains: needle, mode: "insensitive" as const } },
       { email: { contains: needle, mode: "insensitive" as const } },
+      { accountCode: { contains: needle, mode: "insensitive" as const } },
+      {
+        employee: {
+          nik: { contains: needle, mode: "insensitive" as const },
+        },
+      },
       {
         branch: {
           OR: [
@@ -383,12 +392,36 @@ function developerSupportUserWhere(search: string) {
     ],
   };
 
+  const uuidLike =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      needle
+    );
+
+  if (uuidLike) {
+    return {
+      AND: [
+        base,
+        {
+          OR: [
+            { id: needle },
+            { employeeId: needle },
+            textMatch,
+          ],
+        },
+      ],
+    };
+  }
+
   if (/^\d+$/.test(needle)) {
     return {
       AND: [
         base,
         {
-          OR: [{ nik: needle }, textMatch],
+          OR: [
+            { nik: needle },
+            { employee: { nik: needle } },
+            textMatch,
+          ],
         },
       ],
     };
@@ -401,7 +434,7 @@ function developerSupportUserWhere(search: string) {
 
 export async function searchDeveloperSupportUsers(query: string, limit = 40) {
   const needle = trimStr(query);
-  if (needle.length < 2) return [];
+  if (needle.length < 1) return [];
 
   const users = await prisma.user.findMany({
     where: developerSupportUserWhere(needle),

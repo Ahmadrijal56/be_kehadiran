@@ -1,5 +1,6 @@
 import bcrypt from "bcrypt";
 import { env } from "../config/env.js";
+import { invalidateAuthUserCache } from "../lib/authUserCache.js";
 import { log } from "../lib/logger.js";
 import { prisma } from "../lib/prisma.js";
 import { ensureUserAccountCode } from "./accountIdentityService.js";
@@ -46,6 +47,7 @@ export async function ensureDeveloperAccount(): Promise<void> {
       await prisma.userRole.create({
         data: { userId: existing.id, roleId: developerRole.id },
       });
+      invalidateAuthUserCache(existing.id);
     }
 
     await prisma.user.update({

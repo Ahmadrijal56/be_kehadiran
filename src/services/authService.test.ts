@@ -13,6 +13,7 @@ const employee: AuthUser = {
   employeeId: "e1",
   roles: ["employee"],
   permissions: ["attendance.read.self", "kpi.read.self"],
+  branchManagerEnabled: false,
 };
 
 describe("authService — RBAC", () => {

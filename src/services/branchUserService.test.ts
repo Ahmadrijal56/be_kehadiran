@@ -69,6 +69,7 @@ describe("createBranchUser — akun baru mulai dari 0 poin", () => {
       permissions: [],
       branchIds: actorRoles.includes("owner") ? [] : [branchId],
       employeeId: actorUser.employeeId,
+      branchManagerEnabled: false,
     };
 
     const shift = await prisma.shift.findFirst({ orderBy: { id: "asc" } });

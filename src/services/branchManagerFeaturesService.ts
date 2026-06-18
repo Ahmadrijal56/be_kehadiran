@@ -3,10 +3,15 @@ import { forbidden } from "../lib/errors.js";
 import { normalizeTypeCode } from "../constants/employeeTypes.js";
 import { BRANCH_MANAGER_PERMISSIONS } from "../constants/branchManagerPermissions.js";
 import type { AuthUser } from "./authService.js";
+import { hasPermission } from "./authService.js";
 
-/** Hanya owner atau manager penuh — bukan kepala toko (toggle manajer shift). */
+/** Owner, manager pusat, atau siapa pun dengan hak kelola user global. */
 export function actorCanConfigureBranchManagerFeatures(actor: AuthUser): boolean {
-  return actor.roles.includes("owner") || actor.roles.includes("manager");
+  return (
+    actor.roles.includes("owner") ||
+    actor.roles.includes("manager") ||
+    hasPermission(actor, "users.manage.all")
+  );
 }
 
 export async function assertActorMayAssignEmployeeType(
@@ -36,11 +41,20 @@ export async function employeeHasBranchManagerFeatures(
   if (!employeeId) return false;
   const employee = await prisma.employee.findUnique({
     where: { id: employeeId },
-    select: {
-      employeeType: { select: { managerFeaturesEnabled: true } },
-    },
+    select: { branchId: true, employeeTypeCode: true },
   });
-  return employee?.employeeType?.managerFeaturesEnabled === true;
+  const code = employee?.employeeTypeCode?.trim();
+  if (!employee || !code) return false;
+
+  const typeConfig = await prisma.employeeTypeConfig.findFirst({
+    where: {
+      branchId: employee.branchId,
+      code: { equals: code, mode: "insensitive" },
+      isActive: true,
+    },
+    select: { managerFeaturesEnabled: true },
+  });
+  return typeConfig?.managerFeaturesEnabled === true;
 }
 
 export function branchManagerPermissionCodes(): string[] {
