@@ -1,3 +1,5 @@
+import { toDateOnly } from "./time.js";
+
 const WIB = "Asia/Jakarta";
 
 /** Jam:menit WIB untuk tampilan laporan/Excel. */
@@ -86,6 +88,26 @@ export function currentYearMonthWib(): string {
   const y = parts.find((p) => p.type === "year")?.value;
   const m = parts.find((p) => p.type === "month")?.value;
   return `${y}-${m}`;
+}
+
+/** Akhir bulan berjalan (tanggal kerja UTC date-only). */
+export function endOfCurrentMonthWib(today = todayWorkDateWib()): Date {
+  const y = today.getUTCFullYear();
+  const m = today.getUTCMonth();
+  return toDateOnly(new Date(Date.UTC(y, m + 1, 0)));
+}
+
+/** Daftar tanggal kerja inklusif dari min s/d max. */
+export function enumerateWorkDates(min: Date, max: Date): Date[] {
+  const start = toDateOnly(min);
+  const end = toDateOnly(max);
+  const dates: Date[] = [];
+  const cur = new Date(start);
+  while (cur <= end) {
+    dates.push(toDateOnly(cur));
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return dates;
 }
 
 /** Label tanggal kerja untuk notifikasi, mis. "Jumat, 12 Juni 2026". */

@@ -22,12 +22,11 @@ import {
   resolveEffectiveShiftId,
 } from "./employeeShiftScheduleService.js";
 import { approvalTypeLabel } from "../constants/approvalTypes.js";
-import {
-  getAttendanceKpiStartDate,
-  isBeforeAttendanceKpiStart,
-  resolveEligibleWorkDateMin,
-} from "./attendanceKpiWindowService.js";
 import { assertReviewerNotSubject } from "./attendanceIntegrity.js";
+import {
+  endOfCurrentMonthWib,
+  enumerateWorkDates,
+} from "../utils/format.js";
 
 type ShiftSummary = {
   id: number;
@@ -104,23 +103,61 @@ function parseWorkDateInput(value: string): Date {
   return toDateOnly(new Date(`${value}T00:00:00.000Z`));
 }
 
-function assertWorkDateInRange(workDate: Date, kpiStart: Date) {
+function assertWorkDateInRange(workDate: Date) {
   const today = todayWorkDateWib();
-  const min = new Date(today);
-  min.setUTCDate(min.getUTCDate() - LOOKBACK_DAYS);
-  const effectiveMin =
-    kpiStart > toDateOnly(min) ? kpiStart : toDateOnly(min);
-  if (workDate > today) {
-    throw validationError("Tanggal tidak boleh di masa depan");
-  }
-  if (workDate < effectiveMin) {
+  const min = approvalWorkDateMin(today);
+  const max = endOfCurrentMonthWib(today);
+  if (workDate < min) {
     throw validationError(
-      `Tanggal di luar periode pengajuan (mulai ${effectiveMin.toISOString().slice(0, 10)})`
+      `Tanggal di luar periode pengajuan (mulai ${min.toISOString().slice(0, 10)})`
     );
   }
-  if (isBeforeAttendanceKpiStart(workDate, kpiStart)) {
-    throw validationError("Tanggal sebelum mulai operasional KPI kehadiran");
+  if (workDate > max) {
+    throw validationError(
+      `Tanggal tidak boleh setelah akhir bulan ini (${max.toISOString().slice(0, 10)})`
+    );
   }
+}
+
+function approvalWorkDateMin(today: Date): Date {
+  const lookbackMin = new Date(today);
+  lookbackMin.setUTCDate(lookbackMin.getUTCDate() - LOOKBACK_DAYS);
+  return toDateOnly(lookbackMin);
+}
+
+function computeCanSubmitTypes(input: {
+  workDate: Date;
+  today: Date;
+  attendance?: {
+    status: string;
+    checkInAt: Date | null;
+    checkOutAt: Date | null;
+  } | null;
+  pendingOrApproved: Set<AttendanceApprovalType>;
+}): AttendanceApprovalType[] {
+  const { attendance, pendingOrApproved } = input;
+  const can: AttendanceApprovalType[] = [];
+
+  const standard: AttendanceApprovalType[] = [
+    "early_leave",
+    "no_break",
+    "shift_swap",
+    "overtime",
+  ];
+  for (const approvalType of standard) {
+    if (!pendingOrApproved.has(approvalType)) {
+      can.push(approvalType);
+    }
+  }
+
+  if (
+    attendance?.status === "forgot_checkout" &&
+    !pendingOrApproved.has("forgot_checkout")
+  ) {
+    can.push("forgot_checkout");
+  }
+
+  return can;
 }
 
 export async function hasApprovedTwoScanMode(
@@ -155,14 +192,42 @@ export async function listMyApprovalRequests(user: AuthUser) {
 
 export async function listEligibleApprovalDates(user: AuthUser) {
   const employeeId = requireEmployeeProfile(user);
-  const employee = await prisma.employee.findUniqueOrThrow({
-    where: { id: employeeId },
-    select: { branchId: true },
-  });
 
   const today = todayWorkDateWib();
-  const minDate = await resolveEligibleWorkDateMin(today, LOOKBACK_DAYS);
   const todayStr = today.toISOString().slice(0, 10);
+  const minDate = approvalWorkDateMin(today);
+  const maxDate = endOfCurrentMonthWib(today);
+  const workDates = enumerateWorkDates(minDate, maxDate);
+
+  const [attendances, existingAll] = await Promise.all([
+    prisma.attendanceRecord.findMany({
+      where: {
+        employeeId,
+        workDate: { gte: minDate, lte: maxDate },
+      },
+    }),
+    prisma.attendanceApprovalRequest.findMany({
+      where: {
+        employeeId,
+        workDate: { gte: minDate, lte: maxDate },
+      },
+      select: { workDate: true, type: true, status: true },
+    }),
+  ]);
+
+  const attendanceByDate = new Map(
+    attendances.map((row) => [row.workDate.toISOString().slice(0, 10), row])
+  );
+  const existingByDate = new Map<
+    string,
+    Array<{ type: AttendanceApprovalType; status: AttendanceApprovalStatus }>
+  >();
+  for (const row of existingAll) {
+    const key = row.workDate.toISOString().slice(0, 10);
+    const bucket = existingByDate.get(key) ?? [];
+    bucket.push({ type: row.type, status: row.status });
+    existingByDate.set(key, bucket);
+  }
 
   const dates: Array<{
     work_date: string;
@@ -170,52 +235,30 @@ export async function listEligibleApprovalDates(user: AuthUser) {
     status: string;
     check_in_at: string | null;
     check_out_at: string | null;
+    is_future: boolean;
+    is_today: boolean;
     can_submit_types: AttendanceApprovalType[];
-    existing_requests: Array<{ type: AttendanceApprovalType; status: AttendanceApprovalStatus }>;
+    existing_requests: Array<{
+      type: AttendanceApprovalType;
+      status: AttendanceApprovalStatus;
+    }>;
   }> = [];
 
-  for (let i = 0; i <= LOOKBACK_DAYS; i++) {
-    const d = new Date(today);
-    d.setUTCDate(d.getUTCDate() - i);
-    const workDate = toDateOnly(d);
-    if (workDate < minDate) break;
+  for (const workDate of workDates) {
     const workDateStr = workDate.toISOString().slice(0, 10);
-    const isToday = workDateStr === todayStr;
-
-    const attendance = await prisma.attendanceRecord.findUnique({
-      where: { employeeId_workDate: { employeeId, workDate } },
-    });
-
-    const existing = await prisma.attendanceApprovalRequest.findMany({
-      where: { employeeId, workDate },
-      select: { type: true, status: true },
-    });
-
-    const hasCheckIn = Boolean(attendance?.checkInAt);
-    if (existing.length === 0 && !hasCheckIn && !isToday) {
-      continue;
-    }
-
+    const attendance = attendanceByDate.get(workDateStr);
+    const existing = existingByDate.get(workDateStr) ?? [];
     const pendingOrApproved = new Set(
       existing
         .filter((e) => e.status === "pending" || e.status === "approved")
         .map((e) => e.type)
     );
-
-    const canSubmit: AttendanceApprovalType[] = [];
-    if (!pendingOrApproved.has("early_leave")) canSubmit.push("early_leave");
-    if (!pendingOrApproved.has("no_break")) canSubmit.push("no_break");
-    if (!pendingOrApproved.has("shift_swap")) canSubmit.push("shift_swap");
-    if (
-      attendance?.status === "forgot_checkout" &&
-      !pendingOrApproved.has("forgot_checkout")
-    ) {
-      canSubmit.push("forgot_checkout");
-    }
-
-    if (canSubmit.length === 0 && existing.length === 0) {
-      continue;
-    }
+    const canSubmit = computeCanSubmitTypes({
+      workDate,
+      today,
+      attendance,
+      pendingOrApproved,
+    });
 
     dates.push({
       work_date: workDateStr,
@@ -223,14 +266,21 @@ export async function listEligibleApprovalDates(user: AuthUser) {
       status: attendance?.status ?? "absent",
       check_in_at: formatWibIso(attendance?.checkInAt ?? null),
       check_out_at: formatWibIso(attendance?.checkOutAt ?? null),
+      is_future: workDate > today,
+      is_today: workDateStr === todayStr,
       can_submit_types: canSubmit,
       existing_requests: existing,
     });
   }
 
-  return dates.filter(
-    (d) => d.can_submit_types.length > 0 || d.existing_requests.length > 0
-  );
+  return {
+    date_range: {
+      min: minDate.toISOString().slice(0, 10),
+      max: maxDate.toISOString().slice(0, 10),
+      today: todayStr,
+    },
+    dates,
+  };
 }
 
 export async function createApprovalRequest(
@@ -245,12 +295,15 @@ export async function createApprovalRequest(
   const employeeId = requireEmployeeProfile(user);
   const employee = await prisma.employee.findUniqueOrThrow({
     where: { id: employeeId },
-    select: { branchId: true },
+    select: {
+      branchId: true,
+      defaultShiftId: true,
+      shiftScheduleAssigned: true,
+    },
   });
 
   const workDate = parseWorkDateInput(data.work_date);
-  const kpiStart = await getAttendanceKpiStartDate();
-  assertWorkDateInRange(workDate, kpiStart);
+  assertWorkDateInRange(workDate);
 
   const reason = data.reason_text?.trim();
   if (!reason || reason.length < 5) {
@@ -258,7 +311,15 @@ export async function createApprovalRequest(
   }
 
   const type = data.type;
-  if (!["early_leave", "no_break", "shift_swap", "forgot_checkout"].includes(type)) {
+  if (
+    ![
+      "early_leave",
+      "no_break",
+      "shift_swap",
+      "forgot_checkout",
+      "overtime",
+    ].includes(type)
+  ) {
     throw validationError("Jenis permintaan tidak valid");
   }
 
@@ -280,6 +341,9 @@ export async function createApprovalRequest(
     workDate
   );
 
+  const today = todayWorkDateWib();
+  const isFuture = workDate > today;
+
   if (type === "forgot_checkout" && attendance.status !== "forgot_checkout") {
     throw businessError("Pengajuan lupa absen pulang hanya untuk status lupa absen");
   }
@@ -295,9 +359,12 @@ export async function createApprovalRequest(
 
   if (
     (type === "early_leave" || type === "no_break") &&
+    !isFuture &&
     !attendance.checkInAt
   ) {
-    throw businessError("Pengajuan ini membutuhkan absen masuk terlebih dahulu");
+    throw businessError(
+      "Pengajuan pulang awal / tidak istirahat pada hari yang sudah lewat membutuhkan absen masuk"
+    );
   }
 
   if (type === "shift_swap" && !data.requested_shift_id) {

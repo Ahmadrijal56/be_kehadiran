@@ -15,6 +15,10 @@ import {
   toWorkDateStrWib,
 } from "../utils/format.js";
 import { timeFromDbTime, toDateOnly } from "../utils/time.js";
+import {
+  computeWorkDurationMinutes,
+  resolveOvertimeFields,
+} from "../utils/workDuration.js";
 import { invalidatePapanCaches } from "./papanCacheInvalidation.js";
 import { recalculateAttendanceKpiForShiftChange, syncAttendanceShiftFromSchedule } from "./attendanceKpiRecalcService.js";
 import { reprocessPendingScheduleAfterGridUpdate } from "./pendingScheduleReprocessService.js";
@@ -790,6 +794,13 @@ export type BranchUpcomingShiftEmployee = {
   nik: string;
   full_name: string;
   employee_type_label: string | null;
+  overtime: BranchEmployeeOvertimeInfo | null;
+};
+
+export type BranchEmployeeOvertimeInfo = {
+  approval_status: "pending" | "approved" | null;
+  is_actual: boolean;
+  label: string | null;
 };
 
 export type BranchUpcomingShiftGroup = {
@@ -819,9 +830,59 @@ export async function getBranchUpcomingShiftSchedule(branchId: string) {
     { work_date: today, day_label: "today" },
     { work_date: tomorrow, day_label: "tomorrow" },
   ];
+  const workDateObjs = targets.map((t) => toDateOnly(new Date(`${t.work_date}T00:00:00.000Z`)));
   const yearMonths = [...new Set(targets.map((t) => t.work_date.slice(0, 7)))];
   const schedules = await Promise.all(
     yearMonths.map((ym) => getBranchShiftSchedule(branchId, ym))
+  );
+
+  const employeeIds = [
+    ...new Set(
+      schedules.flatMap((month) => month.employees.map((emp) => emp.employee_id))
+    ),
+  ];
+
+  const [overtimeApprovals, overtimeAttendances] = await Promise.all([
+    prisma.attendanceApprovalRequest.findMany({
+      where: {
+        branchId,
+        workDate: { in: workDateObjs },
+        type: "overtime",
+        status: { in: ["pending", "approved"] },
+        employeeId: { in: employeeIds },
+      },
+      select: { employeeId: true, workDate: true, status: true },
+    }),
+    prisma.attendanceRecord.findMany({
+      where: {
+        branchId,
+        workDate: { in: workDateObjs },
+        employeeId: { in: employeeIds },
+        checkInAt: { not: null },
+      },
+      select: {
+        employeeId: true,
+        workDate: true,
+        checkInAt: true,
+        checkOutAt: true,
+        status: true,
+      },
+    }),
+  ]);
+
+  const overtimeApprovalByKey = new Map<string, "pending" | "approved">();
+  for (const row of overtimeApprovals) {
+    const key = `${row.employeeId}:${row.workDate.toISOString().slice(0, 10)}`;
+    overtimeApprovalByKey.set(key, row.status as "pending" | "approved");
+  }
+
+  const overtimeAttendanceByKey = new Map(
+    overtimeAttendances
+      .filter((row): row is typeof row & { checkInAt: Date } => row.checkInAt != null)
+      .map((row) => [
+        `${row.employeeId}:${row.workDate.toISOString().slice(0, 10)}`,
+        row,
+      ])
   );
 
   const shiftMeta = new Map<number, ShiftOption>();
@@ -857,6 +918,12 @@ export async function getBranchUpcomingShiftSchedule(branchId: string) {
         nik: emp.nik,
         full_name: emp.full_name,
         employee_type_label: emp.employee_type_label ?? null,
+        overtime: resolveBranchEmployeeOvertimeInfo(
+          emp.employee_id,
+          target.work_date,
+          overtimeApprovalByKey,
+          overtimeAttendanceByKey
+        ),
       };
       const list = groups.get(shiftId) ?? [];
       list.push(row);
@@ -897,4 +964,45 @@ export async function getBranchUpcomingShiftSchedule(branchId: string) {
   });
 
   return { items };
+}
+
+function resolveBranchEmployeeOvertimeInfo(
+  employeeId: string,
+  workDate: string,
+  approvalByKey: Map<string, "pending" | "approved">,
+  attendanceByKey: Map<
+    string,
+    {
+      checkInAt: Date;
+      checkOutAt: Date | null;
+      status: string;
+    }
+  >
+): BranchEmployeeOvertimeInfo | null {
+  const key = `${employeeId}:${workDate}`;
+  const approval_status = approvalByKey.get(key) ?? null;
+  const attendance = attendanceByKey.get(key);
+
+  let is_actual = false;
+  let label: string | null = null;
+  if (attendance?.checkInAt) {
+    const minutes = computeWorkDurationMinutes(
+      attendance.checkInAt,
+      attendance.checkOutAt ?? new Date()
+    );
+    const overtime = resolveOvertimeFields(
+      minutes,
+      attendance.checkInAt,
+      attendance.checkOutAt,
+      attendance.status
+    );
+    is_actual = overtime.is_overtime;
+    label = overtime.overtime_label;
+  }
+
+  if (!approval_status && !is_actual) {
+    return null;
+  }
+
+  return { approval_status, is_actual, label };
 }

@@ -30,6 +30,7 @@ enum AttendanceApprovalType {
   no_break
   shift_swap
   forgot_checkout
+  overtime
 }
 
 enum AttendanceApprovalStatus {

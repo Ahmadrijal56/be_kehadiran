@@ -5,6 +5,7 @@ export const APPROVAL_TYPE_LABELS: Record<AttendanceApprovalType, string> = {
   no_break: "Tidak istirahat",
   shift_swap: "Tukar shift",
   forgot_checkout: "Lupa absen pulang",
+  overtime: "Lembur",
 };
 
 export function approvalTypeLabel(type: AttendanceApprovalType): string {
