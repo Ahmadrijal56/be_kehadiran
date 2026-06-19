@@ -99,6 +99,93 @@ export async function notifyApprovalReviewed(
   });
 }
 
+export async function notifyCounterpartyShiftSwapRequest(
+  counterpartyUserId: string,
+  payload: {
+    requestId: string;
+    requesterName: string;
+    workDate: string;
+    requesterShiftLabel: string;
+    counterpartyShiftLabel: string;
+  }
+): Promise<void> {
+  await prisma.notification.create({
+    data: {
+      userId: counterpartyUserId,
+      type: "shift_swap_incoming",
+      title: "Permintaan tukar shift",
+      body: `${payload.requesterName} ingin tukar shift dengan Anda pada ${payload.workDate}. Anda: ${payload.counterpartyShiftLabel} ↔ ${payload.requesterName}: ${payload.requesterShiftLabel}.`,
+      dataJson: {
+        approval_id: payload.requestId,
+        work_date: payload.workDate,
+      },
+    },
+  });
+}
+
+export async function notifyShiftSwapPeerAccepted(
+  requesterUserId: string,
+  counterpartyName: string,
+  workDate: string,
+  requestId: string
+): Promise<void> {
+  await prisma.notification.create({
+    data: {
+      userId: requesterUserId,
+      type: "shift_swap_peer_accepted",
+      title: "Rekan menyetujui tukar shift",
+      body: `${counterpartyName} menyetujui tukar shift pada ${workDate}. Menunggu konfirmasi manager.`,
+      dataJson: { approval_id: requestId, work_date: workDate },
+    },
+  });
+}
+
+export async function notifyManagersShiftSwapReady(
+  branchId: string,
+  request: {
+    id: string;
+    workDate: Date;
+    requesterName: string;
+    counterpartyName: string;
+  }
+): Promise<void> {
+  const workDate = request.workDate.toISOString().slice(0, 10);
+  const managers = await prisma.user.findMany({
+    where: {
+      isActive: true,
+      ...userInBranchWhere(branchId),
+      userRoles: { some: { role: { code: "manager" } } },
+    },
+    select: { id: true },
+  });
+  const owners = await prisma.user.findMany({
+    where: {
+      isActive: true,
+      userRoles: { some: { role: { code: "owner" } } },
+    },
+    select: { id: true },
+  });
+  const recipientIds = new Set([
+    ...managers.map((m) => m.id),
+    ...owners.map((o) => o.id),
+  ]);
+  for (const userId of recipientIds) {
+    await prisma.notification.create({
+      data: {
+        userId,
+        type: "shift_swap_ready",
+        title: "Tukar shift siap diterapkan",
+        body: `${request.requesterName} dan ${request.counterpartyName} sudah sepakat tukar shift pada ${workDate}. Terapkan di menu Persetujuan.`,
+        dataJson: {
+          approval_id: request.id,
+          work_date: workDate,
+          branch_id: branchId,
+        },
+      },
+    });
+  }
+}
+
 export async function notifyManagersNewApprovalRequest(
   branchId: string,
   request: {

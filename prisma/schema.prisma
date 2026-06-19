@@ -39,6 +39,12 @@ enum AttendanceApprovalStatus {
   rejected
 }
 
+enum ShiftSwapPeerStatus {
+  pending
+  accepted
+  rejected
+}
+
 enum AttendanceType {
   fingerprint
   face_id
@@ -209,6 +215,7 @@ model Employee {
   kpiMonthlyAggregates KpiMonthlyAggregate[]
   lateExcuses              LateExcuse[]
   attendanceApprovalRequests AttendanceApprovalRequest[]
+  shiftSwapCounterpartyRequests AttendanceApprovalRequest[] @relation("ShiftSwapCounterparty")
   achievements        Achievement[]
   managerEvaluations ManagerEvaluation[]
 
@@ -436,13 +443,18 @@ model AttendanceApprovalRequest {
   managerNote      String?                  @map("manager_note") @db.Text
   reviewedById     String?                  @map("reviewed_by") @db.Uuid
   reviewedAt       DateTime?                @map("reviewed_at") @db.Timestamptz
-  attendanceId     String?                  @map("attendance_id") @db.Uuid
-  requestedShiftId Int?                     @map("requested_shift_id") @db.SmallInt
-  shiftConfirmedAt DateTime?                @map("shift_confirmed_at") @db.Timestamptz
-  createdAt        DateTime                 @default(now()) @map("created_at") @db.Timestamptz
+  attendanceId           String?                  @map("attendance_id") @db.Uuid
+  requestedShiftId       Int?                     @map("requested_shift_id") @db.SmallInt
+  requesterShiftId       Int?                     @map("requester_shift_id") @db.SmallInt
+  counterpartyEmployeeId String?                  @map("counterparty_employee_id") @db.Uuid
+  peerStatus             ShiftSwapPeerStatus?     @map("peer_status")
+  peerRespondedAt        DateTime?                @map("peer_responded_at") @db.Timestamptz
+  shiftConfirmedAt       DateTime?                @map("shift_confirmed_at") @db.Timestamptz
+  createdAt              DateTime                 @default(now()) @map("created_at") @db.Timestamptz
 
-  employee   Employee          @relation(fields: [employeeId], references: [id])
-  attendance AttendanceRecord? @relation(fields: [attendanceId], references: [id])
+  employee     Employee          @relation(fields: [employeeId], references: [id])
+  counterparty Employee?         @relation("ShiftSwapCounterparty", fields: [counterpartyEmployeeId], references: [id])
+  attendance   AttendanceRecord? @relation(fields: [attendanceId], references: [id])
   reviewedBy User?             @relation("ApprovalReviewedBy", fields: [reviewedById], references: [id])
 
   @@index([branchId, status], map: "idx_approval_branch_status")

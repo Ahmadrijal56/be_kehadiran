@@ -5,12 +5,17 @@ import { asyncHandler } from "../../middleware/asyncHandler.js";
 import { validationError } from "../../lib/errors.js";
 import { assertBranchAccess } from "../../services/branchAccess.js";
 import {
+  applyShiftSwapApproval,
   confirmShiftSwapApproval,
   createApprovalRequest,
   getApprovalRequest,
   listBranchApprovalRequests,
   listEligibleApprovalDates,
+  listIncomingShiftSwapRequests,
   listMyApprovalRequests,
+  listOvertimeShiftTargets,
+  listShiftSwapCounterparties,
+  respondToShiftSwapPeer,
   reviewApprovalRequest,
 } from "../../services/attendanceApprovalService.js";
 
@@ -37,7 +42,14 @@ approvalRequestsRouter.post(
   "/me/approval-requests",
   requirePermission("attendance.read.self"),
   asyncHandler(async (req, res) => {
-    const { work_date, type, reason_text, requested_shift_id } = req.body ?? {};
+    const {
+      work_date,
+      type,
+      reason_text,
+      requested_shift_id,
+      overtime_target_shift_id,
+      counterparty_employee_id,
+    } = req.body ?? {};
     if (!work_date || !type || !reason_text) {
       throw validationError("work_date, type, reason_text wajib");
     }
@@ -49,8 +61,64 @@ approvalRequestsRouter.post(
         requested_shift_id:
           requested_shift_id !== undefined
             ? Number(requested_shift_id)
+            : overtime_target_shift_id !== undefined
+              ? Number(overtime_target_shift_id)
+              : undefined,
+        counterparty_employee_id:
+          counterparty_employee_id !== undefined
+            ? String(counterparty_employee_id)
             : undefined,
       }),
+    });
+  })
+);
+
+approvalRequestsRouter.get(
+  "/me/shift-swap/counterparties",
+  requirePermission("attendance.read.self"),
+  asyncHandler(async (req, res) => {
+    const workDate = String(req.query.work_date ?? "");
+    if (!workDate) throw validationError("work_date wajib");
+    res.json({
+      data: await listShiftSwapCounterparties(req.user!, workDate),
+    });
+  })
+);
+
+approvalRequestsRouter.get(
+  "/me/overtime/shift-targets",
+  requirePermission("attendance.read.self"),
+  asyncHandler(async (req, res) => {
+    const workDate = String(req.query.work_date ?? "");
+    if (!workDate) throw validationError("work_date wajib");
+    res.json({
+      data: await listOvertimeShiftTargets(req.user!, workDate),
+    });
+  })
+);
+
+approvalRequestsRouter.get(
+  "/me/shift-swap/incoming",
+  requirePermission("attendance.read.self"),
+  asyncHandler(async (req, res) => {
+    res.json({ data: await listIncomingShiftSwapRequests(req.user!) });
+  })
+);
+
+approvalRequestsRouter.post(
+  "/me/shift-swap/:id/respond",
+  requirePermission("attendance.read.self"),
+  asyncHandler(async (req, res) => {
+    const { accepted } = req.body ?? {};
+    if (typeof accepted !== "boolean") {
+      throw validationError("accepted (boolean) wajib");
+    }
+    res.json({
+      data: await respondToShiftSwapPeer(
+        req.user!,
+        String(req.params.id),
+        accepted
+      ),
     });
   })
 );
@@ -88,6 +156,21 @@ approvalRequestsRouter.patch(
         status,
         manager_note,
       }),
+    });
+  })
+);
+
+approvalRequestsRouter.post(
+  "/approval-requests/:id/apply-shift-swap",
+  requirePermission("late_excuse.review"),
+  asyncHandler(async (req, res) => {
+    const { manager_note } = req.body ?? {};
+    res.json({
+      data: await applyShiftSwapApproval(
+        req.user!,
+        String(req.params.id),
+        { manager_note }
+      ),
     });
   })
 );

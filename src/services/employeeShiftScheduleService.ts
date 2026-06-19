@@ -326,6 +326,19 @@ export async function getBranchShiftSchedule(branchId: string, yearMonth: string
   };
 }
 
+/** Shift dari grid jadwal cabang. `null` = belum dijadwalkan pada tanggal itu. */
+export async function resolveGridShiftForDate(
+  branchId: string,
+  employeeId: string,
+  workDateStr: string
+): Promise<number | null> {
+  const yearMonth = workDateStr.slice(0, 7);
+  const month = await getBranchShiftSchedule(branchId, yearMonth);
+  const emp = month.employees.find((e) => e.employee_id === employeeId);
+  const shiftId = emp?.schedule[workDateStr];
+  return shiftId === undefined ? null : shiftId;
+}
+
 export type ScheduleChange = {
   employee_id: string;
   work_date: string;
@@ -801,6 +814,20 @@ export type BranchEmployeeOvertimeInfo = {
   approval_status: "pending" | "approved" | null;
   is_actual: boolean;
   label: string | null;
+  /** Tampil di shift jadwal (home) atau shift tujuan lembur (extension) */
+  placement: "home" | "extension";
+  source_shift: {
+    id: number;
+    code: string;
+    label: string;
+    time_range: string | null;
+  } | null;
+  target_shift: {
+    id: number;
+    code: string;
+    label: string;
+    time_range: string | null;
+  } | null;
 };
 
 export type BranchUpcomingShiftGroup = {
@@ -851,7 +878,13 @@ export async function getBranchUpcomingShiftSchedule(branchId: string) {
         status: { in: ["pending", "approved"] },
         employeeId: { in: employeeIds },
       },
-      select: { employeeId: true, workDate: true, status: true },
+      select: {
+        employeeId: true,
+        workDate: true,
+        status: true,
+        requesterShiftId: true,
+        requestedShiftId: true,
+      },
     }),
     prisma.attendanceRecord.findMany({
       where: {
@@ -870,10 +903,23 @@ export async function getBranchUpcomingShiftSchedule(branchId: string) {
     }),
   ]);
 
-  const overtimeApprovalByKey = new Map<string, "pending" | "approved">();
+  const overtimeApprovalByKey = new Map<
+    string,
+    {
+      status: "pending" | "approved";
+      sourceShiftId: number;
+      targetShiftId: number;
+    }
+  >();
   for (const row of overtimeApprovals) {
+    if (!row.requesterShiftId || !row.requestedShiftId) continue;
+    if (row.requesterShiftId === row.requestedShiftId) continue;
     const key = `${row.employeeId}:${row.workDate.toISOString().slice(0, 10)}`;
-    overtimeApprovalByKey.set(key, row.status as "pending" | "approved");
+    overtimeApprovalByKey.set(key, {
+      status: row.status as "pending" | "approved",
+      sourceShiftId: row.requesterShiftId,
+      targetShiftId: row.requestedShiftId,
+    });
   }
 
   const overtimeAttendanceByKey = new Map(
@@ -921,13 +967,49 @@ export async function getBranchUpcomingShiftSchedule(branchId: string) {
         overtime: resolveBranchEmployeeOvertimeInfo(
           emp.employee_id,
           target.work_date,
+          shiftId,
+          "home",
           overtimeApprovalByKey,
-          overtimeAttendanceByKey
+          overtimeAttendanceByKey,
+          shiftMeta
         ),
       };
       const list = groups.get(shiftId) ?? [];
       list.push(row);
       groups.set(shiftId, list);
+    }
+
+    for (const approval of overtimeApprovals) {
+      const workDateStr = approval.workDate.toISOString().slice(0, 10);
+      if (workDateStr !== target.work_date) continue;
+      if (!approval.requesterShiftId || !approval.requestedShiftId) continue;
+      if (approval.requesterShiftId === approval.requestedShiftId) continue;
+
+      const emp = month?.employees.find((e) => e.employee_id === approval.employeeId);
+      if (!emp) continue;
+
+      const targetShiftId = approval.requestedShiftId;
+      const homeShiftId = emp.schedule[target.work_date];
+      if (homeShiftId === targetShiftId) continue;
+
+      const list = groups.get(targetShiftId) ?? [];
+      if (list.some((e) => e.nik === emp.nik)) continue;
+
+      list.push({
+        nik: emp.nik,
+        full_name: emp.full_name,
+        employee_type_label: emp.employee_type_label ?? null,
+        overtime: resolveBranchEmployeeOvertimeInfo(
+          emp.employee_id,
+          target.work_date,
+          targetShiftId,
+          "extension",
+          overtimeApprovalByKey,
+          overtimeAttendanceByKey,
+          shiftMeta
+        ),
+      });
+      groups.set(targetShiftId, list);
     }
 
     for (const [, list] of groups) {
@@ -966,10 +1048,43 @@ export async function getBranchUpcomingShiftSchedule(branchId: string) {
   return { items };
 }
 
+function toOvertimeShiftChip(
+  shiftMeta: Map<number, ShiftOption>,
+  shiftId: number
+): BranchEmployeeOvertimeInfo["source_shift"] {
+  const meta = shiftMeta.get(shiftId);
+  if (!meta) {
+    return {
+      id: shiftId,
+      code: `S${shiftId}`,
+      label: `S${shiftId}`,
+      time_range: null,
+    };
+  }
+  const label = meta.time_range
+    ? `${meta.code} · ${meta.name} · ${meta.time_range}`
+    : `${meta.code} · ${meta.name}`;
+  return {
+    id: meta.id,
+    code: meta.code,
+    label,
+    time_range: meta.time_range,
+  };
+}
+
 function resolveBranchEmployeeOvertimeInfo(
   employeeId: string,
   workDate: string,
-  approvalByKey: Map<string, "pending" | "approved">,
+  cardShiftId: number,
+  placement: "home" | "extension",
+  approvalByKey: Map<
+    string,
+    {
+      status: "pending" | "approved";
+      sourceShiftId: number;
+      targetShiftId: number;
+    }
+  >,
   attendanceByKey: Map<
     string,
     {
@@ -977,15 +1092,16 @@ function resolveBranchEmployeeOvertimeInfo(
       checkOutAt: Date | null;
       status: string;
     }
-  >
+  >,
+  shiftMeta: Map<number, ShiftOption>
 ): BranchEmployeeOvertimeInfo | null {
   const key = `${employeeId}:${workDate}`;
-  const approval_status = approvalByKey.get(key) ?? null;
+  const approval = approvalByKey.get(key);
   const attendance = attendanceByKey.get(key);
 
   let is_actual = false;
   let label: string | null = null;
-  if (attendance?.checkInAt) {
+  if (attendance?.checkInAt && placement === "home") {
     const minutes = computeWorkDurationMinutes(
       attendance.checkInAt,
       attendance.checkOutAt ?? new Date()
@@ -1000,9 +1116,30 @@ function resolveBranchEmployeeOvertimeInfo(
     label = overtime.overtime_label;
   }
 
-  if (!approval_status && !is_actual) {
+  if (!approval && !is_actual) {
     return null;
   }
 
-  return { approval_status, is_actual, label };
+  const source_shift = approval
+    ? toOvertimeShiftChip(shiftMeta, approval.sourceShiftId)
+    : null;
+  const target_shift = approval
+    ? toOvertimeShiftChip(shiftMeta, approval.targetShiftId)
+    : null;
+
+  if (placement === "extension" && approval && cardShiftId !== approval.targetShiftId) {
+    return null;
+  }
+  if (placement === "home" && approval && cardShiftId !== approval.sourceShiftId) {
+    return null;
+  }
+
+  return {
+    approval_status: approval?.status ?? null,
+    is_actual,
+    label,
+    placement,
+    source_shift,
+    target_shift,
+  };
 }
