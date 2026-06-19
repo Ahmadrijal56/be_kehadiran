@@ -3,8 +3,7 @@ import { isInstantOnWorkDateWib, todayWorkDateWib } from "../utils/format.js";
 import { timeFromDbTime } from "../utils/time.js";
 import { getBranchShiftWindow } from "./branchShiftConfigService.js";
 import {
-  isExplicitOffDay,
-  resolveEffectiveShiftId,
+  resolveShiftDayStatesForEmployees,
 } from "./employeeShiftScheduleService.js";
 import {
   notifyAttendanceLate,
@@ -111,15 +110,23 @@ async function shiftContextFromId(
   };
 }
 
-/** Shift efektif per tanggal kerja (override jadwal dashboard atau default karyawan). */
+/** Shift efektif per tanggal kerja (entri grid jadwal). */
 async function resolveShiftContext(
   employeeId: string,
   branchId: string,
   workDate: Date
 ): Promise<AttendanceShiftContext | null> {
-  const shiftId = await resolveEffectiveShiftId(employeeId, workDate);
-  if (await isExplicitOffDay(employeeId, workDate)) return null;
-  return shiftContextFromId(branchId, shiftId);
+  const employee = await prisma.employee.findUniqueOrThrow({
+    where: { id: employeeId },
+    select: { defaultShiftId: true },
+  });
+  const states = await resolveShiftDayStatesForEmployees(
+    [{ id: employeeId, defaultShiftId: employee.defaultShiftId }],
+    workDate
+  );
+  const state = states.get(employeeId);
+  if (!state || state.isUnscheduled || state.isExplicitOff) return null;
+  return shiftContextFromId(branchId, state.shiftId);
 }
 
 export async function syncAttendanceRemindersForUser(
@@ -141,8 +148,6 @@ export async function syncAttendanceRemindersForUser(
     }),
   ]);
   if (!employee || !user) return;
-
-  if (!employee.shiftScheduleAssigned) return;
 
   if (employee.employeeType && employee.employeeType.shiftIds.length === 0) {
     return;

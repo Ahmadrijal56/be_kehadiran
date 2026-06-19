@@ -7,7 +7,7 @@ import {
   parseDateQuery,
   todayWorkDateWib,
 } from "../utils/format.js";
-import { resolveEffectiveShiftId, isExplicitOffDay } from "./employeeShiftScheduleService.js";
+import { resolveShiftDayStatesForEmployees, isExplicitOffDay } from "./employeeShiftScheduleService.js";
 import { getBranchShiftWindow } from "./branchShiftConfigService.js";
 import { computeDeltaMinutes, timeFromDbTime, toDateOnly } from "../utils/time.js";
 import {
@@ -933,7 +933,18 @@ export async function ensureAttendanceRecordForDate(
   const employee = await prisma.employee.findUniqueOrThrow({
     where: { id: employeeId },
   });
-  const shiftId = await resolveEffectiveShiftId(employeeId, dateOnly);
+  const dayState = (
+    await resolveShiftDayStatesForEmployees(
+      [{ id: employeeId, defaultShiftId: employee.defaultShiftId }],
+      dateOnly
+    )
+  ).get(employeeId);
+  if (dayState?.isUnscheduled) {
+    throw validationError(
+      "Jadwal shift hari ini belum diisi manager — tidak dapat membuat pengajuan"
+    );
+  }
+  const shiftId = dayState!.shiftId;
   if (await isExplicitOffDay(employeeId, dateOnly)) {
     if (options?.skipOffDay) return null;
     throw validationError("Hari libur — tidak perlu pengajuan keterlambatan");

@@ -10,6 +10,7 @@ import { formatWibIso } from "../utils/format.js";
 import { toDateOnly } from "../utils/time.js";
 import type { AuthUser } from "./authService.js";
 import { processCheckIn } from "./attendanceService.js";
+import { computeCheckInKpiFields } from "./attendanceKpiRecalcService.js";
 import { writeAuditLog } from "./auditService.js";
 import { userHasHiddenDirectoryRole } from "../constants/directoryVisibility.js";
 import { invalidatePapanCaches } from "./papanCacheInvalidation.js";
@@ -68,6 +69,7 @@ function mapAttendanceSnapshot(
     exists: Boolean(row),
     complete,
     can_fill: !complete,
+    can_edit: Boolean(row),
     attendance_id: row?.id ?? null,
     check_in_at: formatWibIso(row?.checkInAt ?? null),
     check_out_at: formatWibIso(row?.checkOutAt ?? null),
@@ -272,5 +274,196 @@ export async function fillMissingDeveloperSupportAttendance(
     action,
     message: messages[action],
     attendance: mapAttendanceSnapshot(workDate, refreshed),
+  };
+}
+
+export type UpdateSupportAttendanceResult = {
+  message: string;
+  attendance: ReturnType<typeof mapAttendanceSnapshot>;
+};
+
+function resolveStatusAfterTimes(input: {
+  checkInAt: Date;
+  checkOutAt: Date | null;
+  previousStatus: AttendanceStatus;
+  checkInStatus: AttendanceStatus;
+}): AttendanceStatus {
+  if (input.checkOutAt) {
+    return input.previousStatus === "forgot_checkout"
+      ? "forgot_checkout"
+      : "left";
+  }
+  return input.checkInStatus;
+}
+
+/** Koreksi jam masuk/pulang — termasuk tanggal lampau dan absensi yang sudah lengkap. */
+export async function updateDeveloperSupportAttendance(
+  actor: AuthUser,
+  userId: string,
+  input: {
+    work_date: string;
+    check_in_at?: string;
+    check_out_at?: string | null;
+    reason: string;
+  }
+): Promise<UpdateSupportAttendanceResult> {
+  const reason = input.reason?.trim();
+  if (!reason) {
+    throw validationError("reason wajib diisi");
+  }
+  if (input.check_in_at === undefined && input.check_out_at === undefined) {
+    throw validationError("Isi minimal jam masuk atau jam pulang untuk dikoreksi");
+  }
+
+  const user = await resolveSupportEmployee(userId);
+  const workDate = parseWorkDateInput(input.work_date);
+  const employeeId = user.employeeId!;
+  const branchId = user.employee!.branchId;
+
+  const existing = await prisma.attendanceRecord.findUnique({
+    where: {
+      employeeId_workDate: { employeeId, workDate },
+    },
+    include: { kpiDailyScore: true },
+  });
+
+  if (!existing) {
+    throw businessError(
+      "Belum ada absensi di tanggal ini — gunakan tambah absensi hilang terlebih dahulu"
+    );
+  }
+
+  const nextCheckIn =
+    input.check_in_at !== undefined
+      ? parseInstantInput(input.check_in_at, "check_in_at")
+      : existing.checkInAt;
+  if (!nextCheckIn) {
+    throw validationError("Jam masuk wajib ada — isi jam masuk atau gunakan tambah absensi hilang");
+  }
+
+  let nextCheckOut: Date | null;
+  if (input.check_out_at === undefined) {
+    nextCheckOut = existing.checkOutAt;
+  } else if (input.check_out_at === null || input.check_out_at.trim() === "") {
+    nextCheckOut = null;
+  } else {
+    nextCheckOut = parseInstantInput(input.check_out_at, "check_out_at");
+  }
+
+  if (nextCheckOut && nextCheckOut.getTime() <= nextCheckIn.getTime()) {
+    throw validationError("Jam pulang harus setelah jam masuk");
+  }
+
+  const checkInChanged =
+    input.check_in_at !== undefined &&
+    existing.checkInAt?.getTime() !== nextCheckIn.getTime();
+  const checkOutChanged =
+    input.check_out_at !== undefined &&
+    (existing.checkOutAt?.getTime() ?? null) !== (nextCheckOut?.getTime() ?? null);
+
+  if (!checkInChanged && !checkOutChanged) {
+    return {
+      message: "Tidak ada perubahan jam absensi.",
+      attendance: mapAttendanceSnapshot(workDate, {
+        id: existing.id,
+        checkInAt: existing.checkInAt,
+        checkOutAt: existing.checkOutAt,
+        status: existing.status,
+        shiftId: existing.shiftId,
+        lateMinutes: existing.lateMinutes,
+      }),
+    };
+  }
+
+  const scored = await computeCheckInKpiFields(
+    branchId,
+    existing.shiftId,
+    workDate,
+    nextCheckIn
+  );
+  const adjustmentPoints = existing.kpiDailyScore?.adjustmentPoints ?? 0;
+  const nextStatus = resolveStatusAfterTimes({
+    checkInAt: nextCheckIn,
+    checkOutAt: nextCheckOut,
+    previousStatus: existing.status,
+    checkInStatus: scored.status,
+  });
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await tx.attendanceRecord.update({
+      where: { id: existing.id },
+      data: {
+        checkInAt: nextCheckIn,
+        checkOutAt: nextCheckOut,
+        checkOutIsAuto: nextCheckOut ? false : existing.checkOutIsAuto,
+        lateMinutes: scored.lateMinutesAttendance,
+        status: nextStatus,
+        deviceId: existing.deviceId ?? "dev-support-manual",
+      },
+      select: {
+        id: true,
+        checkInAt: true,
+        checkOutAt: true,
+        status: true,
+        shiftId: true,
+        lateMinutes: true,
+      },
+    });
+
+    await tx.kpiDailyScore.upsert({
+      where: {
+        employeeId_workDate: {
+          employeeId,
+          workDate,
+        },
+      },
+      create: {
+        employeeId,
+        workDate,
+        checkInPoints: scored.kpi.points,
+        adjustmentPoints: 0,
+        totalPoints: scored.kpi.points,
+        lateMinutes: scored.deltaMinutes,
+        ruleApplied: scored.kpi.ruleCode,
+      },
+      update: {
+        checkInPoints: scored.kpi.points,
+        totalPoints: scored.kpi.points + adjustmentPoints,
+        lateMinutes: scored.deltaMinutes,
+        ruleApplied: scored.kpi.ruleCode,
+      },
+    });
+
+    return row;
+  });
+
+  await writeAuditLog({
+    userId: actor.id,
+    action: "attendance.support.update",
+    entityType: "attendance",
+    entityId: updated.id,
+    oldValues: {
+      check_in_at: formatWibIso(existing.checkInAt),
+      check_out_at: formatWibIso(existing.checkOutAt),
+      status: existing.status,
+      late_minutes: existing.lateMinutes,
+    },
+    newValues: {
+      target_user_id: userId,
+      employee_id: employeeId,
+      work_date: workDate.toISOString().slice(0, 10),
+      check_in_at: formatWibIso(updated.checkInAt),
+      check_out_at: formatWibIso(updated.checkOutAt),
+      status: updated.status,
+      late_minutes: updated.lateMinutes,
+      reason,
+    },
+  });
+
+  await invalidatePapanCaches(branchId);
+
+  return {
+    message: "Jam absensi berhasil diperbarui.",
+    attendance: mapAttendanceSnapshot(workDate, updated),
   };
 }

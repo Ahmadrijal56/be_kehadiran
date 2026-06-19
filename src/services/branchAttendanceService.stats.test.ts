@@ -23,6 +23,8 @@ function row(
     full_name: "Test",
     employee_type_label: null,
     shift: { code: "S1", name: "Shift 1", time_range: null },
+    shift_schedule_assigned: true,
+    shift_scheduled_today: true,
     check_in_at: null,
     check_out_at: null,
     late_minutes: 0,

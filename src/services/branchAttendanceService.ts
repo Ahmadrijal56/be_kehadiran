@@ -19,6 +19,10 @@ export type BranchEmployeeAttendance = {
   full_name: string;
   employee_type_label: string | null;
   shift: { code: string; name: string; time_range: string | null };
+  /** false = tipe karyawan tidak pakai grid jadwal shift */
+  shift_schedule_assigned: boolean;
+  /** false = belum ada shift terisi untuk hari ini di grid */
+  shift_scheduled_today: boolean;
   status: string;
   check_in_at: string | null;
   check_out_at: string | null;
@@ -171,8 +175,12 @@ function mapRow(
     shift: { code: string; name: string };
     breakSessions: Array<{ breakStartAt: Date; breakEndAt: Date | null }>;
   },
-  scheduledShift?: { code: string; name: string; time_range: string | null },
-  scheduledOff = false
+  scheduledShift?: { code: string; name: string; time_range: string | null } | null,
+  scheduledOff = false,
+  scheduleFlags?: {
+    shift_schedule_assigned: boolean;
+    shift_scheduled_today: boolean;
+  }
 ): BranchEmployeeAttendance {
   const activeBreak = att?.breakSessions.find((b) => !b.breakEndAt);
   const workMinutes =
@@ -189,10 +197,15 @@ function mapRow(
     att?.checkOutIsAuto
   );
   const shiftCode =
-    scheduledShift?.code ?? att?.shift.code ?? emp.defaultShift.code;
+    scheduledShift === null
+      ? ""
+      : scheduledShift?.code ?? att?.shift.code ?? emp.defaultShift.code;
   const shiftName =
-    scheduledShift?.name ?? att?.shift.name ?? emp.defaultShift.name;
-  const timeRange = scheduledShift?.time_range ?? null;
+    scheduledShift === null
+      ? ""
+      : scheduledShift?.name ?? att?.shift.name ?? emp.defaultShift.name;
+  const timeRange =
+    scheduledShift === null ? null : scheduledShift?.time_range ?? null;
   return {
     employee_id: emp.id,
     nik: emp.nik,
@@ -203,6 +216,8 @@ function mapRow(
       name: shiftName,
       time_range: timeRange,
     },
+    shift_schedule_assigned: scheduleFlags?.shift_schedule_assigned ?? true,
+    shift_scheduled_today: scheduleFlags?.shift_scheduled_today ?? true,
     status: resolveMonitoringStatus(att, scheduledOff),
     check_in_at: formatWibIso(att?.checkInAt ?? null),
     check_out_at: formatWibIso(att?.checkOutAt ?? null),
@@ -426,20 +441,40 @@ async function loadBranchRows(
       const effectiveShiftId = shiftMap.get(emp.id) ?? OFF_SHIFT_ID;
       const dayState = dayStates.get(emp.id);
       const scheduledOff = dayState?.isExplicitOff ?? false;
+      const isUnscheduled = dayState?.isUnscheduled ?? true;
+      const shiftScheduledToday = !isUnscheduled && !scheduledOff;
       const timeRange = scheduledOff
         ? null
         : shiftTimeRangeById.get(effectiveShiftId) ?? null;
-      const scheduledShift = scheduledOff
-        ? { code: "Libur", name: "Libur", time_range: null as string | null }
-        : shiftById[effectiveShiftId]
-          ? {
-              code: shiftById[effectiveShiftId]!.code,
-              name: shiftById[effectiveShiftId]!.name,
-              time_range: timeRange,
-            }
-          : { code: "?", name: "?", time_range: timeRange };
 
-      return mapRow(emp, att, scheduledShift, scheduledOff);
+      let scheduledShift: {
+        code: string;
+        name: string;
+        time_range: string | null;
+      } | null;
+
+      if (scheduledOff) {
+        scheduledShift = {
+          code: "Libur",
+          name: "Libur",
+          time_range: null,
+        };
+      } else if (isUnscheduled) {
+        scheduledShift = null;
+      } else if (shiftById[effectiveShiftId]) {
+        scheduledShift = {
+          code: shiftById[effectiveShiftId]!.code,
+          name: shiftById[effectiveShiftId]!.name,
+          time_range: timeRange,
+        };
+      } else {
+        scheduledShift = { code: "?", name: "?", time_range: timeRange };
+      }
+
+      return mapRow(emp, att, scheduledShift, scheduledOff, {
+        shift_schedule_assigned: true,
+        shift_scheduled_today: shiftScheduledToday,
+      });
     });
 
     rowsMemCache.set(memKey, { at: Date.now(), rows });

@@ -647,7 +647,7 @@ async function ensureEmployeeRecord(
       branchId,
       defaultShiftId,
       employeeTypeCode: typeCode,
-      shiftScheduleAssigned: false,
+      shiftScheduleAssigned: true,
     },
   });
   return created.id;
@@ -758,7 +758,7 @@ export async function createBranchUser(
       await purgeEmployeeOperationalData(tx, [employeeId!]);
       await tx.employee.update({
         where: { id: employeeId! },
-        data: { accountCode: null, shiftScheduleAssigned: false },
+        data: { accountCode: null, shiftScheduleAssigned: true },
       });
     });
     invalidateBranchAttendanceCache(branchId);
@@ -1012,7 +1012,7 @@ export async function updateUserRole(
       await attachEmployeeToUserAccount(userId, employeeId);
       await prisma.employee.update({
         where: { id: employeeId },
-        data: { shiftScheduleAssigned: false },
+        data: { shiftScheduleAssigned: true },
       });
     }
   } else {
@@ -1211,7 +1211,7 @@ export async function updateUserAccountRole(
     await attachEmployeeToUserAccount(userId, employeeId);
     await prisma.employee.update({
       where: { id: employeeId },
-      data: { shiftScheduleAssigned: false },
+      data: { shiftScheduleAssigned: true },
     });
   } else {
     await updateEmployeeType(actor, branchId, working.employeeId, typeConfig.code);

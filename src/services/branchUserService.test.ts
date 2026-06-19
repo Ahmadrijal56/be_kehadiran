@@ -144,7 +144,7 @@ describe("createBranchUser — akun baru mulai dari 0 poin", () => {
     expect(attendances).toHaveLength(0);
   });
 
-  it("akun baru belum punya jadwal shift sampai manager mengatur", async () => {
+  it("akun baru ikut grid jadwal — absensi menunggu sel diisi manager", async () => {
     const stamp = Date.now().toString().slice(-6);
     const freshNik = `SCH${stamp}`;
     const created = await createBranchUser(actor, branchId, {
@@ -158,7 +158,7 @@ describe("createBranchUser — akun baru mulai dari 0 poin", () => {
       where: { id: created.employee_id! },
       select: { shiftScheduleAssigned: true },
     });
-    expect(employee.shiftScheduleAssigned).toBe(false);
+    expect(employee.shiftScheduleAssigned).toBe(true);
 
     await prisma.userRole.deleteMany({ where: { userId: created.id } });
     await prisma.userBranch.deleteMany({ where: { userId: created.id } });

@@ -34,7 +34,7 @@ import {
 } from "../../services/developerScenarioService.js";
 import { setDeveloperKpiBatch } from "../../services/developerToolsService.js";
 import { getDeveloperMonitorSnapshot } from "../../services/developerMonitorService.js";
-import { setOrgWideRankingEnabled, setEmployeeLiveAttendanceEnabled } from "../../services/organizationConfigService.js";
+import { setOrgWideRankingEnabled, setEmployeeLiveAttendanceEnabled, setPwaEnabled } from "../../services/organizationConfigService.js";
 import { executeFactoryReset } from "../../services/factoryResetService.js";
 import {
   getDeveloperSupportLoginLock,
@@ -44,6 +44,7 @@ import {
 import {
   fillMissingDeveloperSupportAttendance,
   getDeveloperSupportAttendance,
+  updateDeveloperSupportAttendance,
 } from "../../services/developerSupportAttendanceService.js";
 import { handleDeveloperMonitorStream } from "./developerMonitorStream.js";
 
@@ -150,6 +151,33 @@ meDeveloperRouter.post(
   })
 );
 
+meDeveloperRouter.patch(
+  "/support/users/:userId/attendance",
+  asyncHandler(async (req, res) => {
+    const body = (req.body ?? {}) as {
+      work_date?: string;
+      check_in_at?: string;
+      check_out_at?: string | null;
+      reason?: string;
+    };
+    if (!body.work_date) {
+      throw validationError("work_date wajib (YYYY-MM-DD)");
+    }
+    res.json({
+      data: await updateDeveloperSupportAttendance(
+        req.user!,
+        String(req.params.userId),
+        {
+          work_date: body.work_date,
+          check_in_at: body.check_in_at,
+          check_out_at: body.check_out_at,
+          reason: body.reason ?? "",
+        }
+      ),
+    });
+  })
+);
+
 meDeveloperRouter.get(
   "/kpi-targets",
   asyncHandler(async (req, res) => {
@@ -186,6 +214,16 @@ meDeveloperRouter.put(
     const enabled = Boolean((req.body as { enabled?: boolean })?.enabled);
     res.json({
       data: await setEmployeeLiveAttendanceEnabled(req.user!, enabled),
+    });
+  })
+);
+
+meDeveloperRouter.put(
+  "/features/pwa",
+  asyncHandler(async (req, res) => {
+    const enabled = Boolean((req.body as { enabled?: boolean })?.enabled);
+    res.json({
+      data: await setPwaEnabled(req.user!, enabled),
     });
   })
 );

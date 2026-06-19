@@ -51,6 +51,7 @@ export type GamificationSettingsRow = {
   monthly_rewards_enabled: boolean;
   org_wide_ranking_enabled: boolean;
   employee_live_attendance_enabled: boolean;
+  pwa_enabled: boolean;
   /** YYYY-MM-DD — mulai KPI kehadiran operasional; null = otomatis */
   attendance_kpi_start_date: string | null;
   top1_amount_idr: number;
@@ -83,6 +84,7 @@ export type PublicRulesPayload = {
   features: {
     org_wide_ranking_enabled: boolean;
     employee_live_attendance_enabled: boolean;
+    pwa_enabled: boolean;
   };
 };
 
@@ -208,6 +210,7 @@ export async function ensureOrganizationDefaults(): Promise<void> {
       orgWideRankingEnabled: DEFAULT_GAMIFICATION_SETTINGS.org_wide_ranking_enabled,
       employeeLiveAttendanceEnabled:
         DEFAULT_GAMIFICATION_SETTINGS.employee_live_attendance_enabled,
+      pwaEnabled: DEFAULT_GAMIFICATION_SETTINGS.pwa_enabled,
       top1AmountIdr: DEFAULT_GAMIFICATION_SETTINGS.top1_amount_idr,
       top1RewardLabel: DEFAULT_GAMIFICATION_SETTINGS.top1_reward_label,
       top2AmountIdr: DEFAULT_GAMIFICATION_SETTINGS.top2_amount_idr,
@@ -467,6 +470,7 @@ export async function getGamificationSettings(): Promise<GamificationSettingsRow
     monthly_rewards_enabled: row.monthlyRewardsEnabled,
     org_wide_ranking_enabled: row.orgWideRankingEnabled,
     employee_live_attendance_enabled: row.employeeLiveAttendanceEnabled,
+    pwa_enabled: row.pwaEnabled,
     attendance_kpi_start_date: row.attendanceKpiStartDate
       ? row.attendanceKpiStartDate.toISOString().slice(0, 10)
       : null,
@@ -600,6 +604,35 @@ export async function setEmployeeLiveAttendanceEnabled(
     entityType: "gamification_settings",
     entityId: "default",
     newValues: { employee_live_attendance_enabled: Boolean(enabled) },
+  });
+
+  return getGamificationSettings();
+}
+
+export async function isPwaEnabled(): Promise<boolean> {
+  const settings = await getGamificationSettingsCached();
+  return settings.pwa_enabled;
+}
+
+export async function setPwaEnabled(
+  actor: AuthUser,
+  enabled: boolean
+): Promise<GamificationSettingsRow> {
+  if (!actor.roles.includes("developer")) throw forbidden();
+
+  await ensureOrganizationDefaults();
+  await prisma.gamificationSettings.update({
+    where: { id: "default" },
+    data: { pwaEnabled: Boolean(enabled) },
+  });
+  invalidateConfigCache();
+
+  await writeAuditLog({
+    userId: actor.id,
+    action: "pwa_enabled.update",
+    entityType: "gamification_settings",
+    entityId: "default",
+    newValues: { pwa_enabled: Boolean(enabled) },
   });
 
   return getGamificationSettings();
@@ -816,6 +849,7 @@ async function buildPublicRules(): Promise<PublicRulesPayload> {
     features: {
       org_wide_ranking_enabled: settings.org_wide_ranking_enabled,
       employee_live_attendance_enabled: settings.employee_live_attendance_enabled,
+      pwa_enabled: settings.pwa_enabled,
     },
   };
 }

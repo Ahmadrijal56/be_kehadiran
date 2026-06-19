@@ -298,15 +298,6 @@ export async function getBranchShiftSchedule(branchId: string, yearMonth: string
         allowed_shift_ids,
       };
 
-      if (!emp.shiftScheduleAssigned) {
-        return {
-          ...base,
-          shift_schedule_assigned: false,
-          schedule: {},
-          overrides: {},
-        };
-      }
-
       const schedule: Record<string, number> = {};
       const overridesByDate: Record<string, number> = {};
       for (const day of days) {
@@ -330,7 +321,7 @@ export async function getBranchShiftSchedule(branchId: string, yearMonth: string
 export type ScheduleChange = {
   employee_id: string;
   work_date: string;
-  /** null = hapus override (kembali ke shift default) */
+  /** null = hapus entri jadwal (sel kosong) */
   shift_id: number | null;
 };
 
@@ -433,12 +424,9 @@ export async function saveBranchShiftSchedule(
 
   let kpiRecalculated = 0;
   for (const ch of changes) {
+    if (ch.shift_id === null) continue;
     const workDate = toDateOnly(new Date(`${ch.work_date}T00:00:00.000Z`));
-    const emp = empById.get(ch.employee_id);
-    const newShiftId =
-      ch.shift_id === null
-        ? emp?.defaultShiftId ?? OFF_SHIFT_ID
-        : ch.shift_id;
+    const newShiftId = ch.shift_id;
     if (isOffShift(newShiftId)) {
       const updated = await syncAttendanceShiftFromSchedule({
         employeeId: ch.employee_id,
@@ -548,60 +536,6 @@ export async function resolveShiftDayStatesForEmployees(
   if (employees.length === 0) return result;
 
   const dateOnly = toDateOnly(workDate);
-  const employeeRows = await prisma.employee.findMany({
-    where: { id: { in: employees.map((e) => e.id) } },
-    select: {
-      id: true,
-      branchId: true,
-      employeeTypeCode: true,
-      defaultShiftId: true,
-    },
-  });
-  const profileById = new Map(employeeRows.map((r) => [r.id, r]));
-  const typePairs = [...new Set(
-    employeeRows
-      .filter((r) => r.employeeTypeCode)
-      .map((r) => `${r.branchId}:${r.employeeTypeCode!}`)
-  )];
-  const typeConfigs =
-    typePairs.length > 0
-      ? await prisma.employeeTypeConfig.findMany({
-          where: {
-            OR: typePairs.map((pair) => {
-              const [branchId, code] = pair.split(":");
-              return {
-                branchId: branchId!,
-                code: code!,
-                isActive: true,
-              };
-            }),
-          },
-          select: { branchId: true, code: true, shiftIds: true },
-        })
-      : [];
-  const uniqueTypeShiftIds = [...new Set(
-    typeConfigs.flatMap((cfg) => cfg.shiftIds).filter((id) => id !== OFF_SHIFT_ID)
-  )];
-  const shifts = uniqueTypeShiftIds.length
-    ? await prisma.shift.findMany({
-        where: { id: { in: uniqueTypeShiftIds } },
-        select: { id: true, startTime: true },
-      })
-    : [];
-  const shiftStartMinuteById = new Map<number, number>(
-    shifts.map((s) => {
-      const start = timeFromDbTime(s.startTime);
-      return [s.id, start.hours * 60 + start.minutes];
-    })
-  );
-  const primaryShiftByType = new Map(
-    typeConfigs
-      .map((cfg) => {
-        const primary = pickPrimaryShiftId(cfg.shiftIds, shiftStartMinuteById);
-        return primary != null ? [`${cfg.branchId}:${cfg.code}`, primary] : null;
-      })
-      .filter((entry): entry is [string, number] => entry != null)
-  );
 
   const overrides = await prisma.employeeShift.findMany({
     where: {
@@ -629,18 +563,10 @@ export async function resolveShiftDayStatesForEmployees(
         isUnscheduled: false,
       });
     } else {
-      const profile = profileById.get(emp.id);
-      const typeShiftId =
-        profile?.employeeTypeCode != null
-          ? primaryShiftByType.get(`${profile.branchId}:${profile.employeeTypeCode}`)
-          : undefined;
-      const effectiveDefaultShiftId =
-        typeShiftId ?? profile?.defaultShiftId ?? emp.defaultShiftId;
-      const usesDailyGrid = emp.shiftScheduleAssigned === true;
       result.set(emp.id, {
-        shiftId: effectiveDefaultShiftId,
+        shiftId: OFF_SHIFT_ID,
         isExplicitOff: false,
-        isUnscheduled: usesDailyGrid,
+        isUnscheduled: true,
       });
     }
   }
@@ -775,15 +701,10 @@ export async function getEmployeeMonthlyShiftSchedule(
   );
 
   if (!employee.shiftScheduleAssigned) {
-    return {
-      year_month: yearMonth,
-      days,
-      shifts: shiftOptions,
-      default_shift_id: employee.defaultShiftId,
-      shift_schedule_assigned: false,
-      schedule: {},
-      summary: [],
-    };
+    await prisma.employee.update({
+      where: { id: employeeId },
+      data: { shiftScheduleAssigned: true },
+    });
   }
 
   const schedule: Record<string, EmployeeDayShift> = {};

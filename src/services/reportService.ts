@@ -139,13 +139,13 @@ export async function getDailyReport(
       const key = `${emp.id}:${dateStr}`;
       const override = overrideByKey.get(key);
       const scheduledOff = override === OFF_SHIFT_ID;
-      const effectiveShiftId =
-        override !== undefined
-          ? override
-          : emp.defaultShiftId;
+      const hasGridEntry = override !== undefined;
       const att = recordByKey.get(key);
 
       if (scheduledOff && !att) continue;
+      if (!hasGridEntry && !att) continue;
+
+      const effectiveShiftId = hasGridEntry ? override! : att!.shiftId;
 
       const scheduledShift = shiftById[effectiveShiftId];
       const shiftCode = scheduledOff
