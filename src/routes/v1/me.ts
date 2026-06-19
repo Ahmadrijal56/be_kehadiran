@@ -30,6 +30,7 @@ import {
   getBranchShiftSchedule,
   getEmployeeMonthlyShiftSchedule,
   getEmployeeShiftScheduleOverview,
+  getBranchUpcomingShiftSchedule,
   listShiftOptions,
 } from "../../services/employeeShiftScheduleService.js";
 import { currentYearMonthWib } from "../../utils/format.js";
@@ -248,6 +249,28 @@ meRouter.get(
     });
     const shifts = (await listShiftOptions(employee.branchId)).filter((s) => !s.is_off);
     res.json({ data: shifts });
+  })
+);
+
+meRouter.get(
+  "/shift-schedule/upcoming",
+  requirePermission("attendance.read.self"),
+  asyncHandler(async (req, res) => {
+    const employeeId = requireEmployeeProfile(req.user!);
+    const employee = await prisma.employee.findUniqueOrThrow({
+      where: { id: employeeId },
+      select: {
+        branchId: true,
+        branch: { select: { code: true, name: true } },
+      },
+    });
+    const preview = await getBranchUpcomingShiftSchedule(employee.branchId);
+    res.json({
+      data: {
+        branch: employee.branch,
+        ...preview,
+      },
+    });
   })
 );
 

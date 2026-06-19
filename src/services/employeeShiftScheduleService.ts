@@ -9,7 +9,11 @@ import { hasPermission } from "./authService.js";
 import { writeAuditLog } from "./auditService.js";
 import { OFF_SHIFT_ID } from "../constants/shifts.js";
 import { shiftAllowedForType } from "./organizationConfigService.js";
-import { currentYearMonthWib } from "../utils/format.js";
+import {
+  currentYearMonthWib,
+  todayWorkDateWib,
+  toWorkDateStrWib,
+} from "../utils/format.js";
 import { timeFromDbTime, toDateOnly } from "../utils/time.js";
 import { invalidatePapanCaches } from "./papanCacheInvalidation.js";
 import { recalculateAttendanceKpiForShiftChange, syncAttendanceShiftFromSchedule } from "./attendanceKpiRecalcService.js";
@@ -765,4 +769,132 @@ export async function getEmployeeShiftScheduleOverview(employeeId: string) {
       { period: "next" as const, ...months[2] },
     ],
   };
+}
+
+const UPCOMING_WEEKDAYS = ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"];
+
+function addWorkDateDays(workDate: string, delta: number): string {
+  const [y, m, d] = workDate.split("-").map((v) => parseInt(v, 10));
+  const dt = new Date(Date.UTC(y, m - 1, d + delta));
+  return dt.toISOString().slice(0, 10);
+}
+
+export type EmployeeUpcomingShiftDay = {
+  work_date: string;
+  weekday: string;
+  day_label: "today" | "tomorrow";
+  shift: EmployeeDayShift | null;
+};
+
+export type BranchUpcomingShiftEmployee = {
+  nik: string;
+  full_name: string;
+  employee_type_label: string | null;
+};
+
+export type BranchUpcomingShiftGroup = {
+  shift_id: number;
+  shift_code: string;
+  shift_name: string;
+  time_range: string | null;
+  is_off: boolean;
+  employees: BranchUpcomingShiftEmployee[];
+};
+
+export type BranchUpcomingShiftDay = {
+  work_date: string;
+  weekday: string;
+  day_label: "today" | "tomorrow";
+  shifts: BranchUpcomingShiftGroup[];
+  working_count: number;
+  off_count: number;
+  unscheduled_count: number;
+};
+
+/** Ringkasan jadwal tim cabang hari ini & besok untuk dashboard karyawan. */
+export async function getBranchUpcomingShiftSchedule(branchId: string) {
+  const today = toWorkDateStrWib(todayWorkDateWib());
+  const tomorrow = addWorkDateDays(today, 1);
+  const targets: Array<{ work_date: string; day_label: "today" | "tomorrow" }> = [
+    { work_date: today, day_label: "today" },
+    { work_date: tomorrow, day_label: "tomorrow" },
+  ];
+  const yearMonths = [...new Set(targets.map((t) => t.work_date.slice(0, 7)))];
+  const schedules = await Promise.all(
+    yearMonths.map((ym) => getBranchShiftSchedule(branchId, ym))
+  );
+
+  const shiftMeta = new Map<number, ShiftOption>();
+  for (const month of schedules) {
+    for (const shift of month.shifts) {
+      shiftMeta.set(shift.id, shift);
+    }
+  }
+
+  const items = targets.map((target) => {
+    const month = schedules.find((s) => s.year_month === target.work_date.slice(0, 7));
+    const groups = new Map<number, BranchUpcomingShiftEmployee[]>();
+    for (const shift of month?.shifts ?? []) {
+      groups.set(shift.id, []);
+    }
+
+    let working_count = 0;
+    let off_count = 0;
+    let unscheduled_count = 0;
+
+    for (const emp of month?.employees ?? []) {
+      const shiftId = emp.schedule[target.work_date];
+      if (shiftId === undefined) {
+        unscheduled_count++;
+        continue;
+      }
+      const meta = shiftMeta.get(shiftId);
+      const isOff = meta?.is_off ?? shiftId === OFF_SHIFT_ID;
+      if (isOff) off_count++;
+      else working_count++;
+
+      const row: BranchUpcomingShiftEmployee = {
+        nik: emp.nik,
+        full_name: emp.full_name,
+        employee_type_label: emp.employee_type_label ?? null,
+      };
+      const list = groups.get(shiftId) ?? [];
+      list.push(row);
+      groups.set(shiftId, list);
+    }
+
+    for (const [, list] of groups) {
+      list.sort((a, b) => a.full_name.localeCompare(b.full_name));
+    }
+
+    const shifts: BranchUpcomingShiftGroup[] = (month?.shifts ?? [])
+      .map((shift) => ({
+        shift_id: shift.id,
+        shift_code: shift.code,
+        shift_name: shift.name,
+        time_range: shift.time_range,
+        is_off: shift.is_off,
+        employees: groups.get(shift.id) ?? [],
+      }))
+      .filter((group) => group.is_off ? group.employees.length > 0 : true)
+      .sort((a, b) => {
+        if (a.is_off !== b.is_off) return a.is_off ? 1 : -1;
+        return a.shift_id - b.shift_id;
+      });
+
+    return {
+      work_date: target.work_date,
+      weekday:
+        UPCOMING_WEEKDAYS[
+          new Date(`${target.work_date}T00:00:00.000Z`).getUTCDay()
+        ] ?? "",
+      day_label: target.day_label,
+      shifts,
+      working_count,
+      off_count,
+      unscheduled_count,
+    } satisfies BranchUpcomingShiftDay;
+  });
+
+  return { items };
 }
