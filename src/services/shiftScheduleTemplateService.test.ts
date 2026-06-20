@@ -24,10 +24,13 @@ describe("shiftScheduleTemplateService — parse sel Excel", () => {
     expect(isBlankShiftCell("1")).toBe(false);
   });
 
-  it("parseShiftScheduleCell: 1–5 dan L", () => {
+  it("parseShiftScheduleCell: kode shift cabang dan L", () => {
     expect(parseShiftScheduleCell(1)).toBe(1);
     expect(parseShiftScheduleCell("2")).toBe(2);
     expect(parseShiftScheduleCell("S3")).toBe(3);
+    expect(parseShiftScheduleCell(8)).toBe(8);
+    expect(parseShiftScheduleCell("8")).toBe(8);
+    expect(parseShiftScheduleCell("S8")).toBe(8);
     expect(parseShiftScheduleCell("L")).toBe(OFF_SHIFT_ID);
     expect(parseShiftScheduleCell("libur")).toBe(OFF_SHIFT_ID);
     expect(parseShiftScheduleCell("")).toBe(null);
@@ -35,7 +38,7 @@ describe("shiftScheduleTemplateService — parse sel Excel", () => {
   });
 
   it("parseShiftScheduleCell menolak nilai tidak valid", () => {
-    expect(() => parseShiftScheduleCell("9")).toThrow(/tidak valid/i);
     expect(() => parseShiftScheduleCell("ABC")).toThrow(/tidak valid/i);
+    expect(() => parseShiftScheduleCell("8.5")).toThrow(/tidak valid/i);
   });
 });
