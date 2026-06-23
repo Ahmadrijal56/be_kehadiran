@@ -123,6 +123,36 @@ ownerRouter.get(
 );
 
 ownerRouter.get(
+  "/approval-requests/pending-counts",
+  asyncHandler(async (_req, res) => {
+    const branches = await prisma.branch.findMany({
+      where: { isActive: true },
+      select: { id: true, code: true, name: true },
+      orderBy: { code: "asc" },
+    });
+
+    const pendingGroups = await prisma.attendanceApprovalRequest.groupBy({
+      by: ["branchId"],
+      where: { status: "pending" },
+      _count: { id: true },
+    });
+
+    const countByBranch = new Map(pendingGroups.map((g) => [g.branchId, g._count.id]));
+
+    const byBranch = branches.map((b) => ({
+      id: b.id,
+      code: b.code,
+      name: b.name,
+      pending_count: countByBranch.get(b.id) ?? 0,
+    }));
+
+    const total = byBranch.reduce((sum, b) => sum + b.pending_count, 0);
+
+    res.json({ data: { total, by_branch: byBranch } });
+  })
+);
+
+ownerRouter.get(
   "/late-excuses/pending-counts",
   asyncHandler(async (_req, res) => {
     // Ambil semua cabang aktif
