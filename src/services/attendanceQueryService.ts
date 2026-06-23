@@ -21,7 +21,7 @@ import {
   resolveEligibleWorkDateMin,
 } from "./attendanceKpiWindowService.js";
 
-const LATE_EXCUSE_LOOKBACK_DAYS = 14;
+export const LATE_EXCUSE_LOOKBACK_DAYS = 14;
 
 function historyDefaultFrom(): Date {
   const d = todayWorkDateWib();

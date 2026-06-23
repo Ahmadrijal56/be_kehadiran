@@ -8,10 +8,11 @@ import { getAttendanceForLateExcuse } from "./attendanceQueryService.js";
 import { notifyLateExcuseReviewed } from "./notificationService.js";
 import { getSignedFileUrl, uploadPrivateFile } from "./storageService.js";
 import { formatWibIso, todayWorkDateWib } from "../utils/format.js";
-import { resolveEligibleWorkDateMin } from "./attendanceQueryService.js";
-import { isLateExcuseEligibleRecord } from "./attendanceQueryService.js";
-import { LATE_EXCUSE_LOOKBACK_DAYS } from "../constants/kpi.js";
-
+import {
+  resolveEligibleWorkDateMin,
+  isLateExcuseEligibleRecord,
+  LATE_EXCUSE_LOOKBACK_DAYS,
+} from "./attendanceQueryService.js";
 export async function createLateExcuse(
   user: AuthUser,
   historyEmployeeIds: string[],
