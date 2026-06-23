@@ -142,7 +142,7 @@ export async function getDailyReport(
       const hasGridEntry = override !== undefined;
       const att = recordByKey.get(key);
 
-      if (scheduledOff && !att) continue;
+      // if (scheduledOff && !att) continue; // DIMINTA USER: Libur tetap masuk laporan
       if (!hasGridEntry && !att) continue;
 
       const effectiveShiftId = hasGridEntry ? override! : att!.shiftId;
