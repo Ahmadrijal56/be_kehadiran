@@ -51,7 +51,7 @@ const XL = {
   codeOff: "FF4338CA",
 } as const;
 
-function xlBorder(color = XL.border): Partial<ExcelJS.Borders> {
+function xlBorder(color: string = XL.border): Partial<ExcelJS.Borders> {
   const side: Partial<ExcelJS.Border> = { style: "thin", color: { argb: color } };
   return { top: side, left: side, bottom: side, right: side };
 }

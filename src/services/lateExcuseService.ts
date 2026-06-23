@@ -9,10 +9,10 @@ import { notifyLateExcuseReviewed } from "./notificationService.js";
 import { getSignedFileUrl, uploadPrivateFile } from "./storageService.js";
 import { formatWibIso, todayWorkDateWib } from "../utils/format.js";
 import {
-  resolveEligibleWorkDateMin,
   isLateExcuseEligibleRecord,
   LATE_EXCUSE_LOOKBACK_DAYS,
 } from "./attendanceQueryService.js";
+import { resolveEligibleWorkDateMin } from "./attendanceKpiWindowService.js";
 export async function createLateExcuse(
   user: AuthUser,
   historyEmployeeIds: string[],

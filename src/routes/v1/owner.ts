@@ -8,9 +8,9 @@ import {
   getOwnerDashboardSummary,
   getOwnerMonthlyStats,
   getOwnerTopEmployees,
+  getOwnerBranchesComparison,
 } from "../../services/ownerDashboardService.js";
-import { getOwnerBranchesComparison } from "../../services/monitoringService.js";
-import { getGlobalLeaderboard } from "../../services/gamificationService.js";
+import { getGlobalLeaderboard } from "../../services/leaderboardService.js";
 import { listBranchMissingLateExcuses } from "../../services/lateExcuseService.js";
 import { attachLeaderboardAvatars } from "../../services/avatarService.js";
 import { listAllUsers } from "../../services/branchUserService.js";
