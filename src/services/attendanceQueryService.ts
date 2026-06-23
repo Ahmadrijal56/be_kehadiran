@@ -978,7 +978,7 @@ export async function ensureAttendanceRecordForDate(
   });
 }
 
-function isLateExcuseEligibleRecord(
+export function isLateExcuseEligibleRecord(
   row: { status: string; lateMinutes: number; workDate: Date },
   today: Date
 ): boolean {

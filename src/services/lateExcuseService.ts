@@ -7,7 +7,10 @@ import { assertReviewerNotSubject } from "./attendanceIntegrity.js";
 import { getAttendanceForLateExcuse } from "./attendanceQueryService.js";
 import { notifyLateExcuseReviewed } from "./notificationService.js";
 import { getSignedFileUrl, uploadPrivateFile } from "./storageService.js";
-import { formatWibIso } from "../utils/format.js";
+import { formatWibIso, todayWorkDateWib } from "../utils/format.js";
+import { resolveEligibleWorkDateMin } from "./attendanceQueryService.js";
+import { isLateExcuseEligibleRecord } from "./attendanceQueryService.js";
+import { LATE_EXCUSE_LOOKBACK_DAYS } from "../constants/kpi.js";
 
 export async function createLateExcuse(
   user: AuthUser,
@@ -72,6 +75,47 @@ export async function listBranchLateExcuses(branchId: string, status?: LateExcus
     },
     orderBy: { createdAt: "desc" },
   });
+}
+
+export async function listBranchMissingLateExcuses(branchId: string) {
+  const { listActiveEmployeeIdsForBranch } = await import("./activeEmployeeFilter.js");
+  const activeEmployeeIds = await listActiveEmployeeIdsForBranch(branchId);
+  const today = todayWorkDateWib();
+  const minDate = await resolveEligibleWorkDateMin(today, LATE_EXCUSE_LOOKBACK_DAYS - 1);
+
+  const records = await prisma.attendanceRecord.findMany({
+    where: {
+      branchId,
+      employeeId: { in: activeEmployeeIds },
+      workDate: { gte: minDate, lte: today },
+      lateExcuses: { none: {} },
+    },
+    include: {
+      employee: { select: { id: true, nik: true, fullName: true } }
+    },
+    orderBy: [{ workDate: "desc" }, { checkInAt: "desc" }]
+  });
+
+  const eligible = records.filter(r => isLateExcuseEligibleRecord(r, today));
+
+  return eligible.map(e => ({
+    id: e.id,
+    status: "missing" as const,
+    reasonText: "Karyawan belum mengisi form alasan keterlambatan.",
+    managerNote: null,
+    createdAt: e.workDate,
+    reviewedAt: null,
+    employee: {
+      nik: e.employee.nik,
+      fullName: e.employee.fullName,
+    },
+    attendance: {
+      workDate: e.workDate,
+      lateMinutes: e.lateMinutes,
+      checkInAt: e.checkInAt,
+    },
+    attachments: [],
+  }));
 }
 
 export async function reviewLateExcuse(

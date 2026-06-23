@@ -6,6 +6,7 @@ import { forbidden, notFound, validationError } from "../../lib/errors.js";
 import { prisma } from "../../lib/prisma.js";
 import {
   listBranchLateExcuses,
+  listBranchMissingLateExcuses,
   mapLateExcuseResponse,
   reviewLateExcuse,
   batchLateExcuseAttachments,
@@ -24,7 +25,32 @@ lateExcusesRouter.get(
     const user = req.user!;
     const branchId = String(req.params.branchId);
     assertBranchAccess(user, branchId);
-    const status = req.query.status as LateExcuseStatus | undefined;
+    const statusQuery = req.query.status as string | undefined;
+
+    if (statusQuery === "missing") {
+      const items = await listBranchMissingLateExcuses(branchId);
+      const data = items.map((e) => ({
+        id: e.id,
+        status: e.status,
+        reason_text: e.reasonText,
+        manager_note: e.managerNote,
+        created_at: formatWibIso(e.createdAt),
+        reviewed_at: null,
+        employee: {
+          nik: e.employee.nik,
+          full_name: e.employee.fullName,
+        },
+        attendance: {
+          work_date: e.attendance.workDate.toISOString().slice(0, 10),
+          late_minutes: e.attendance.lateMinutes,
+        },
+        attachments: [],
+      }));
+      res.json({ data });
+      return;
+    }
+
+    const status = statusQuery as LateExcuseStatus | undefined;
     const items = await listBranchLateExcuses(branchId, status);
     const attachmentMap = await batchLateExcuseAttachments(items.map((e) => e.id));
     const data = items.map((e) => ({
