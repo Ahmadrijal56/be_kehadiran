@@ -451,7 +451,8 @@ const APPROVAL_LABELS: Record<"early_leave" | "no_break", string> = {
 function buildTimelineEvents(
   row: AttendanceRecordForEvents,
   twoScanType: AttendanceApprovalType | null,
-  breakAttendanceEnabled: boolean
+  breakAttendanceEnabled: boolean,
+  dayPoints: number | null
 ): TimelineEventRow[] {
   const events: TimelineEventRow[] = [];
   const mode = formatAttendanceMode(row.attendanceType);
@@ -469,7 +470,7 @@ function buildTimelineEvents(
       waktu: formatWibDisplay(row.checkInAt),
       event_at: formatWibIso(row.checkInAt)!,
       attendance_type: mode,
-      points: row.kpiDailyScore?.totalPoints ?? null,
+      points: dayPoints,
       break_duration_minutes: null,
     });
   }
@@ -573,6 +574,7 @@ export async function listAttendanceTimeline(
       },
       branch: { select: { name: true, breakAttendanceEnabled: true } },
       kpiDailyScore: { select: { totalPoints: true } },
+      lateExcuses: { select: { id: true } },
       ...sourceMessageInclude,
     },
     orderBy: { workDate: "desc" },
@@ -614,10 +616,25 @@ export async function listAttendanceTimeline(
         const twoScanFromApproval =
           approvalType === "early_leave" || approvalType === "no_break";
         const twoScan = !breakAttendanceEnabled || twoScanFromApproval;
+        const shiftWindow = await getShiftWindowCached(row.branchId, row.shiftId);
+        const checkInDeltaMinutes =
+          row.checkInAt != null
+            ? computeDeltaMinutes(
+                row.checkInAt,
+                shiftWindow.startTime,
+                row.workDate
+              )
+            : row.lateMinutes;
+
+        const dayPointsOverride = (checkInDeltaMinutes > 0 && row.lateExcuses.length === 0)
+            ? 0
+            : (row.kpiDailyScore?.totalPoints ?? null);
+
         const events = buildTimelineEvents(
           row,
           approvalType,
-          breakAttendanceEnabled
+          breakAttendanceEnabled,
+          dayPointsOverride
         );
         if (events.length === 0) return null;
 
@@ -633,7 +650,6 @@ export async function listAttendanceTimeline(
           row.checkOutIsAuto
         );
 
-        const shiftWindow = await getShiftWindowCached(row.branchId, row.shiftId);
         const firstBreak = row.breakSessions[0] ?? null;
         const checkInTime = row.checkInAt ? formatWibDisplay(row.checkInAt).split(" ")[1] ?? null : null;
         const breakStartTime = firstBreak
@@ -671,7 +687,7 @@ export async function listAttendanceTimeline(
           ),
           branch_name: row.branch.name,
           late_minutes: checkInDeltaMinutes,
-          day_points: row.kpiDailyScore?.totalPoints ?? null,
+          day_points: dayPointsOverride,
           two_scan_mode: twoScan,
           break_attendance_enabled: breakAttendanceEnabled,
           approval_type: approvalType,

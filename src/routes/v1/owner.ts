@@ -17,6 +17,7 @@ import {
   buildUserImportTemplateExcel,
   importUsersFromExcel,
 } from "../../services/userImportService.js";
+import { prisma } from "../../lib/prisma.js";
 const excelUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024, files: 1 },
@@ -117,5 +118,56 @@ ownerRouter.get(
         getRequestPublicBaseUrl(req)
       ),
     });
+  })
+);
+
+ownerRouter.get(
+  "/late-excuses/pending-counts",
+  asyncHandler(async (_req, res) => {
+    // Ambil semua cabang aktif
+    const branches = await prisma.branch.findMany({
+      where: { isActive: true },
+      select: { id: true, code: true, name: true },
+      orderBy: { code: "asc" },
+    });
+
+    // Hitung pending late excuses per cabang sekaligus
+    const pendingGroups = await prisma.lateExcuse.groupBy({
+      by: ["employeeId"],
+      where: { status: "pending" },
+      _count: { id: true },
+    });
+
+    // Ambil branchId untuk setiap employeeId yang punya pending
+    const employeeIds = pendingGroups.map((g) => g.employeeId);
+    const employees =
+      employeeIds.length > 0
+        ? await prisma.employee.findMany({
+            where: { id: { in: employeeIds } },
+            select: { id: true, branchId: true },
+          })
+        : [];
+
+    // Bangun map: employeeId → branchId
+    const empBranchMap = new Map(employees.map((e) => [e.id, e.branchId]));
+
+    // Akumulasi count per branchId
+    const countByBranch = new Map<string, number>();
+    for (const g of pendingGroups) {
+      const branchId = empBranchMap.get(g.employeeId);
+      if (!branchId) continue;
+      countByBranch.set(branchId, (countByBranch.get(branchId) ?? 0) + g._count.id);
+    }
+
+    const byBranch = branches.map((b) => ({
+      id: b.id,
+      code: b.code,
+      name: b.name,
+      pending_count: countByBranch.get(b.id) ?? 0,
+    }));
+
+    const total = byBranch.reduce((sum, b) => sum + b.pending_count, 0);
+
+    res.json({ data: { total, by_branch: byBranch } });
   })
 );

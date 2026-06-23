@@ -46,6 +46,57 @@ function monthRange(yearMonth: string) {
   return { start, end };
 }
 
+async function applyLateExcusePenalties<
+  T extends {
+    employeeId: string;
+    workDate: Date;
+    lateMinutes: number;
+    totalPoints: number;
+    checkInPoints?: number;
+    adjustmentPoints?: number;
+  }
+>(daily: T[]): Promise<T[]> {
+  const lateRows = daily.filter((r) => r.lateMinutes > 0);
+  if (lateRows.length === 0) return daily;
+
+  const toCheck = lateRows.map((r) => ({
+    employeeId: r.employeeId,
+    workDate: r.workDate,
+  }));
+
+  const attendances = await prisma.attendanceRecord.findMany({
+    where: { OR: toCheck },
+    select: {
+      employeeId: true,
+      workDate: true,
+      lateExcuses: { select: { id: true }, take: 1 },
+    },
+  });
+
+  const hasExcuse = new Set<string>();
+  for (const a of attendances) {
+    if (a.lateExcuses.length > 0) {
+      hasExcuse.add(`${a.employeeId}_${a.workDate.toISOString().slice(0, 10)}`);
+    }
+  }
+
+  return daily.map((r) => {
+    if (r.lateMinutes > 0) {
+      const key = `${r.employeeId}_${r.workDate.toISOString().slice(0, 10)}`;
+      if (!hasExcuse.has(key)) {
+        return {
+          ...r,
+          totalPoints: 0,
+          ...(r.checkInPoints !== undefined ? { checkInPoints: 0 } : {}),
+          ...(r.adjustmentPoints !== undefined ? { adjustmentPoints: 0 } : {}),
+        };
+      }
+    }
+    return r;
+  });
+}
+
+
 /** Ringkasan poin bulanan deduplikasi per tanggal (lintas cabang / account). */
 export async function sumDedupedMonthlyPoints(
   employeeIds: string[],
@@ -108,7 +159,7 @@ export async function sumDedupedMonthlyPointsForGroups(
   }
 
   const { start, end } = monthRange(yearMonth);
-  const daily = await prisma.kpiDailyScore.findMany({
+  const rawDaily = await prisma.kpiDailyScore.findMany({
     where: {
       employeeId: { in: allEmployeeIds },
       workDate: { gte: start, lt: end },
@@ -120,6 +171,8 @@ export async function sumDedupedMonthlyPointsForGroups(
       employeeId: true,
     },
   });
+
+  const daily = await applyLateExcusePenalties(rawDaily);
 
   const byEmployee = new Map<string, DailyScoreRow[]>();
   for (const row of daily) {
@@ -173,7 +226,9 @@ export async function getKpiToday(employeeId: string) {
     where: { employeeId_workDate: { employeeId, workDate } },
   });
 
-  if (!score) {
+  const penalized = score ? (await applyLateExcusePenalties([score]))[0] : null;
+
+  if (!penalized) {
     return {
       work_date: workDate.toISOString().slice(0, 10),
       total_points: 0,
@@ -185,12 +240,12 @@ export async function getKpiToday(employeeId: string) {
   }
 
   return {
-    work_date: score.workDate.toISOString().slice(0, 10),
-    total_points: score.totalPoints,
-    check_in_points: score.checkInPoints,
-    adjustment_points: score.adjustmentPoints,
-    late_minutes: score.lateMinutes,
-    rule_applied: score.ruleApplied,
+    work_date: penalized.workDate.toISOString().slice(0, 10),
+    total_points: penalized.totalPoints,
+    check_in_points: penalized.checkInPoints,
+    adjustment_points: penalized.adjustmentPoints,
+    late_minutes: penalized.lateMinutes,
+    rule_applied: penalized.ruleApplied,
   };
 }
 
@@ -201,13 +256,15 @@ export async function getKpiMonthly(employeeIds: string | string[], yearMonth?: 
   const end = new Date(start);
   end.setUTCMonth(end.getUTCMonth() + 1);
 
-  const daily = await prisma.kpiDailyScore.findMany({
+  const rawDaily = await prisma.kpiDailyScore.findMany({
     where: {
       employeeId: ids.length === 1 ? ids[0]! : { in: ids },
       workDate: { gte: start, lt: end },
     },
     orderBy: [{ workDate: "asc" }, { totalPoints: "desc" }],
   });
+
+  const daily = await applyLateExcusePenalties(rawDaily);
 
   const deduped = dedupeDailyScoresByWorkDate(daily);
   const totalPoints = deduped.reduce((sum, row) => sum + row.totalPoints, 0);
@@ -244,7 +301,7 @@ export async function getKpiMonthlyBreakdown(
   const end = new Date(start);
   end.setUTCMonth(end.getUTCMonth() + 1);
 
-  const daily = await prisma.kpiDailyScore.findMany({
+  const rawDaily = await prisma.kpiDailyScore.findMany({
     where: {
       employeeId: ids.length === 1 ? ids[0]! : { in: ids },
       workDate: { gte: start, lt: end },
@@ -256,6 +313,8 @@ export async function getKpiMonthlyBreakdown(
     },
     orderBy: [{ workDate: "desc" }, { totalPoints: "desc" }],
   });
+
+  const daily = await applyLateExcusePenalties(rawDaily);
 
   const deduped = dedupeDailyScoresByWorkDate(daily);
   const totalPoints = deduped.reduce((sum, row) => sum + row.totalPoints, 0);
