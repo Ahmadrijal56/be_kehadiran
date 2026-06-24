@@ -21,6 +21,7 @@ import { filesRouter } from "./files.js";
 import { devAttendanceRouter } from "./devAttendance.js";
 import { settingsRouter } from "./settings.js";
 import { approvalRequestsRouter } from "./approvalRequests.js";
+import pushRouter from "./push.js";
 
 export const v1Router = Router();
 
@@ -46,3 +47,4 @@ v1Router.use("/", approvalRequestsRouter);
 v1Router.use("/reports", reportsRouter);
 v1Router.use("/achievements", achievementsRouter);
 v1Router.use("/", lateExcusesRouter);
+v1Router.use("/push", pushRouter);
