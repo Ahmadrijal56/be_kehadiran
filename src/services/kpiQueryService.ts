@@ -46,55 +46,7 @@ function monthRange(yearMonth: string) {
   return { start, end };
 }
 
-async function applyLateExcusePenalties<
-  T extends {
-    employeeId: string;
-    workDate: Date;
-    lateMinutes: number;
-    totalPoints: number;
-    checkInPoints?: number;
-    adjustmentPoints?: number;
-  }
->(daily: T[]): Promise<T[]> {
-  const lateRows = daily.filter((r) => r.lateMinutes > 0);
-  if (lateRows.length === 0) return daily;
 
-  const toCheck = lateRows.map((r) => ({
-    employeeId: r.employeeId,
-    workDate: r.workDate,
-  }));
-
-  const attendances = await prisma.attendanceRecord.findMany({
-    where: { OR: toCheck },
-    select: {
-      employeeId: true,
-      workDate: true,
-      lateExcuses: { select: { id: true }, take: 1 },
-    },
-  });
-
-  const hasExcuse = new Set<string>();
-  for (const a of attendances) {
-    if (a.lateExcuses.length > 0) {
-      hasExcuse.add(`${a.employeeId}_${a.workDate.toISOString().slice(0, 10)}`);
-    }
-  }
-
-  return daily.map((r) => {
-    if (r.lateMinutes > 0) {
-      const key = `${r.employeeId}_${r.workDate.toISOString().slice(0, 10)}`;
-      if (!hasExcuse.has(key)) {
-        return {
-          ...r,
-          totalPoints: 0,
-          ...(r.checkInPoints !== undefined ? { checkInPoints: 0 } : {}),
-          ...(r.adjustmentPoints !== undefined ? { adjustmentPoints: 0 } : {}),
-        };
-      }
-    }
-    return r;
-  });
-}
 
 
 /** Ringkasan poin bulanan deduplikasi per tanggal (lintas cabang / account). */
@@ -172,10 +124,8 @@ export async function sumDedupedMonthlyPointsForGroups(
     },
   });
 
-  const daily = await applyLateExcusePenalties(rawDaily);
-
   const byEmployee = new Map<string, DailyScoreRow[]>();
-  for (const row of daily) {
+  for (const row of rawDaily) {
     const mapped: DailyScoreRow = {
       workDate: row.workDate,
       totalPoints: row.totalPoints,
@@ -226,9 +176,7 @@ export async function getKpiToday(employeeId: string) {
     where: { employeeId_workDate: { employeeId, workDate } },
   });
 
-  const penalized = score ? (await applyLateExcusePenalties([score]))[0] : null;
-
-  if (!penalized) {
+  if (!score) {
     return {
       work_date: workDate.toISOString().slice(0, 10),
       total_points: 0,
@@ -240,12 +188,12 @@ export async function getKpiToday(employeeId: string) {
   }
 
   return {
-    work_date: penalized.workDate.toISOString().slice(0, 10),
-    total_points: penalized.totalPoints,
-    check_in_points: penalized.checkInPoints,
-    adjustment_points: penalized.adjustmentPoints,
-    late_minutes: penalized.lateMinutes,
-    rule_applied: penalized.ruleApplied,
+    work_date: score.workDate.toISOString().slice(0, 10),
+    total_points: score.totalPoints,
+    check_in_points: score.checkInPoints,
+    adjustment_points: score.adjustmentPoints,
+    late_minutes: score.lateMinutes,
+    rule_applied: score.ruleApplied,
   };
 }
 
@@ -264,9 +212,7 @@ export async function getKpiMonthly(employeeIds: string | string[], yearMonth?: 
     orderBy: [{ workDate: "asc" }, { totalPoints: "desc" }],
   });
 
-  const daily = await applyLateExcusePenalties(rawDaily);
-
-  const deduped = dedupeDailyScoresByWorkDate(daily);
+  const deduped = dedupeDailyScoresByWorkDate(rawDaily);
   const totalPoints = deduped.reduce((sum, row) => sum + row.totalPoints, 0);
   const totalLate = deduped.filter((row) => row.lateMinutes > 0).length;
   const totalPresent = deduped.length;
@@ -314,9 +260,7 @@ export async function getKpiMonthlyBreakdown(
     orderBy: [{ workDate: "desc" }, { totalPoints: "desc" }],
   });
 
-  const daily = await applyLateExcusePenalties(rawDaily);
-
-  const deduped = dedupeDailyScoresByWorkDate(daily);
+  const deduped = dedupeDailyScoresByWorkDate(rawDaily);
   const totalPoints = deduped.reduce((sum, row) => sum + row.totalPoints, 0);
   const totalLate = deduped.filter((row) => row.lateMinutes > 0).length;
   const totalPresent = deduped.length;

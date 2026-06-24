@@ -626,9 +626,7 @@ export async function listAttendanceTimeline(
               )
             : row.lateMinutes;
 
-        const dayPointsOverride = (checkInDeltaMinutes > 0 && row.lateExcuses.length === 0)
-            ? 0
-            : (row.kpiDailyScore?.totalPoints ?? null);
+        const dayPointsOverride = row.kpiDailyScore?.totalPoints ?? null;
 
         const events = buildTimelineEvents(
           row,
