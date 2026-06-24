@@ -47,7 +47,7 @@ import {
   updateDeveloperSupportAttendance,
 } from "../../services/developerSupportAttendanceService.js";
 import { handleDeveloperMonitorStream } from "./developerMonitorStream.js";
-import { sendPushToUser } from "../../services/pushNotificationService.js";
+import { notifyDeveloperTest } from "../../services/notificationService.js";
 
 const avatarUpload = multer({
   storage: multer.memoryStorage(),
@@ -457,10 +457,7 @@ meDeveloperRouter.post(
     if (!userId || !title || !body) {
       throw validationError("userId, title, dan body wajib diisi");
     }
-    await sendPushToUser(String(userId), {
-      title: String(title),
-      body: String(body),
-    });
+    await notifyDeveloperTest(String(userId), String(title), String(body));
     res.json({ message: "Push notification queued" });
   })
 );

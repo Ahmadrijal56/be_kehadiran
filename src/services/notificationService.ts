@@ -465,3 +465,18 @@ export async function notifyLateAttendanceForReview(
     });
   }
 }
+
+export async function notifyDeveloperTest(
+  userId: string,
+  title: string,
+  body: string
+): Promise<void> {
+  await createNotification({
+    data: {
+      userId,
+      type: "SYSTEM",
+      title,
+      body,
+    },
+  });
+}
