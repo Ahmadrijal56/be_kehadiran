@@ -8,7 +8,7 @@ import { todayWorkDateWib } from "../utils/format.js";
 import { getLoadTestAvatarStatus } from "./developerLoadTestService.js";
 import { getStressTestStatus } from "./developerStressTestService.js";
 import { loadTestUserWhere } from "./developerLoadTestService.js";
-import { isOrgWideRankingEnabled, isEmployeeLiveAttendanceEnabled, isPwaEnabled } from "./organizationConfigService.js";
+import { isOrgWideRankingEnabled, isEmployeeLiveAttendanceEnabled, isPwaEnabled, isPwaPushEnabled } from "./organizationConfigService.js";
 
 export type MonitorRuntimeKind = "local" | "production";
 
@@ -75,11 +75,11 @@ export type DeveloperMonitorSnapshot = {
       absent: number;
     };
   };
-  /** Fitur yang bisa di-toggle developer (runtime DB). */
   features: {
     org_wide_ranking_enabled: boolean;
     employee_live_attendance_enabled: boolean;
     pwa_enabled: boolean;
+    pwa_push_enabled: boolean;
   };
   /** Env wajib untuk QA production — checklist */
   production_env: Array<{
@@ -376,6 +376,7 @@ export async function getDeveloperMonitorSnapshot(): Promise<DeveloperMonitorSna
   const orgWideRankingEnabled = await isOrgWideRankingEnabled();
   const employeeLiveAttendanceEnabled = await isEmployeeLiveAttendanceEnabled();
   const pwaEnabled = await isPwaEnabled();
+  const pwaPushEnabled = await isPwaPushEnabled();
 
   return {
     generated_at: new Date().toISOString(),
@@ -414,6 +415,7 @@ export async function getDeveloperMonitorSnapshot(): Promise<DeveloperMonitorSna
       org_wide_ranking_enabled: orgWideRankingEnabled,
       employee_live_attendance_enabled: employeeLiveAttendanceEnabled,
       pwa_enabled: pwaEnabled,
+      pwa_push_enabled: pwaPushEnabled,
     },
     production_env,
     hints,

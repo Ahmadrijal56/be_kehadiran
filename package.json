@@ -63,7 +63,8 @@
     "node-cron": "^4.2.1",
     "prisma": "^6.19.3",
     "sharp": "^0.35.1",
-    "telegram": "^2.26.22"
+    "telegram": "^2.26.22",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",
@@ -75,6 +76,7 @@
     "@types/node": "^22.10.5",
     "@types/node-cron": "^3.0.11",
     "@types/supertest": "^7.2.0",
+    "@types/web-push": "^3.6.4",
     "bcrypt": "^6.0.0",
     "eslint": "^9.17.0",
     "supertest": "^7.2.2",

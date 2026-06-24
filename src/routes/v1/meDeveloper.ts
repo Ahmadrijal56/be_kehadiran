@@ -34,7 +34,7 @@ import {
 } from "../../services/developerScenarioService.js";
 import { setDeveloperKpiBatch } from "../../services/developerToolsService.js";
 import { getDeveloperMonitorSnapshot } from "../../services/developerMonitorService.js";
-import { setOrgWideRankingEnabled, setEmployeeLiveAttendanceEnabled, setPwaEnabled } from "../../services/organizationConfigService.js";
+import { setOrgWideRankingEnabled, setEmployeeLiveAttendanceEnabled, setPwaEnabled, setPwaPushEnabled } from "../../services/organizationConfigService.js";
 import { executeFactoryReset } from "../../services/factoryResetService.js";
 import {
   getDeveloperSupportLoginLock,
@@ -224,6 +224,16 @@ meDeveloperRouter.put(
     const enabled = Boolean((req.body as { enabled?: boolean })?.enabled);
     res.json({
       data: await setPwaEnabled(req.user!, enabled),
+    });
+  })
+);
+
+meDeveloperRouter.put(
+  "/features/pwa-push",
+  asyncHandler(async (req, res) => {
+    const enabled = Boolean((req.body as { enabled?: boolean })?.enabled);
+    res.json({
+      data: await setPwaPushEnabled(req.user!, enabled),
     });
   })
 );
