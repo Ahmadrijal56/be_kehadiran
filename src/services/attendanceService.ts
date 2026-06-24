@@ -13,6 +13,7 @@ import { invalidatePapanCaches } from "./papanCacheInvalidation.js";
 import { computeCheckInKpiFields } from "./attendanceKpiRecalcService.js";
 import {
   notifyLateAttendanceForReview,
+  notifyAttendanceLate,
   type AttendanceShiftContext,
 } from "./notificationService.js";
 import { getBranchShiftWindow } from "./branchShiftConfigService.js";
@@ -73,7 +74,7 @@ export async function processCheckIn(
   const workDate = toDateOnly(input.workDate);
   const employee = await prisma.employee.findUniqueOrThrow({
     where: { id: input.employeeId },
-    include: { defaultShift: true },
+    include: { defaultShift: true, user: true },
   });
 
   if (await isExplicitOffDay(input.employeeId, workDate)) {
@@ -197,6 +198,15 @@ export async function processCheckIn(
       lateMinutes,
       shift,
     });
+    
+    if (employee.user?.id) {
+      await notifyAttendanceLate(
+        employee.user.id,
+        workDate.toISOString().slice(0, 10),
+        lateMinutes,
+        shift
+      );
+    }
   }
 
   await invalidatePapanCaches(employee.branchId);

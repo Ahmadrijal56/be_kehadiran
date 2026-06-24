@@ -123,8 +123,8 @@ if (env.nodeEnv === "production" && env.jwtSecret === "dev-only-change-in-produc
   required("JWT_SECRET");
 }
 
-if (env.nodeEnv === "production" && env.admsAllowedDeviceSns.length === 0) {
-  console.warn(
-    "[security] ADMS_ALLOWED_DEVICE_SNS kosong — semua SN mesin diterima. Set di production."
-  );
-}
+// if (env.nodeEnv === "production" && env.admsAllowedDeviceSns.length === 0) {
+//   console.warn(
+//     "[security] ADMS_ALLOWED_DEVICE_SNS kosong — semua SN mesin diterima. Set di production."
+//   );
+// }

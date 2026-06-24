@@ -76,9 +76,9 @@ export async function startBackgroundServices(): Promise<void> {
       if (result.migrated > 0) {
         log("info", "Avatar dipindahkan ke penyimpanan persisten", result);
       } else if (result.missing > 0) {
-        log("warn", "Beberapa avatar lokal tidak ditemukan (perlu upload ulang)", {
-          missing: result.missing,
-        });
+        // log("warn", "Beberapa avatar lokal tidak ditemukan (perlu upload ulang)", {
+        //   missing: result.missing,
+        // });
       }
     })
     .catch((err) => {

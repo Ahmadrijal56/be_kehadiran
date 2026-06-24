@@ -2,11 +2,32 @@ import type {
   AchievementScope,
   AchievementType,
   AttendanceApprovalType,
+  Prisma,
 } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { approvalTypeLabel } from "../constants/approvalTypes.js";
 import { formatWorkDateLabelLong } from "../utils/format.js";
 import { userInBranchWhere } from "./activeEmployeeFilter.js";
+import { sendPushToUser } from "./pushNotificationService.js";
+import { log } from "../lib/logger.js";
+
+async function createNotification(args: Prisma.NotificationCreateArgs) {
+  const notif = await prisma.notification.create(args);
+  const data = args.data as Prisma.NotificationUncheckedCreateInput;
+  if (data.userId && data.title && data.body) {
+    sendPushToUser(data.userId as string, {
+      title: data.title as string,
+      body: data.body as string,
+      data: data.dataJson ? (data.dataJson as Record<string, unknown>) : undefined,
+    }).catch((err) => {
+      log("error", "Failed to send push notification", { 
+        error: err instanceof Error ? err.message : String(err), 
+        userId: data.userId 
+      });
+    });
+  }
+  return notif;
+}
 
 const ACHIEVEMENT_LABELS: Record<AchievementType, string> = {
   top_1: "Juara 1",
@@ -27,7 +48,7 @@ export async function notifyAchievementEarned(
     ? ` Voucher Rp${amountIdr.toLocaleString("id-ID")} menunggu penerbitan.`
     : "";
 
-  await prisma.notification.create({
+  await createNotification({
     data: {
       userId,
       type: "achievement_earned",
@@ -52,7 +73,7 @@ export async function notifyLateExcuseReviewed(
       ? "Manager telah menyetujui pengajuan keterlambatan Anda."
       : "Manager menolak pengajuan keterlambatan Anda. Lihat catatan di aplikasi.";
 
-  await prisma.notification.create({
+  await createNotification({
     data: {
       userId,
       type: "late_excuse_reviewed",
@@ -83,7 +104,7 @@ export async function notifyApprovalReviewed(
       ? `Permintaan ${label} Anda telah disetujui.${noteText}`
       : `Permintaan ${label} Anda ditolak.${noteText || " Lihat detail di aplikasi."}`;
 
-  await prisma.notification.create({
+  await createNotification({
     data: {
       userId,
       type: "approval_reviewed",
@@ -109,7 +130,7 @@ export async function notifyCounterpartyShiftSwapRequest(
     counterpartyShiftLabel: string;
   }
 ): Promise<void> {
-  await prisma.notification.create({
+  await createNotification({
     data: {
       userId: counterpartyUserId,
       type: "shift_swap_incoming",
@@ -129,7 +150,7 @@ export async function notifyShiftSwapPeerAccepted(
   workDate: string,
   requestId: string
 ): Promise<void> {
-  await prisma.notification.create({
+  await createNotification({
     data: {
       userId: requesterUserId,
       type: "shift_swap_peer_accepted",
@@ -170,7 +191,7 @@ export async function notifyManagersShiftSwapReady(
     ...owners.map((o) => o.id),
   ]);
   for (const userId of recipientIds) {
-    await prisma.notification.create({
+    await createNotification({
       data: {
         userId,
         type: "shift_swap_ready",
@@ -221,7 +242,7 @@ export async function notifyManagersNewApprovalRequest(
   ]);
 
   for (const userId of recipientIds) {
-    await prisma.notification.create({
+    await createNotification({
       data: {
         userId,
         type: "approval_submitted",
@@ -242,7 +263,7 @@ export async function notifyForgotCheckout(
   userId: string,
   workDate: string
 ): Promise<void> {
-  await prisma.notification.create({
+  await createNotification({
     data: {
       userId,
       type: "forgot_checkout",
@@ -270,7 +291,7 @@ export async function notifyAttendanceMissing(
   shift: AttendanceShiftContext
 ): Promise<void> {
   const dateLabel = formatWorkDateLabelLong(workDate);
-  await prisma.notification.create({
+  await createNotification({
     data: {
       userId,
       type: "attendance_missing",
@@ -316,7 +337,7 @@ export async function notifyNewBranchAnnouncement(
   const body = announcement.title;
 
   for (const { id: userId } of employees) {
-    await prisma.notification.create({
+    await createNotification({
       data: {
         userId,
         type: "announcement_published",
@@ -340,7 +361,7 @@ export async function notifyAttendanceLate(
   const dateLabel = formatWorkDateLabelLong(workDate);
   const lateText =
     lateMinutes > 0 ? ` ${lateMinutes} menit` : "";
-  await prisma.notification.create({
+  await createNotification({
     data: {
       userId,
       type: "attendance_late",
@@ -395,7 +416,7 @@ export async function notifyLateAttendanceForReview(
   const shiftText = `${payload.shift.shift_name} (${payload.shift.time_range})`;
 
   for (const { id: userId } of managers) {
-    await prisma.notification.create({
+    await createNotification({
       data: {
         userId,
         type: "staff_late_needs_evaluation",
@@ -420,7 +441,7 @@ export async function notifyLateAttendanceForReview(
   }
 
   for (const { id: userId } of owners) {
-    await prisma.notification.create({
+    await createNotification({
       data: {
         userId,
         type: "staff_late_report_copy",
