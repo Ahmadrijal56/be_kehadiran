@@ -93,13 +93,15 @@ export async function sendPushToUser(
         },
         pushPayload
       );
+      console.log(`[Push] Successfully sent to user ${userId} (endpoint: ${sub.endpoint.slice(0, 30)}...)`);
     } catch (err: any) {
       if (err.statusCode === 404 || err.statusCode === 410) {
+        console.warn(`[Push] Endpoint expired for user ${userId}, deleting subscription.`);
         await prisma.push_subscriptions.delete({
           where: { id: sub.id },
         }).catch(() => {});
       } else {
-        console.error("[push] error sending notification", err);
+        console.error(`[Push] Failed to send to user ${userId}:`, err);
       }
     }
   });
