@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { prisma } from "../../lib/prisma.js";
 import multer from "multer";
 import { authenticate, requireDeveloper } from "../../middleware/auth.js";
 import { asyncHandler } from "../../middleware/asyncHandler.js";
@@ -457,7 +458,23 @@ meDeveloperRouter.post(
     if (!userId || !title || !body) {
       throw validationError("userId, title, dan body wajib diisi");
     }
-    await notifyDeveloperTest(String(userId), String(title), String(body));
+
+    const inputId = String(userId).trim();
+    const userRow = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { id: inputId.length === 36 ? inputId : undefined },
+          { employeeId: inputId.length === 36 ? inputId : undefined },
+          { nik: inputId }
+        ].filter(Boolean) as any
+      }
+    });
+
+    if (!userRow) {
+      throw validationError(`User tidak ditemukan untuk input: ${inputId}`);
+    }
+
+    await notifyDeveloperTest(userRow.id, String(title), String(body));
     res.json({ message: "Push notification queued" });
   })
 );
