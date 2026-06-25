@@ -474,7 +474,19 @@ meDeveloperRouter.post(
       throw validationError(`User tidak ditemukan untuk input: ${inputId}`);
     }
 
+    const subscriptions = await prisma.push_subscriptions.findMany({
+      where: { user_id: userRow.id },
+    });
+
     await notifyDeveloperTest(userRow.id, String(title), String(body));
-    res.json({ message: "Push notification queued" });
+    
+    res.json({ 
+      message: "Push notification processed", 
+      debug: {
+        targetUserId: userRow.id,
+        subscriptionCount: subscriptions.length,
+        subscriptions: subscriptions.map(s => s.endpoint.slice(0, 30) + '...'),
+      }
+    });
   })
 );
