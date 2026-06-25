@@ -345,3 +345,19 @@ meRouter.post(
     res.status(201).json({ data: await mapLateExcuseResponse(excuse.id) });
   })
 );
+
+meRouter.post(
+  "/pwa-install",
+  requirePermission("attendance.read.self"), // Basic permission required for any logged in user
+  asyncHandler(async (req, res) => {
+    const userId = req.user!.id;
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        pwaInstalled: true,
+        pwaInstalledAt: new Date(),
+      },
+    });
+    res.json({ message: "PWA install status updated" });
+  })
+);

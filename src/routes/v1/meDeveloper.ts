@@ -245,6 +245,51 @@ meDeveloperRouter.get("/monitor/stream", (req, res, next) => {
 });
 
 meDeveloperRouter.get(
+  "/pwa-stats",
+  asyncHandler(async (req, res) => {
+    // Get all users, joining with Employee to get branch and full name
+    const users = await prisma.user.findMany({
+      include: {
+        employee: {
+          include: {
+            branch: true,
+          },
+        },
+        role: true,
+      },
+      orderBy: [
+        { pwaInstalled: "desc" },
+        { employee: { fullName: "asc" } }
+      ]
+    });
+
+    const mapped = users.map((u) => ({
+      userId: u.id,
+      nik: u.nik,
+      fullName: u.employee?.fullName ?? "No Employee Data",
+      role: u.role?.name ?? "Unknown",
+      branchName: u.employee?.branch?.name ?? "Unknown",
+      pwaInstalled: u.pwaInstalled,
+      pwaInstalledAt: u.pwaInstalledAt,
+    }));
+
+    const totalUsers = users.length;
+    const totalInstalled = users.filter((u) => u.pwaInstalled).length;
+
+    res.json({
+      data: {
+        summary: {
+          totalUsers,
+          totalInstalled,
+          percentage: totalUsers > 0 ? Math.round((totalInstalled / totalUsers) * 100) : 0,
+        },
+        users: mapped,
+      },
+    });
+  })
+);
+
+meDeveloperRouter.get(
   "/health-check",
   asyncHandler(async (_req, res) => {
     res.json({ data: await getDeveloperHealthCheck() });
