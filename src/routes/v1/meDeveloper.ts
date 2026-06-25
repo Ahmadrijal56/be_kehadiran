@@ -478,3 +478,34 @@ meDeveloperRouter.post(
     res.json({ message: "Push notification queued" });
   })
 );
+
+meDeveloperRouter.post(
+  "/push/status",
+  asyncHandler(async (req, res) => {
+    const { userId } = req.body ?? {};
+    if (!userId) {
+      throw validationError("userId wajib diisi");
+    }
+
+    const inputId = String(userId).trim();
+    const userRow = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { id: inputId.length === 36 ? inputId : undefined },
+          { employeeId: inputId.length === 36 ? inputId : undefined },
+          { nik: inputId }
+        ].filter(Boolean) as any
+      }
+    });
+
+    if (!userRow) {
+      throw validationError(`User tidak ditemukan untuk input: ${inputId}`);
+    }
+
+    const count = await prisma.push_subscriptions.count({
+      where: { user_id: userRow.id }
+    });
+
+    res.json({ data: { user_id: userRow.id, active_subscriptions: count } });
+  })
+);
