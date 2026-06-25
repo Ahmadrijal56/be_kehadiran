@@ -91,7 +91,10 @@ export async function sendPushToUser(
             auth: sub.auth,
           },
         },
-        pushPayload
+        pushPayload,
+        {
+          urgency: "high",
+        }
       );
       console.log(`[Push] Successfully sent to user ${userId} (endpoint: ${sub.endpoint.slice(0, 30)}...)`);
     } catch (err: any) {
