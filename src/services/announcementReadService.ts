@@ -1,37 +1,21 @@
 import { prisma } from "../lib/prisma.js";
 import type { AuthUser } from "./authService.js";
 
-async function resolveBranchId(user: AuthUser): Promise<string | null> {
-  if (user.branchId) return user.branchId;
-  if (!user.employeeId) return null;
-  const employee = await prisma.employee.findUnique({
-    where: { id: user.employeeId },
-    select: { branchId: true },
-  });
-  return employee?.branchId ?? null;
-}
-
-function activeAnnouncementWhere(branchId: string | null, now = new Date()) {
+function activeAnnouncementWhere(now = new Date()) {
   return {
-    AND: [
-      {
-        OR: [
-          { scope: "global" as const },
-          ...(branchId ? [{ scope: "branch" as const, branchId }] : []),
-        ],
-      },
-      { publishedAt: { lte: now } },
-      { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
-    ],
+    publishedAt: { lte: now },
+    OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
   };
 }
 
 export async function listAnnouncementsForUser(user: AuthUser) {
-  const branchId = await resolveBranchId(user);
   const now = new Date();
 
   const items = await prisma.announcement.findMany({
-    where: activeAnnouncementWhere(branchId, now),
+    where: {
+      recipients: { some: { userId: user.id } },
+      ...activeAnnouncementWhere(now),
+    },
     orderBy: { publishedAt: "desc" },
     take: 30,
     include: {
@@ -43,18 +27,18 @@ export async function listAnnouncementsForUser(user: AuthUser) {
     },
   });
 
-  return { items, branchId };
+  return { items };
 }
 
 export async function countUnreadAnnouncementsForUser(
   user: AuthUser
 ): Promise<number> {
-  const branchId = await resolveBranchId(user);
   const now = new Date();
 
   return prisma.announcement.count({
     where: {
-      ...activeAnnouncementWhere(branchId, now),
+      recipients: { some: { userId: user.id } },
+      ...activeAnnouncementWhere(now),
       reads: { none: { userId: user.id } },
     },
   });

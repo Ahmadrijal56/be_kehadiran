@@ -49,6 +49,10 @@ import {
 } from "../../services/developerSupportAttendanceService.js";
 import { handleDeveloperMonitorStream } from "./developerMonitorStream.js";
 import { notifyDeveloperTest } from "../../services/notificationService.js";
+import {
+  createDeveloperAnnouncement,
+  listDeveloperAnnouncements,
+} from "../../services/announcementService.js";
 
 const avatarUpload = multer({
   storage: multer.memoryStorage(),
@@ -69,6 +73,33 @@ meDeveloperRouter.get(
   "/branches",
   asyncHandler(async (_req, res) => {
     res.json({ data: await listDeveloperBranches() });
+  })
+);
+
+meDeveloperRouter.get(
+  "/announcements",
+  asyncHandler(async (_req, res) => {
+    res.json({ data: await listDeveloperAnnouncements() });
+  })
+);
+
+meDeveloperRouter.post(
+  "/announcements",
+  asyncHandler(async (req, res) => {
+    const { title, body, expires_at, scope, branch_ids } = req.body ?? {};
+    if (scope !== "global" && scope !== "branches") {
+      throw validationError('scope wajib "global" atau "branches"');
+    }
+    const data = await createDeveloperAnnouncement(req.user!, {
+      title,
+      body,
+      expires_at,
+      scope,
+      branch_ids: Array.isArray(branch_ids)
+        ? branch_ids.map(String)
+        : undefined,
+    });
+    res.status(201).json({ data });
   })
 );
 

@@ -359,31 +359,20 @@ export async function notifyAttendanceMissing(
   });
 }
 
-export async function notifyNewBranchAnnouncement(
-  branchId: string,
-  announcement: { id: string; title: string }
+export async function notifyAnnouncementPublished(
+  recipientUserIds: string[],
+  announcement: {
+    id: string;
+    title: string;
+    branchId?: string | null;
+    scope?: string;
+  }
 ): Promise<void> {
-  const employees = await prisma.user.findMany({
-    where: {
-      isActive: true,
-      OR: [
-        { userBranches: { some: { branchId } } },
-        { branchId, userBranches: { none: {} } },
-        { employee: { branchId } },
-      ],
-      NOT: {
-        userRoles: {
-          some: { role: { code: { in: ["owner", "manager"] } } },
-        },
-      },
-    },
-    select: { id: true },
-  });
-
   const title = "Pengumuman baru";
   const body = announcement.title;
+  const uniqueIds = [...new Set(recipientUserIds.filter(Boolean))];
 
-  for (const { id: userId } of employees) {
+  for (const userId of uniqueIds) {
     await createNotification({
       data: {
         userId,
@@ -392,11 +381,29 @@ export async function notifyNewBranchAnnouncement(
         body,
         dataJson: {
           announcement_id: announcement.id,
-          branch_id: branchId,
+          ...(announcement.branchId
+            ? { branch_id: announcement.branchId }
+            : {}),
+          ...(announcement.scope ? { scope: announcement.scope } : {}),
         },
       },
     });
   }
+}
+
+/** @deprecated gunakan notifyAnnouncementPublished */
+export async function notifyNewBranchAnnouncement(
+  branchId: string,
+  announcement: { id: string; title: string }
+): Promise<void> {
+  const recipients = await prisma.announcementRecipient.findMany({
+    where: { announcementId: announcement.id },
+    select: { userId: true },
+  });
+  await notifyAnnouncementPublished(
+    recipients.map((r) => r.userId),
+    { ...announcement, branchId, scope: "branch" }
+  );
 }
 
 export async function notifyAttendanceLate(
