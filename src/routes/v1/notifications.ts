@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { authenticate } from "../../middleware/auth.js";
 import { asyncHandler } from "../../middleware/asyncHandler.js";
-import { notFound } from "../../lib/errors.js";
+import { forbidden, notFound } from "../../lib/errors.js";
 import { prisma } from "../../lib/prisma.js";
 import { formatWibIso } from "../../utils/format.js";
 import { syncAttendanceRemindersForUser } from "../../services/attendanceReminderService.js";
@@ -55,6 +55,14 @@ notificationsRouter.get(
     const user = req.user!;
     const userId = user.id;
     const scopeToBranches = shouldScopeNotificationsToBranches(user);
+    const branchFilter = String(req.query.branch_id ?? "").trim();
+    let scopeBranchIds = user.branchIds;
+    if (scopeToBranches && branchFilter) {
+      if (!user.branchIds.includes(branchFilter)) {
+        throw forbidden("Cabang di luar akses Anda");
+      }
+      scopeBranchIds = [branchFilter];
+    }
 
     const [rawItems, rawUnread] = await Promise.all([
       prisma.notification.findMany({
@@ -74,13 +82,13 @@ notificationsRouter.get(
           (n) =>
             !notificationMatchesBranchScope(
               n.dataJson,
-              user.branchIds,
+              scopeBranchIds,
               n.type
             )
         )
         .map((n) => n.id);
 
-      if (outOfScopeUnreadIds.length > 0) {
+      if (outOfScopeUnreadIds.length > 0 && !branchFilter) {
         await prisma.notification.updateMany({
           where: { id: { in: outOfScopeUnreadIds } },
           data: { readAt: new Date() },
@@ -89,13 +97,13 @@ notificationsRouter.get(
     }
 
     const scopedItems = scopeToBranches
-      ? filterNotificationsByBranchScope(rawItems, user.branchIds)
+      ? filterNotificationsByBranchScope(rawItems, scopeBranchIds)
       : rawItems;
     const items = scopedItems.slice(0, LIST_LIMIT);
 
     const unreadCount = scopeToBranches
       ? rawUnread.filter((n) =>
-          notificationMatchesBranchScope(n.dataJson, user.branchIds, n.type)
+          notificationMatchesBranchScope(n.dataJson, scopeBranchIds, n.type)
         ).length
       : rawUnread.length;
 

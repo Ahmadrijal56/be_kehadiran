@@ -1,6 +1,7 @@
 import { prisma } from "../lib/prisma.js";
 import { businessError, validationError } from "../lib/errors.js";
 import { attachEmployeeToUserAccount } from "./accountIdentityService.js";
+import { employeeHasBranchManagerFeatures } from "./branchManagerFeaturesService.js";
 
 export type BranchSummary = {
   id: string;
@@ -57,13 +58,18 @@ export async function getBranchIdsForUser(
 
   const employeeId = opts?.employeeId ?? user.employeeId;
 
-  // Kepala cabang / manajer shift: selalu satu cabang tempat karyawan bertugas
-  if (opts?.branchManagerEnabled && employeeId) {
-    const employee = await prisma.employee.findUnique({
-      where: { id: employeeId },
-      select: { branchId: true },
-    });
-    return employee?.branchId ? [employee.branchId] : [];
+  // Kepala cabang: selalu satu cabang HR — abaikan membership manager legacy di cabang lain
+  if (employeeId) {
+    const asBranchHead =
+      opts?.branchManagerEnabled === true ||
+      (await employeeHasBranchManagerFeatures(employeeId));
+    if (asBranchHead) {
+      const employee = await prisma.employee.findUnique({
+        where: { id: employeeId },
+        select: { branchId: true },
+      });
+      return employee?.branchId ? [employee.branchId] : [];
+    }
   }
 
   // Karyawan (bukan manager pusat): cabang = record HR — abaikan userBranches lama

@@ -60,9 +60,26 @@ async function listManagerRecipientsForBranch(branchId: string): Promise<string[
       ...userInBranchWhere(branchId),
       userRoles: { some: { role: { code: "manager" } } },
     },
-    select: { id: true },
+    select: { id: true, employeeId: true },
   });
-  return managers.map((m) => m.id);
+
+  const ids: string[] = [];
+  for (const manager of managers) {
+    if (manager.employeeId) {
+      if (await employeeHasBranchManagerFeatures(manager.employeeId)) {
+        continue;
+      }
+      const employee = await prisma.employee.findUnique({
+        where: { id: manager.employeeId },
+        select: { branchId: true },
+      });
+      if (employee?.branchId && employee.branchId !== branchId) {
+        continue;
+      }
+    }
+    ids.push(manager.id);
+  }
+  return ids;
 }
 
 async function listBranchHeadRecipientsForBranch(
