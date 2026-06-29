@@ -32,10 +32,14 @@ export async function processForgotCheckoutsForDate(workDate: Date): Promise<num
 
     const user = await prisma.user.findFirst({
       where: { employeeId: record.employeeId },
-      select: { id: true },
+      select: { id: true, employee: { select: { branchId: true } } },
     });
     if (user) {
-      await notifyForgotCheckout(user.id, dateOnly.toISOString().slice(0, 10));
+      await notifyForgotCheckout(
+        user.id,
+        dateOnly.toISOString().slice(0, 10),
+        user.employee?.branchId
+      );
     }
     count += 1;
   }

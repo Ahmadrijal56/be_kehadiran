@@ -14,10 +14,21 @@ export function activeEmployeeUserWhere(): Prisma.UserWhereInput {
   };
 }
 
-/** User terkait cabang — via membership atau branchId utama (data legacy). */
+/**
+ * User terkait cabang — via userBranches (sumber utama) atau branchId utama
+ * bila belum punya membership (data legacy).
+ * Jika user punya userBranches, branchId utama yang sudah tidak relevan diabaikan
+ * agar manager tidak menerima notifikasi cabang lama.
+ */
 export function userInBranchWhere(branchId: string): Prisma.UserWhereInput {
   return {
-    OR: [{ branchId }, { userBranches: { some: { branchId } } }],
+    OR: [
+      { userBranches: { some: { branchId } } },
+      {
+        branchId,
+        userBranches: { none: {} },
+      },
+    ],
   };
 }
 

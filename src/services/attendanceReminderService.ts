@@ -206,7 +206,7 @@ export async function syncAttendanceRemindersForUser(
       workDateStr
     );
     if (!dup) {
-      await notifyAttendanceMissing(userId, workDateStr, shift);
+      await notifyAttendanceMissing(userId, workDateStr, shift, employee.branchId);
     }
     return;
   }
@@ -230,7 +230,8 @@ export async function syncAttendanceRemindersForUser(
         userId,
         workDateStr,
         attendance.lateMinutes,
-        lateShift
+        lateShift,
+        employee.branchId
       );
     }
   }

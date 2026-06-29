@@ -204,7 +204,8 @@ export async function processCheckIn(
         employee.user.id,
         workDate.toISOString().slice(0, 10),
         lateMinutes,
-        shift
+        shift,
+        employee.branchId
       );
     }
   }

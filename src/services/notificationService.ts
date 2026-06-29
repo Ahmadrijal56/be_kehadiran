@@ -9,24 +9,100 @@ import { approvalTypeLabel } from "../constants/approvalTypes.js";
 import { formatWorkDateLabelLong } from "../utils/format.js";
 import { userInBranchWhere } from "./activeEmployeeFilter.js";
 import { sendPushToUser } from "./pushNotificationService.js";
+import {
+  extractNotificationBranchId,
+  userMayReceiveBranchNotification,
+} from "./notificationScope.js";
+import { employeeHasBranchManagerFeatures } from "./branchManagerFeaturesService.js";
 import { log } from "../lib/logger.js";
 
 async function createNotification(args: Prisma.NotificationCreateArgs) {
   const notif = await prisma.notification.create(args);
   const data = args.data as Prisma.NotificationUncheckedCreateInput;
   if (data.userId && data.title && data.body) {
-    sendPushToUser(data.userId as string, {
-      title: data.title as string,
-      body: data.body as string,
-      data: data.dataJson ? (data.dataJson as Record<string, unknown>) : undefined,
-    }).catch((err) => {
-      log("error", "Failed to send push notification", { 
-        error: err instanceof Error ? err.message : String(err), 
-        userId: data.userId 
+    const branchId = extractNotificationBranchId(data.dataJson);
+    userMayReceiveBranchNotification(data.userId as string, branchId)
+      .then((allowed) => {
+        if (!allowed) {
+          log("info", "Push skipped — cabang di luar scope user", {
+            userId: data.userId,
+            branchId,
+          });
+          return;
+        }
+        return sendPushToUser(data.userId as string, {
+          title: data.title as string,
+          body: data.body as string,
+          data: data.dataJson
+            ? (data.dataJson as Record<string, unknown>)
+            : undefined,
+        });
+      })
+      .catch((err) => {
+        log("error", "Failed to send push notification", {
+          error: err instanceof Error ? err.message : String(err),
+          userId: data.userId,
+        });
       });
-    });
   }
   return notif;
+}
+
+async function listManagerRecipientsForBranch(branchId: string): Promise<string[]> {
+  const managers = await prisma.user.findMany({
+    where: {
+      isActive: true,
+      ...userInBranchWhere(branchId),
+      userRoles: { some: { role: { code: "manager" } } },
+    },
+    select: { id: true },
+  });
+  return managers.map((m) => m.id);
+}
+
+async function listBranchHeadRecipientsForBranch(
+  branchId: string
+): Promise<string[]> {
+  const candidates = await prisma.user.findMany({
+    where: {
+      isActive: true,
+      employee: { branchId, isActive: true },
+      employeeId: { not: null },
+      userRoles: {
+        none: { role: { code: { in: ["owner", "developer", "manager"] } } },
+      },
+    },
+    select: { id: true, employeeId: true },
+  });
+
+  const ids: string[] = [];
+  for (const user of candidates) {
+    if (await employeeHasBranchManagerFeatures(user.employeeId)) {
+      ids.push(user.id);
+    }
+  }
+  return ids;
+}
+
+async function listBranchSupervisorRecipients(
+  branchId: string
+): Promise<string[]> {
+  const [managers, branchHeads] = await Promise.all([
+    listManagerRecipientsForBranch(branchId),
+    listBranchHeadRecipientsForBranch(branchId),
+  ]);
+  return [...new Set([...managers, ...branchHeads])];
+}
+
+async function listOwnerRecipients(): Promise<string[]> {
+  const owners = await prisma.user.findMany({
+    where: {
+      isActive: true,
+      userRoles: { some: { role: { code: "owner" } } },
+    },
+    select: { id: true },
+  });
+  return owners.map((o) => o.id);
 }
 
 const ACHIEVEMENT_LABELS: Record<AchievementType, string> = {
@@ -171,24 +247,9 @@ export async function notifyManagersShiftSwapReady(
   }
 ): Promise<void> {
   const workDate = request.workDate.toISOString().slice(0, 10);
-  const managers = await prisma.user.findMany({
-    where: {
-      isActive: true,
-      ...userInBranchWhere(branchId),
-      userRoles: { some: { role: { code: "manager" } } },
-    },
-    select: { id: true },
-  });
-  const owners = await prisma.user.findMany({
-    where: {
-      isActive: true,
-      userRoles: { some: { role: { code: "owner" } } },
-    },
-    select: { id: true },
-  });
   const recipientIds = new Set([
-    ...managers.map((m) => m.id),
-    ...owners.map((o) => o.id),
+    ...(await listBranchSupervisorRecipients(branchId)),
+    ...(await listOwnerRecipients()),
   ]);
   for (const userId of recipientIds) {
     await createNotification({
@@ -219,26 +280,9 @@ export async function notifyManagersNewApprovalRequest(
   const label = approvalTypeLabel(request.type);
   const workDate = request.workDate.toISOString().slice(0, 10);
 
-  const managers = await prisma.user.findMany({
-    where: {
-      isActive: true,
-      ...userInBranchWhere(branchId),
-      userRoles: { some: { role: { code: "manager" } } },
-    },
-    select: { id: true },
-  });
-
-  const owners = await prisma.user.findMany({
-    where: {
-      isActive: true,
-      userRoles: { some: { role: { code: "owner" } } },
-    },
-    select: { id: true },
-  });
-
   const recipientIds = new Set([
-    ...managers.map((m) => m.id),
-    ...owners.map((o) => o.id),
+    ...(await listBranchSupervisorRecipients(branchId)),
+    ...(await listOwnerRecipients()),
   ]);
 
   for (const userId of recipientIds) {
@@ -261,7 +305,8 @@ export async function notifyManagersNewApprovalRequest(
 
 export async function notifyForgotCheckout(
   userId: string,
-  workDate: string
+  workDate: string,
+  branchId?: string
 ): Promise<void> {
   await createNotification({
     data: {
@@ -269,7 +314,7 @@ export async function notifyForgotCheckout(
       type: "forgot_checkout",
       title: "Lupa absen pulang",
       body: `Absen pulang otomatis dicatat 23:59 untuk tanggal ${workDate}. Anda dapat mengajukan persetujuan ke manager.`,
-      dataJson: { work_date: workDate },
+      dataJson: { work_date: workDate, ...(branchId ? { branch_id: branchId } : {}) },
     },
   });
 }
@@ -288,7 +333,8 @@ function shiftSchedulePhrase(shift: AttendanceShiftContext): string {
 export async function notifyAttendanceMissing(
   userId: string,
   workDate: string,
-  shift: AttendanceShiftContext
+  shift: AttendanceShiftContext,
+  branchId?: string
 ): Promise<void> {
   const dateLabel = formatWorkDateLabelLong(workDate);
   await createNotification({
@@ -307,6 +353,7 @@ export async function notifyAttendanceMissing(
         shift_code: shift.shift_code,
         shift_name: shift.shift_name,
         time_range: shift.time_range,
+        ...(branchId ? { branch_id: branchId } : {}),
       },
     },
   });
@@ -320,8 +367,8 @@ export async function notifyNewBranchAnnouncement(
     where: {
       isActive: true,
       OR: [
-        { branchId },
         { userBranches: { some: { branchId } } },
+        { branchId, userBranches: { none: {} } },
         { employee: { branchId } },
       ],
       NOT: {
@@ -356,7 +403,8 @@ export async function notifyAttendanceLate(
   userId: string,
   workDate: string,
   lateMinutes: number,
-  shift: AttendanceShiftContext
+  shift: AttendanceShiftContext,
+  branchId?: string
 ): Promise<void> {
   const dateLabel = formatWorkDateLabelLong(workDate);
   const lateText =
@@ -377,6 +425,7 @@ export async function notifyAttendanceLate(
         shift_code: shift.shift_code,
         shift_name: shift.shift_name,
         time_range: shift.time_range,
+        ...(branchId ? { branch_id: branchId } : {}),
       },
     },
   });
@@ -393,29 +442,15 @@ export async function notifyLateAttendanceForReview(
     shift: AttendanceShiftContext;
   }
 ): Promise<void> {
-  const managers = await prisma.user.findMany({
-    where: {
-      isActive: true,
-      ...userInBranchWhere(branchId),
-      userRoles: { some: { role: { code: "manager" } } },
-    },
-    select: { id: true },
-  });
-
-  const owners = await prisma.user.findMany({
-    where: {
-      isActive: true,
-      userRoles: { some: { role: { code: "owner" } } },
-    },
-    select: { id: true },
-  });
+  const supervisors = await listBranchSupervisorRecipients(branchId);
+  const owners = await listOwnerRecipients();
 
   const dateLabel = formatWorkDateLabelLong(payload.workDate);
   const lateText =
     payload.lateMinutes > 0 ? `${payload.lateMinutes} menit` : "terlambat";
   const shiftText = `${payload.shift.shift_name} (${payload.shift.time_range})`;
 
-  for (const { id: userId } of managers) {
+  for (const userId of supervisors) {
     await createNotification({
       data: {
         userId,
@@ -440,7 +475,7 @@ export async function notifyLateAttendanceForReview(
     });
   }
 
-  for (const { id: userId } of owners) {
+  for (const userId of owners) {
     await createNotification({
       data: {
         userId,

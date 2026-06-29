@@ -6,34 +6,16 @@ import { prisma } from "../../lib/prisma.js";
 import { formatWibIso } from "../../utils/format.js";
 import { syncAttendanceRemindersForUser } from "../../services/attendanceReminderService.js";
 import { syncAnnouncementReadFromNotification } from "../../services/announcementReadService.js";
-import { hasPermission } from "../../services/authService.js";
-import type { AuthUser } from "../../services/authService.js";
+import {
+  notificationMatchesBranchScope,
+  shouldScopeNotificationsToBranches,
+} from "../../services/notificationScope.js";
 
 export const notificationsRouter = Router();
 notificationsRouter.use(authenticate);
 
 const lastReminderSync = new Map<string, number>();
 const REMINDER_SYNC_INTERVAL_MS = 15 * 60 * 1000;
-
-function shouldScopeNotificationsToBranches(user: AuthUser): boolean {
-  return (
-    !user.roles.includes("owner") &&
-    !user.roles.includes("developer") &&
-    !hasPermission(user, "attendance.read.all")
-  );
-}
-
-function notificationMatchesBranchScope(
-  dataJson: unknown,
-  branchIds: string[]
-): boolean {
-  if (!dataJson || typeof dataJson !== "object" || Array.isArray(dataJson)) {
-    return true;
-  }
-  const branchId = (dataJson as Record<string, unknown>).branch_id;
-  if (branchId == null || branchId === "") return true;
-  return branchIds.includes(String(branchId));
-}
 
 notificationsRouter.get(
   "/notifications",
