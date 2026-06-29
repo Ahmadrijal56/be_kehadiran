@@ -156,6 +156,8 @@ model User {
   employeeId           String?                     @unique @map("employee_id") @db.Uuid
   isActive             Boolean                     @default(true) @map("is_active")
   lastLoginAt          DateTime?                   @map("last_login_at") @db.Timestamptz(6)
+  pwaInstalled         Boolean                     @default(false) @map("pwa_installed")
+  pwaInstalledAt       DateTime?                   @map("pwa_installed_at") @db.Timestamptz(6)
   createdAt            DateTime                    @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt            DateTime                    @updatedAt @map("updated_at") @db.Timestamptz(6)
   accountCode          String?                     @unique @map("account_code") @db.VarChar(20)

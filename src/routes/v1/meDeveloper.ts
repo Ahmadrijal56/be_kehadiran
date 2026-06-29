@@ -286,22 +286,23 @@ meDeveloperRouter.get(
             branch: true,
           },
         },
-        role: true,
+        userRoles: { include: { role: true } },
       },
       orderBy: [
         { pwaInstalled: "desc" },
-        { employee: { fullName: "asc" } }
-      ]
+        { employee: { fullName: "asc" } },
+      ],
     });
 
     const mapped = users.map((u) => ({
       userId: u.id,
       nik: u.nik,
       fullName: u.employee?.fullName ?? "No Employee Data",
-      role: u.role?.name ?? "Unknown",
+      role:
+        u.userRoles.map((ur) => ur.role.name).join(", ") || "Unknown",
       branchName: u.employee?.branch?.name ?? "Unknown",
       pwaInstalled: u.pwaInstalled,
-      pwaInstalledAt: u.pwaInstalledAt,
+      pwaInstalledAt: u.pwaInstalledAt?.toISOString() ?? null,
     }));
 
     const totalUsers = users.length;
