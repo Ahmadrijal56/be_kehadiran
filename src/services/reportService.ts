@@ -4,11 +4,127 @@ import { prisma } from "../lib/prisma.js";
 import { OFF_SHIFT_ID } from "../constants/shifts.js";
 import { validationError } from "../lib/errors.js";
 import {
+  attendanceHasCheckedIn,
+  attendanceIsLate,
+} from "./branchAttendanceService.js";
+import {
   formatWibDateTimeLabel,
   formatWibIso,
   formatWibTime,
   parseDateQuery,
 } from "../utils/format.js";
+
+function monthWorkDateRange(yearMonth: string) {
+  if (!/^\d{4}-\d{2}$/.test(yearMonth)) {
+    throw validationError("year_month format YYYY-MM");
+  }
+  const fromDate = new Date(`${yearMonth}-01T00:00:00.000Z`);
+  const toDate = new Date(fromDate);
+  toDate.setUTCMonth(toDate.getUTCMonth() + 1);
+  toDate.setUTCDate(toDate.getUTCDate() - 1);
+  return { fromDate, toDate };
+}
+
+type MonthlyAttendanceStats = {
+  total_late_count: number;
+  total_present_days: number;
+  total_off_days: number;
+};
+
+async function computeMonthlyAttendanceStats(
+  employeeIds: string[],
+  fromDate: Date,
+  toDate: Date
+): Promise<Map<string, MonthlyAttendanceStats>> {
+  const stats = new Map<string, MonthlyAttendanceStats>();
+  if (employeeIds.length === 0) return stats;
+
+  const ensure = (employeeId: string): MonthlyAttendanceStats => {
+    const existing = stats.get(employeeId);
+    if (existing) return existing;
+    const empty = {
+      total_late_count: 0,
+      total_present_days: 0,
+      total_off_days: 0,
+    };
+    stats.set(employeeId, empty);
+    return empty;
+  };
+
+  const [records, overrides] = await Promise.all([
+    prisma.attendanceRecord.findMany({
+      where: {
+        workDate: { gte: fromDate, lte: toDate },
+        employeeId: { in: employeeIds },
+      },
+      select: {
+        employeeId: true,
+        workDate: true,
+        status: true,
+        lateMinutes: true,
+        checkInAt: true,
+      },
+    }),
+    prisma.employeeShift.findMany({
+      where: {
+        workDate: { gte: fromDate, lte: toDate },
+        employeeId: { in: employeeIds },
+      },
+      select: { employeeId: true, workDate: true, shiftId: true },
+    }),
+  ]);
+
+  const recordByKey = new Map(
+    records.map((r) => [
+      `${r.employeeId}:${r.workDate.toISOString().slice(0, 10)}`,
+      r,
+    ])
+  );
+  const overrideByKey = new Map(
+    overrides.map((o) => [
+      `${o.employeeId}:${o.workDate.toISOString().slice(0, 10)}`,
+      o.shiftId,
+    ])
+  );
+
+  for (const workDate of iterWorkDates(fromDate, toDate)) {
+    const dateStr = workDate.toISOString().slice(0, 10);
+    for (const employeeId of employeeIds) {
+      const key = `${employeeId}:${dateStr}`;
+      const override = overrideByKey.get(key);
+      const hasGridEntry = override !== undefined;
+      const att = recordByKey.get(key);
+      if (!hasGridEntry && !att) continue;
+
+      const scheduledOff = override === OFF_SHIFT_ID;
+      const row = ensure(employeeId);
+
+      if (scheduledOff) {
+        row.total_off_days += 1;
+        continue;
+      }
+
+      if (att && attendanceHasCheckedIn(att.status, att.checkInAt)) {
+        row.total_present_days += 1;
+        if (attendanceIsLate(att.status, att.lateMinutes)) {
+          row.total_late_count += 1;
+        }
+      }
+    }
+  }
+
+  return stats;
+}
+
+function resolveReportStatus(
+  scheduledOff: boolean,
+  att?: { status: string; lateMinutes: number }
+): string {
+  if (scheduledOff) return "off";
+  const raw = att?.status ?? "absent";
+  if (att && attendanceIsLate(raw, att.lateMinutes)) return "late";
+  return raw;
+}
 
 function parseRange(from?: string, to?: string) {
   const fromDate = parseDateQuery(from);
@@ -159,7 +275,7 @@ export async function getDailyReport(
         employee_type_label: emp.employeeType?.label?.trim() ?? null,
         branch_code: emp.branch.code,
         shift_code: shiftCode,
-        status: scheduledOff ? "off" : att?.status ?? "absent",
+        status: resolveReportStatus(scheduledOff, att),
         check_in_at: formatWibIso(att?.checkInAt ?? null),
         check_out_at: formatWibIso(att?.checkOutAt ?? null),
         late_minutes: att?.lateMinutes ?? 0,
@@ -187,9 +303,7 @@ export async function getMonthlyReport(yearMonth?: string, branchId?: string) {
   const ym =
     yearMonth ??
     new Date().toISOString().slice(0, 7);
-  if (!/^\d{4}-\d{2}$/.test(ym)) {
-    throw validationError("year_month format YYYY-MM");
-  }
+  const { fromDate, toDate } = monthWorkDateRange(ym);
 
   const items = await prisma.kpiMonthlyAggregate.findMany({
     where: {
@@ -205,19 +319,29 @@ export async function getMonthlyReport(yearMonth?: string, branchId?: string) {
       : [{ branch: { code: "asc" } }, { totalPoints: "desc" }],
   });
 
+  const attendanceStats = await computeMonthlyAttendanceStats(
+    items.map((a) => a.employeeId),
+    fromDate,
+    toDate
+  );
+
   return {
     year_month: ym,
     branch_code: branch?.code ?? null,
-    items: items.map((a) => ({
-      nik: a.employee.nik,
-      full_name: a.employee.fullName,
-      branch_code: a.branch.code,
-      total_points: a.totalPoints,
-      total_late_count: a.totalLateCount,
-      total_present_days: a.totalPresentDays,
-      rank_branch: a.rankBranch,
-      rank_global: a.rankGlobal,
-    })),
+    items: items.map((a) => {
+      const stats = attendanceStats.get(a.employeeId);
+      return {
+        nik: a.employee.nik,
+        full_name: a.employee.fullName,
+        branch_code: a.branch.code,
+        total_points: a.totalPoints,
+        total_late_count: stats?.total_late_count ?? 0,
+        total_present_days: stats?.total_present_days ?? 0,
+        total_off_days: stats?.total_off_days ?? 0,
+        rank_branch: a.rankBranch,
+        rank_global: a.rankGlobal,
+      };
+    }),
   };
 }
 
@@ -231,7 +355,8 @@ export async function getLateReport(
   const rows = await prisma.attendanceRecord.findMany({
     where: {
       workDate: { gte: fromDate, lte: toDate },
-      status: "late",
+      checkInAt: { not: null },
+      lateMinutes: { gt: 0 },
       ...(branch ? { branchId: branch.id } : {}),
     },
     include: {
@@ -493,6 +618,7 @@ function aggregateLateCounts(
     full_name: string;
     branch_code: string;
     status: string;
+    late_minutes: number;
   }>
 ) {
   const counts = new Map<
@@ -505,7 +631,43 @@ function aggregateLateCounts(
     }
   >();
   for (const item of items) {
-    if (item.status !== "late") continue;
+    if (!attendanceIsLate(item.status, item.late_minutes)) continue;
+    const existing = counts.get(item.nik);
+    if (existing) {
+      existing.total_late_count += 1;
+    } else {
+      counts.set(item.nik, {
+        nik: item.nik,
+        full_name: item.full_name,
+        branch_code: item.branch_code,
+        total_late_count: 1,
+      });
+    }
+  }
+  return [...counts.values()].sort(
+    (a, b) =>
+      b.total_late_count - a.total_late_count ||
+      a.full_name.localeCompare(b.full_name, "id")
+  );
+}
+
+function aggregateLateEventCounts(
+  items: Array<{
+    nik: string;
+    full_name: string;
+    branch_code: string;
+  }>
+) {
+  const counts = new Map<
+    string,
+    {
+      nik: string;
+      full_name: string;
+      branch_code: string;
+      total_late_count: number;
+    }
+  >();
+  for (const item of items) {
     const existing = counts.get(item.nik);
     if (existing) {
       existing.total_late_count += 1;
@@ -533,6 +695,7 @@ function addDailyLateSummarySheet(
     full_name: string;
     branch_code: string;
     status: string;
+    late_minutes: number;
   }>,
   periodLabel: string
 ): void {
@@ -565,7 +728,7 @@ function addDailyLateSummarySheet(
     writeEmptyBranchState(
       sheet,
       columns,
-      "Tidak ada status Terlambat untuk cabang ini pada periode yang dipilih."
+      "Tidak ada absen masuk terlambat (menit telat > 0) untuk cabang ini pada periode yang dipilih."
     );
     return;
   }
@@ -654,6 +817,7 @@ function addMonthlyBranchSheet(
     total_points: number;
     total_late_count: number;
     total_present_days: number;
+    total_off_days: number;
     rank_branch: number | null;
     rank_global: number | null;
   }>,
@@ -665,6 +829,7 @@ function addMonthlyBranchSheet(
     { header: "Nama Lengkap", key: "full_name", width: 28 },
     { header: "Total Poin", key: "total_points", width: 12, align: "center" },
     { header: "Hari Hadir", key: "total_present_days", width: 12, align: "center" },
+    { header: "Hari Libur", key: "total_off_days", width: 12, align: "center" },
     { header: "Jumlah Telat", key: "total_late_count", width: 13, align: "center" },
     { header: "Rank Global", key: "rank_global", width: 12, align: "center" },
   ];
@@ -750,6 +915,54 @@ function addLateBranchSheet(
     check_in_time: displayOptionalTime(item.check_in_at),
   }));
   writeDataRows(sheet, columns, rows as unknown as Record<string, unknown>[]);
+}
+
+function addLateSummarySheet(
+  workbook: ExcelJS.Workbook,
+  branch: { code: string; name: string },
+  items: Array<{
+    nik: string;
+    full_name: string;
+    branch_code: string;
+  }>,
+  periodLabel: string
+): void {
+  const summary = aggregateLateEventCounts(items);
+  const columns: ExcelColumnDef[] = [
+    { header: "ID Karyawan", key: "nik", width: 12, align: "center", text: true },
+    { header: "Nama Lengkap", key: "full_name", width: 28 },
+    { header: "Jumlah Telat", key: "total_late_count", width: 14, align: "center" },
+  ];
+
+  const sheet = workbook.addWorksheet(
+    sanitizeSheetName(`${branch.code}-Telat`)
+  );
+  const hasData = summary.length > 0;
+  writeTitleBlock(sheet, {
+    title: "RINGKASAN KETERLAMBATAN PER KARYAWAN",
+    meta: [
+      `Cabang: ${branch.name} (${branch.code})`,
+      `Periode: ${periodLabel}`,
+      `Dicetak: ${printedAtLabel()}`,
+      hasData
+        ? `Total kejadian telat: ${items.length} · ${summary.length} karyawan`
+        : "Status: Tidak ada keterlambatan pada periode ini",
+    ],
+    colSpan: columns.length,
+  });
+  configureColumns(sheet, columns);
+
+  if (!hasData) {
+    writeEmptyBranchState(
+      sheet,
+      columns,
+      "Tidak ada absen masuk terlambat untuk cabang ini pada periode yang dipilih."
+    );
+    return;
+  }
+
+  styleHeaderRow(sheet, columns);
+  writeDataRows(sheet, columns, summary as unknown as Record<string, unknown>[]);
 }
 
 function addEmptyInfoSheet(
@@ -843,6 +1056,7 @@ export async function buildReportExcel(params: {
       for (const branch of branches) {
         const items = byBranch.get(branch.code) ?? [];
         addLateBranchSheet(workbook, branch, items, periodLabel);
+        addLateSummarySheet(workbook, branch, items, periodLabel);
       }
     }
   }
