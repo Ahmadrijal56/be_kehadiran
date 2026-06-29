@@ -148,7 +148,9 @@ export async function login(
     issueTokenPair(user.id),
   ]);
 
-  const branchId = user.branchId ?? branchIds[0] ?? null;
+  const branchId = branchManagerEnabled
+    ? branchIds[0] ?? null
+    : user.branchId ?? branchIds[0] ?? null;
   const accountCode = await ensureUserAccountCode(user.id);
   if (user.employeeId) {
     await attachEmployeeToUserAccount(user.id, user.employeeId);
@@ -423,7 +425,9 @@ export async function resolveAuthUser(userId: string): Promise<AuthUser> {
     nik: user.nik,
     fullName: user.fullName,
     email: user.email,
-    branchId: user.branchId ?? branchIds[0] ?? null,
+    branchId: branchManagerEnabled
+      ? branchIds[0] ?? null
+      : user.branchId ?? branchIds[0] ?? null,
     branchIds,
     employeeId: user.employeeId,
     roles,

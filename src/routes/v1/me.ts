@@ -117,10 +117,9 @@ meRouter.get(
     if (scope === "organization" || scope === "all") {
       await assertEmployeeLiveAttendanceEnabled();
       const actor = req.user!;
-      // Manajer shift (toggle): tidak boleh lihat live lintas cabang
+      // Kepala cabang: tidak boleh lihat live lintas cabang
       if (
         actor.branchManagerEnabled &&
-        !actor.roles.includes("manager") &&
         !actor.roles.includes("owner") &&
         !actor.roles.includes("developer")
       ) {

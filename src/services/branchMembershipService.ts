@@ -57,12 +57,8 @@ export async function getBranchIdsForUser(
 
   const employeeId = opts?.employeeId ?? user.employeeId;
 
-  // Manajer shift (toggle fitur manager, bukan role manager penuh): hanya cabang HR
-  if (
-    opts?.branchManagerEnabled &&
-    employeeId &&
-    !roles.includes("manager")
-  ) {
+  // Kepala cabang / manajer shift: selalu satu cabang tempat karyawan bertugas
+  if (opts?.branchManagerEnabled && employeeId) {
     const employee = await prisma.employee.findUnique({
       where: { id: employeeId },
       select: { branchId: true },
