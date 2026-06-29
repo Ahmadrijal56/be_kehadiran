@@ -487,6 +487,93 @@ async function loadActiveBranches(branchId?: string) {
   });
 }
 
+function aggregateLateCounts(
+  items: Array<{
+    nik: string;
+    full_name: string;
+    branch_code: string;
+    status: string;
+  }>
+) {
+  const counts = new Map<
+    string,
+    {
+      nik: string;
+      full_name: string;
+      branch_code: string;
+      total_late_count: number;
+    }
+  >();
+  for (const item of items) {
+    if (item.status !== "late") continue;
+    const existing = counts.get(item.nik);
+    if (existing) {
+      existing.total_late_count += 1;
+    } else {
+      counts.set(item.nik, {
+        nik: item.nik,
+        full_name: item.full_name,
+        branch_code: item.branch_code,
+        total_late_count: 1,
+      });
+    }
+  }
+  return [...counts.values()].sort(
+    (a, b) =>
+      b.total_late_count - a.total_late_count ||
+      a.full_name.localeCompare(b.full_name, "id")
+  );
+}
+
+function addDailyLateSummarySheet(
+  workbook: ExcelJS.Workbook,
+  branch: { code: string; name: string },
+  items: Array<{
+    nik: string;
+    full_name: string;
+    branch_code: string;
+    status: string;
+  }>,
+  periodLabel: string
+): void {
+  const summary = aggregateLateCounts(items);
+  const columns: ExcelColumnDef[] = [
+    { header: "ID Karyawan", key: "nik", width: 12, align: "center", text: true },
+    { header: "Nama Lengkap", key: "full_name", width: 28 },
+    { header: "Jumlah Telat", key: "total_late_count", width: 14, align: "center" },
+  ];
+
+  const sheet = workbook.addWorksheet(
+    sanitizeSheetName(`${branch.code}-Telat`)
+  );
+  const hasData = summary.length > 0;
+  writeTitleBlock(sheet, {
+    title: "RINGKASAN KETERLAMBATAN PER KARYAWAN",
+    meta: [
+      `Cabang: ${branch.name} (${branch.code})`,
+      `Periode: ${periodLabel}`,
+      `Dicetak: ${printedAtLabel()}`,
+      hasData
+        ? `Total karyawan terlambat: ${summary.length}`
+        : "Status: Tidak ada keterlambatan pada periode ini",
+    ],
+    colSpan: columns.length,
+  });
+  configureColumns(sheet, columns);
+
+  if (!hasData) {
+    writeEmptyBranchState(
+      sheet,
+      columns,
+      "Tidak ada status Terlambat untuk cabang ini pada periode yang dipilih."
+    );
+    return;
+  }
+
+  styleHeaderRow(sheet, columns);
+  writeDataRows(sheet, columns, summary as unknown as Record<string, unknown>[]);
+}
+
 function addDailyBranchSheet(
   workbook: ExcelJS.Workbook,
   branch: { code: string; name: string },
@@ -712,6 +799,7 @@ export async function buildReportExcel(params: {
       for (const branch of branches) {
         const items = byBranch.get(branch.code) ?? [];
         addDailyBranchSheet(workbook, branch, items, periodLabel);
+        addDailyLateSummarySheet(workbook, branch, items, periodLabel);
       }
     }
   } else if (params.type === "monthly") {
