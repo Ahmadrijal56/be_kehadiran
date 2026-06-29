@@ -8,6 +8,20 @@ export function shouldScopeNotificationsToBranches(user: AuthUser): boolean {
   return !user.roles.includes("owner") && !user.roles.includes("developer");
 }
 
+/** Notifikasi personal karyawan — boleh tampil tanpa branch_id di payload. */
+const PERSONAL_NOTIFICATION_TYPES = new Set([
+  "achievement_earned",
+  "late_excuse_reviewed",
+  "approval_reviewed",
+  "attendance_late",
+  "attendance_missing",
+  "forgot_checkout",
+  "shift_swap_incoming",
+  "shift_swap_peer_accepted",
+  "announcement_published",
+  "SYSTEM",
+]);
+
 export function extractNotificationBranchId(dataJson: unknown): string | null {
   if (!dataJson || typeof dataJson !== "object" || Array.isArray(dataJson)) {
     return null;
@@ -19,10 +33,13 @@ export function extractNotificationBranchId(dataJson: unknown): string | null {
 
 export function notificationMatchesBranchScope(
   dataJson: unknown,
-  branchIds: string[]
+  branchIds: string[],
+  type?: string
 ): boolean {
   const branchId = extractNotificationBranchId(dataJson);
-  if (!branchId) return true;
+  if (!branchId) {
+    return type != null && PERSONAL_NOTIFICATION_TYPES.has(type);
+  }
   return branchIds.includes(branchId);
 }
 

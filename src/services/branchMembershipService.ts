@@ -66,6 +66,20 @@ export async function getBranchIdsForUser(
     return employee?.branchId ? [employee.branchId] : [];
   }
 
+  // Karyawan (bukan manager pusat): cabang = record HR — abaikan userBranches lama
+  if (
+    employeeId &&
+    !roles.includes("manager") &&
+    !roles.includes("owner") &&
+    !roles.includes("developer")
+  ) {
+    const employee = await prisma.employee.findUnique({
+      where: { id: employeeId },
+      select: { branchId: true },
+    });
+    if (employee?.branchId) return [employee.branchId];
+  }
+
   const memberships = await prisma.userBranch.findMany({
     where: { userId },
     select: { branchId: true },

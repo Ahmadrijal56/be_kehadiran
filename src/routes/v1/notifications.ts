@@ -16,6 +16,27 @@ notificationsRouter.use(authenticate);
 
 const lastReminderSync = new Map<string, number>();
 const REMINDER_SYNC_INTERVAL_MS = 15 * 60 * 1000;
+const LIST_LIMIT = 50;
+/** Ambil lebih banyak lalu filter cabang — hindari badge/list mismatch. */
+const LIST_PREFETCH = 500;
+
+type NotificationRow = {
+  id: string;
+  type: string;
+  title: string;
+  body: string;
+  dataJson: unknown;
+  readAt: Date | null;
+  createdAt: Date;
+};
+
+function filterNotificationsByBranchScope<
+  T extends { dataJson: unknown; type: string },
+>(rows: T[], branchIds: string[]): T[] {
+  return rows.filter((n) =>
+    notificationMatchesBranchScope(n.dataJson, branchIds, n.type)
+  );
+}
 
 notificationsRouter.get(
   "/notifications",
@@ -39,27 +60,47 @@ notificationsRouter.get(
       prisma.notification.findMany({
         where: { userId },
         orderBy: { createdAt: "desc" },
-        take: 50,
+        take: scopeToBranches ? LIST_PREFETCH : LIST_LIMIT,
       }),
       prisma.notification.findMany({
         where: { userId, readAt: null },
-        select: { id: true, dataJson: true },
+        select: { id: true, dataJson: true, type: true },
       }),
     ]);
 
-    const items = scopeToBranches
-      ? rawItems.filter((n) =>
-          notificationMatchesBranchScope(n.dataJson, user.branchIds)
+    if (scopeToBranches) {
+      const outOfScopeUnreadIds = rawUnread
+        .filter(
+          (n) =>
+            !notificationMatchesBranchScope(
+              n.dataJson,
+              user.branchIds,
+              n.type
+            )
         )
+        .map((n) => n.id);
+
+      if (outOfScopeUnreadIds.length > 0) {
+        await prisma.notification.updateMany({
+          where: { id: { in: outOfScopeUnreadIds } },
+          data: { readAt: new Date() },
+        });
+      }
+    }
+
+    const scopedItems = scopeToBranches
+      ? filterNotificationsByBranchScope(rawItems, user.branchIds)
       : rawItems;
+    const items = scopedItems.slice(0, LIST_LIMIT);
+
     const unreadCount = scopeToBranches
       ? rawUnread.filter((n) =>
-          notificationMatchesBranchScope(n.dataJson, user.branchIds)
+          notificationMatchesBranchScope(n.dataJson, user.branchIds, n.type)
         ).length
       : rawUnread.length;
 
     res.json({
-      data: items.map((n) => ({
+      data: items.map((n: NotificationRow) => ({
         id: n.id,
         type: n.type,
         title: n.title,
@@ -76,14 +117,41 @@ notificationsRouter.get(
 notificationsRouter.patch(
   "/notifications/read-all",
   asyncHandler(async (req, res) => {
-    const userId = req.user!.id;
+    const user = req.user!;
+    const userId = user.id;
     const now = new Date();
+    const scopeToBranches = shouldScopeNotificationsToBranches(user);
+
+    if (!scopeToBranches) {
+      const result = await prisma.notification.updateMany({
+        where: {
+          userId,
+          readAt: null,
+          type: { not: "announcement_published" },
+        },
+        data: { readAt: now },
+      });
+      res.json({ data: { marked: result.count, read_at: formatWibIso(now) } });
+      return;
+    }
+
+    const unread = await prisma.notification.findMany({
+      where: { userId, readAt: null, type: { not: "announcement_published" } },
+      select: { id: true, dataJson: true, type: true },
+    });
+    const inScopeIds = unread
+      .filter((n) =>
+        notificationMatchesBranchScope(n.dataJson, user.branchIds, n.type)
+      )
+      .map((n) => n.id);
+
+    if (inScopeIds.length === 0) {
+      res.json({ data: { marked: 0, read_at: formatWibIso(now) } });
+      return;
+    }
+
     const result = await prisma.notification.updateMany({
-      where: {
-        userId,
-        readAt: null,
-        type: { not: "announcement_published" },
-      },
+      where: { id: { in: inScopeIds } },
       data: { readAt: now },
     });
     res.json({ data: { marked: result.count, read_at: formatWibIso(now) } });

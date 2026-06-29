@@ -46,18 +46,40 @@ describe("notificationScope", () => {
     );
   });
 
-  it("notifikasi tanpa branch_id selalu lolos filter daftar", () => {
-    expect(notificationMatchesBranchScope({ work_date: "2026-06-01" }, ["b1"])).toBe(
-      true
-    );
+  it("notifikasi personal tanpa branch_id tetap tampil", () => {
+    expect(
+      notificationMatchesBranchScope(
+        { work_date: "2026-06-01" },
+        ["b1"],
+        "attendance_late"
+      )
+    ).toBe(true);
+  });
+
+  it("notifikasi operasional tanpa branch_id disembunyikan", () => {
+    expect(
+      notificationMatchesBranchScope(
+        { employee_name: "Budi" },
+        ["b1"],
+        "staff_late_needs_evaluation"
+      )
+    ).toBe(false);
   });
 
   it("notifikasi cabang hanya tampil bila branch_id dalam scope user", () => {
     expect(
-      notificationMatchesBranchScope({ branch_id: "b1" }, ["b1", "b2"])
+      notificationMatchesBranchScope(
+        { branch_id: "b1" },
+        ["b1", "b2"],
+        "approval_submitted"
+      )
     ).toBe(true);
-    expect(notificationMatchesBranchScope({ branch_id: "b3" }, ["b1", "b2"])).toBe(
-      false
-    );
+    expect(
+      notificationMatchesBranchScope(
+        { branch_id: "b3" },
+        ["b1", "b2"],
+        "staff_late_needs_evaluation"
+      )
+    ).toBe(false);
   });
 });
