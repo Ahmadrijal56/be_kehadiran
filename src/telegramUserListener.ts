@@ -24,7 +24,7 @@ import { NewMessage } from "telegram/events/index.js";
 import type { Api } from "telegram";
 import { env } from "./config/env.js";
 import { gramJsClientOptions } from "./lib/gramJsClientOptions.js";
-import { enqueueProcessTelegramMessage } from "./lib/queue.js";
+import { enqueueTelegramMessageIfNeeded } from "./lib/telegramEnqueue.js";
 import { log } from "./lib/logger.js";
 import { saveTelegramWebhookMessage } from "./services/telegramIngestService.js";
 
@@ -49,21 +49,19 @@ async function ingestMessage(
   if (!rawText || !isAttendanceText(rawText)) return;
 
   try {
-    const { id, duplicate } = await saveTelegramWebhookMessage({
+    const result = await saveTelegramWebhookMessage({
       messageId: BigInt(message.id),
       groupId: chatId,
       rawText,
     });
 
-    if (!duplicate) {
-      await enqueueProcessTelegramMessage(id);
-    }
+    await enqueueTelegramMessageIfNeeded(result);
 
     log("info", "User listener ingested message", {
       source,
-      telegramMessageDbId: id,
+      telegramMessageDbId: result.id,
       chatId: chatId.toString(),
-      duplicate,
+      duplicate: result.duplicate,
       preview: rawText.slice(0, 100),
     });
   } catch (err) {

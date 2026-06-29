@@ -114,74 +114,105 @@ export async function processCheckIn(
   const kpi = scored.kpi;
   const status = scored.status;
 
-  const existing = await prisma.attendanceRecord.findUnique({
-    where: {
-      employeeId_workDate: {
-        employeeId: input.employeeId,
-        workDate,
-      },
-    },
-  });
-
-  if (existing?.checkInAt) {
-    if (existing.checkInAt.getTime() === input.checkInAt.getTime()) {
-      return {
-        attendanceId: existing.id,
-        deltaMinutes: existing.lateMinutes,
-        kpi,
-      };
-    }
-    throw new Error("CHECK_IN_ALREADY_RECORDED");
-  }
-
-  const attendance = existing
-    ? await prisma.attendanceRecord.update({
-        where: { id: existing.id },
-        data: {
-          shiftId,
-          checkInAt: input.checkInAt,
-          attendanceType: input.attendanceType,
-          sourceMessageId: input.sourceMessageId,
-          photoUrl: input.photoUrl,
-          deviceId: input.deviceId,
-          lateMinutes,
-          status,
-        },
-      })
-    : await prisma.attendanceRecord.create({
-        data: {
+  const writeResult = await prisma.$transaction(async (tx) => {
+    const existing = await tx.attendanceRecord.findUnique({
+      where: {
+        employeeId_workDate: {
           employeeId: input.employeeId,
-          branchId: employee.branchId,
           workDate,
-          shiftId,
-          checkInAt: input.checkInAt,
-          attendanceType: input.attendanceType,
-          sourceMessageId: input.sourceMessageId,
-          photoUrl: input.photoUrl,
-          deviceId: input.deviceId,
-          lateMinutes,
-          status,
         },
-      });
+      },
+    });
 
-  await prisma.kpiDailyScore.upsert({
-    where: {
-      employeeId_workDate: {
+    if (existing?.checkInAt) {
+      if (existing.checkInAt.getTime() === input.checkInAt.getTime()) {
+        return {
+          attendanceId: existing.id,
+          deltaMinutes: existing.lateMinutes,
+          idempotent: true as const,
+        };
+      }
+      throw new Error("CHECK_IN_ALREADY_RECORDED");
+    }
+
+    const attendance = existing
+      ? await tx.attendanceRecord.update({
+          where: { id: existing.id },
+          data: {
+            shiftId,
+            checkInAt: input.checkInAt,
+            attendanceType: input.attendanceType,
+            sourceMessageId: input.sourceMessageId,
+            photoUrl: input.photoUrl,
+            deviceId: input.deviceId,
+            lateMinutes,
+            status,
+          },
+        })
+      : await tx.attendanceRecord.create({
+          data: {
+            employeeId: input.employeeId,
+            branchId: employee.branchId,
+            workDate,
+            shiftId,
+            checkInAt: input.checkInAt,
+            attendanceType: input.attendanceType,
+            sourceMessageId: input.sourceMessageId,
+            photoUrl: input.photoUrl,
+            deviceId: input.deviceId,
+            lateMinutes,
+            status,
+          },
+        });
+
+    const existingKpi = await tx.kpiDailyScore.findUnique({
+      where: {
+        employeeId_workDate: {
+          employeeId: input.employeeId,
+          workDate,
+        },
+      },
+    });
+    const adjustmentPoints = existingKpi?.adjustmentPoints ?? 0;
+
+    await tx.kpiDailyScore.upsert({
+      where: {
+        employeeId_workDate: {
+          employeeId: input.employeeId,
+          workDate,
+        },
+      },
+      create: {
         employeeId: input.employeeId,
         workDate,
+        checkInPoints: kpi.points,
+        adjustmentPoints: 0,
+        totalPoints: kpi.points,
+        lateMinutes: deltaMinutes,
+        ruleApplied: kpi.ruleCode,
       },
-    },
-    create: {
-      employeeId: input.employeeId,
-      workDate,
-      checkInPoints: kpi.points,
-      adjustmentPoints: 0,
-      totalPoints: kpi.points,
-      lateMinutes: deltaMinutes,
-      ruleApplied: kpi.ruleCode,
-    },
-    update: {},
+      update: {
+        checkInPoints: kpi.points,
+        totalPoints: kpi.points + adjustmentPoints,
+        lateMinutes: deltaMinutes,
+        ruleApplied: kpi.ruleCode,
+      },
+    });
+
+    return {
+      attendanceId: attendance.id,
+      deltaMinutes,
+      idempotent: false as const,
+    };
   });
+
+  if (writeResult.idempotent) {
+    return {
+      attendanceId: writeResult.attendanceId,
+      deltaMinutes: writeResult.deltaMinutes,
+      kpi,
+    };
+  }
 
   if (
     attendanceRequiresLateExcuse({
@@ -198,7 +229,7 @@ export async function processCheckIn(
       time_range: formatShiftTimeRange(shiftWindow.startTime, shiftWindow.endTime),
     };
     await notifyLateAttendanceForReview(employee.branchId, {
-      attendanceId: attendance.id,
+      attendanceId: writeResult.attendanceId,
       employeeId: employee.id,
       employeeName: employee.fullName,
       workDate: workDate.toISOString().slice(0, 10),
@@ -220,8 +251,8 @@ export async function processCheckIn(
   await invalidatePapanCaches(employee.branchId);
 
   return {
-    attendanceId: attendance.id,
-    deltaMinutes,
+    attendanceId: writeResult.attendanceId,
+    deltaMinutes: writeResult.deltaMinutes,
     kpi,
   };
 }

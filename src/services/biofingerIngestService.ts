@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
 import { env } from "../config/env.js";
 import { log } from "../lib/logger.js";
-import { enqueueProcessTelegramMessage } from "../lib/queue.js";
+import {
+  enqueueTelegramMessageIfNeeded,
+  shouldEnqueueTelegramProcessing,
+} from "../lib/telegramEnqueue.js";
 import {
   saveTelegramWebhookMessage,
 } from "./telegramIngestService.js";
@@ -37,25 +40,23 @@ export async function ingestBiofingerRawText(
   const source = meta?.source ?? "biofinger";
   const messageId = stableMessageId(`${source}:${meta?.deviceSn ?? ""}:${rawText}`);
 
-  const { id, duplicate } = await saveTelegramWebhookMessage({
+  const result = await saveTelegramWebhookMessage({
     messageId,
     groupId: MACHINE_CHAT_ID,
     rawText,
     deviceId: meta?.deviceSn,
   });
 
-  if (!duplicate) {
-    await enqueueProcessTelegramMessage(id);
-  }
+  await enqueueTelegramMessageIfNeeded(result);
 
   log("info", "BioFinger record ingested", {
     source,
-    telegramMessageDbId: id,
-    duplicate,
+    telegramMessageDbId: result.id,
+    duplicate: result.duplicate,
     deviceSn: meta?.deviceSn,
   });
 
-  return { id, duplicate };
+  return { id: result.id, duplicate: result.duplicate };
 }
 
 export async function ingestAdmsLogs(
@@ -67,15 +68,15 @@ export async function ingestAdmsLogs(
     const rawText = admsLogToVt490Text(entry);
     const messageId = admsMessageId(entry);
 
-    const { id, duplicate } = await saveTelegramWebhookMessage({
+    const result = await saveTelegramWebhookMessage({
       messageId,
       groupId: MACHINE_CHAT_ID,
       rawText,
       deviceId: meta?.deviceSn ?? entry.deviceSn,
     });
 
-    if (!duplicate) {
-      await enqueueProcessTelegramMessage(id);
+    await enqueueTelegramMessageIfNeeded(result);
+    if (shouldEnqueueTelegramProcessing(result)) {
       count++;
     }
   }

@@ -1,6 +1,13 @@
 import type { Employee, Prisma } from "@prisma/client";
 import { env } from "../config/env.js";
 import { log } from "../lib/logger.js";
+import { isTerminalIngestError } from "../lib/ingestErrors.js";
+import {
+  employeeDayIngestLockKey,
+  withPgAdvisoryLock,
+} from "../lib/pgAdvisoryLock.js";
+import { isPrismaUniqueViolation } from "../lib/prismaErrors.js";
+import type { SaveTelegramWebhookResult } from "../lib/telegramEnqueue.js";
 import { resolveBreakAttendanceEnabled } from "../lib/breakAttendance.js";
 import { prisma } from "../lib/prisma.js";
 import { toDateOnly } from "../utils/time.js";
@@ -151,7 +158,7 @@ const DEFAULT_SHIFT_ID = 2;
 
 export async function saveTelegramWebhookMessage(
   input: TelegramWebhookMessage
-): Promise<{ id: string; duplicate: boolean }> {
+): Promise<SaveTelegramWebhookResult> {
   if (
     env.telegramAllowedGroupIds.length > 0 &&
     !env.telegramAllowedGroupIds.some((id) => id === input.groupId)
@@ -160,35 +167,48 @@ export async function saveTelegramWebhookMessage(
     throw new Error("TELEGRAM_GROUP_NOT_ALLOWED");
   }
 
-  const existing = await prisma.telegramMessage.findUnique({
-    where: {
-      telegramGroupId_telegramMessageId: {
-        telegramGroupId: input.groupId,
-        telegramMessageId: input.messageId,
-      },
+  const lookup = {
+    telegramGroupId_telegramMessageId: {
+      telegramGroupId: input.groupId,
+      telegramMessageId: input.messageId,
     },
+  };
+
+  const existing = await prisma.telegramMessage.findUnique({
+    where: lookup,
   });
 
   if (existing) {
     log("info", "Duplicate telegram message ignored", {
       telegramMessageDbId: existing.id,
       messageId: input.messageId.toString(),
+      syncStatus: existing.syncStatus,
     });
-    return { id: existing.id, duplicate: true };
+    return { id: existing.id, duplicate: true, syncStatus: existing.syncStatus };
   }
 
-  const record = await prisma.telegramMessage.create({
-    data: {
-      telegramMessageId: input.messageId,
-      telegramGroupId: input.groupId,
-      rawText: input.rawText,
-      photoFileId: input.photoFileId,
-      deviceId: input.deviceId,
-      syncStatus: "pending",
-    },
-  });
+  try {
+    const record = await prisma.telegramMessage.create({
+      data: {
+        telegramMessageId: input.messageId,
+        telegramGroupId: input.groupId,
+        rawText: input.rawText,
+        photoFileId: input.photoFileId,
+        deviceId: input.deviceId,
+        syncStatus: "pending",
+      },
+    });
 
-  return { id: record.id, duplicate: false };
+    return { id: record.id, duplicate: false, syncStatus: record.syncStatus };
+  } catch (err) {
+    if (isPrismaUniqueViolation(err)) {
+      const raced = await prisma.telegramMessage.findUnique({ where: lookup });
+      if (raced) {
+        return { id: raced.id, duplicate: true, syncStatus: raced.syncStatus };
+      }
+    }
+    throw err;
+  }
 }
 
 export async function processTelegramMessageById(
@@ -320,7 +340,9 @@ export async function processTelegramMessageById(
       messageId: telegramMessageDbId,
       error: errorMessage,
     });
-    throw err;
+    if (!isTerminalIngestError(errorMessage)) {
+      throw err;
+    }
   }
 }
 
@@ -425,25 +447,48 @@ async function findOrCreateEmployee(
   }
 
   const telegramName = parsed.nama?.trim();
-  const employee = await prisma.employee.create({
-    data: {
+  try {
+    const employee = await prisma.employee.create({
+      data: {
+        nik: parsed.nik,
+        fullName: telegramName || `Karyawan ${parsed.nik}`,
+        branchId,
+        defaultShiftId: DEFAULT_SHIFT_ID,
+      },
+    });
+
+    await ensureUserAccountForEmployee(employee);
+
+    log("info", "Employee auto-created from Telegram", {
       nik: parsed.nik,
-      fullName: telegramName || `Karyawan ${parsed.nik}`,
+      fullName: employee.fullName,
       branchId,
-      defaultShiftId: DEFAULT_SHIFT_ID,
-    },
-  });
+      branchLabel,
+    });
 
-  await ensureUserAccountForEmployee(employee);
-
-  log("info", "Employee auto-created from Telegram", {
-    nik: parsed.nik,
-    fullName: employee.fullName,
-    branchId,
-    branchLabel,
-  });
-
-  return employee;
+    return employee;
+  } catch (err) {
+    if (isPrismaUniqueViolation(err)) {
+      const raced = await prisma.employee.findFirst({
+        where: { branchId, nik: parsed.nik, isActive: true },
+      });
+      if (raced) {
+        if (telegramName && !namesMatch(telegramName, raced.fullName)) {
+          throw new Error(
+            employeeNameMismatchError(
+              parsed.nik,
+              branchLabel,
+              raced.fullName,
+              telegramName
+            )
+          );
+        }
+        await ensureUserAccountForEmployee(raced);
+        return raced;
+      }
+    }
+    throw err;
+  }
 }
 
 /** Lepas / pindahkan record lama bila source message diproses ulang ke tanggal kerja lain. */
@@ -475,12 +520,14 @@ async function releaseSourceMessageIfWrongWorkDate(
   }
 
   const oldDate = linked.workDate;
-  await prisma.kpiDailyScore.deleteMany({
-    where: { employeeId: linked.employeeId, workDate: oldDate },
-  });
-  await prisma.attendanceRecord.update({
-    where: { id: linked.id },
-    data: { workDate: target },
+  await prisma.$transaction(async (tx) => {
+    await tx.kpiDailyScore.deleteMany({
+      where: { employeeId: linked.employeeId, workDate: oldDate },
+    });
+    await tx.attendanceRecord.update({
+      where: { id: linked.id },
+      data: { workDate: target },
+    });
   });
 }
 
@@ -588,6 +635,32 @@ export async function ingestManualAttendanceFromText(rawText: string): Promise<{
     }
 
     const errorMessage = err instanceof Error ? err.message : String(err);
+
+    if (errorMessage.includes("DUPLICATE_ATTENDANCE")) {
+      await prisma.telegramMessage.update({
+        where: { id: record.id },
+        data: {
+          syncStatus: "processed",
+          processedAt: new Date(),
+          errorMessage: "skipped_duplicate",
+        },
+      });
+      throw err;
+    }
+
+    if (isOffDayAttendanceError(err)) {
+      await prisma.telegramMessage.update({
+        where: { id: record.id },
+        data: {
+          syncStatus: "processed",
+          processedAt: new Date(),
+          parsedJson: parsed as unknown as Prisma.InputJsonValue,
+          errorMessage: "skipped_off_day",
+        },
+      });
+      throw err;
+    }
+
     await prisma.telegramMessage.update({
       where: { id: record.id },
       data: {
@@ -612,6 +685,32 @@ async function applyParsedAttendance(
     branch.id,
     branch.name
   );
+
+  const workDate = toDateOnly(parsedInput.workDate);
+  const lockKey = employeeDayIngestLockKey(employee.id, workDate);
+
+  return withPgAdvisoryLock(lockKey, () =>
+    applyParsedAttendanceLocked(
+      parsedInput,
+      sourceMessageId,
+      telegramGroupId,
+      photoFileId,
+      branch,
+      employee,
+      workDate
+    )
+  );
+}
+
+async function applyParsedAttendanceLocked(
+  parsedInput: ReturnType<typeof parseTelegramMessageText>,
+  sourceMessageId: string,
+  _telegramGroupId: bigint,
+  photoFileId: string | null,
+  branch: Awaited<ReturnType<typeof resolveBranchForAttendance>>,
+  employee: Employee,
+  workDate: Date
+): Promise<{ attendanceId: string; branchId: string; eventLabel: string }> {
   const resolvedBranch = branch;
 
   const typeConfig = employee.employeeTypeCode
@@ -638,7 +737,6 @@ async function applyParsedAttendance(
     );
   }
 
-  const workDate = toDateOnly(parsedInput.workDate);
   assertIngestWorkDateAllowed(workDate);
   await assertGridScheduleForAttendance(employee, workDate);
 

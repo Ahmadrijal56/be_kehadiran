@@ -4,6 +4,7 @@ import {
   notFound,
   validationError,
 } from "../lib/errors.js";
+import { invalidateAuthUserCache } from "../lib/authUserCache.js";
 import { writeAuditLog } from "./auditService.js";
 
 const SYSTEM_ROLES = new Set([
@@ -141,6 +142,14 @@ export async function assignRolePermissions(
     oldValues: { permission_codes: oldCodes },
     newValues: { permission_codes: permissionCodes },
   });
+
+  const roleUsers = await prisma.userRole.findMany({
+    where: { roleId },
+    select: { userId: true },
+  });
+  for (const { userId } of roleUsers) {
+    invalidateAuthUserCache(userId);
+  }
 
   return getRole(roleId);
 }

@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { env } from "../../config/env.js";
-import { enqueueProcessTelegramMessage } from "../../lib/queue.js";
+import { enqueueTelegramMessageIfNeeded } from "../../lib/telegramEnqueue.js";
 import { log } from "../../lib/logger.js";
 import {
   saveTelegramWebhookMessage,
@@ -55,16 +55,14 @@ telegramWebhookRouter.post("/telegram", async (req: Request, res: Response) => {
       };
     }
 
-    const { id, duplicate } = await saveTelegramWebhookMessage(payload);
+    const result = await saveTelegramWebhookMessage(payload);
 
-    if (!duplicate) {
-      await enqueueProcessTelegramMessage(id);
-    }
+    await enqueueTelegramMessageIfNeeded(result);
 
     return res.status(200).json({
       status: "ok",
-      id,
-      duplicate,
+      id: result.id,
+      duplicate: result.duplicate,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

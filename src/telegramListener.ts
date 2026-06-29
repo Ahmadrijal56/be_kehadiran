@@ -11,7 +11,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { env } from "./config/env.js";
-import { enqueueProcessTelegramMessage } from "./lib/queue.js";
+import { enqueueTelegramMessageIfNeeded } from "./lib/telegramEnqueue.js";
 import { log } from "./lib/logger.js";
 import { saveTelegramWebhookMessage } from "./services/telegramIngestService.js";
 import type { TelegramUpdate } from "./types/telegram.js";
@@ -144,21 +144,19 @@ async function handleUpdate(update: TelegramUpdate): Promise<void> {
   }
 
   try {
-    const { id, duplicate } = await saveTelegramWebhookMessage({
+    const result = await saveTelegramWebhookMessage({
       messageId: extracted.messageId,
       groupId: extracted.groupId,
       rawText: extracted.rawText,
       photoFileId: extracted.photoFileId,
     });
 
-    if (!duplicate) {
-      await enqueueProcessTelegramMessage(id);
-    }
+    await enqueueTelegramMessageIfNeeded(result);
 
     log("info", "Listener ingested message", {
-      telegramMessageDbId: id,
+      telegramMessageDbId: result.id,
       groupId: extracted.groupId.toString(),
-      duplicate,
+      duplicate: result.duplicate,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
