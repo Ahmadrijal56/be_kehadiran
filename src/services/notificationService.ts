@@ -17,33 +17,38 @@ import { employeeHasBranchManagerFeatures } from "./branchManagerFeaturesService
 import { log } from "../lib/logger.js";
 
 async function createNotification(args: Prisma.NotificationCreateArgs) {
-  const notif = await prisma.notification.create(args);
   const data = args.data as Prisma.NotificationUncheckedCreateInput;
-  if (data.userId && data.title && data.body) {
-    const branchId = extractNotificationBranchId(data.dataJson);
-    userMayReceiveBranchNotification(data.userId as string, branchId)
-      .then((allowed) => {
-        if (!allowed) {
-          log("info", "Push skipped — cabang di luar scope user", {
-            userId: data.userId,
-            branchId,
-          });
-          return;
-        }
-        return sendPushToUser(data.userId as string, {
-          title: data.title as string,
-          body: data.body as string,
-          data: data.dataJson
-            ? (data.dataJson as Record<string, unknown>)
-            : undefined,
-        });
-      })
-      .catch((err) => {
-        log("error", "Failed to send push notification", {
-          error: err instanceof Error ? err.message : String(err),
-          userId: data.userId,
-        });
+  const branchId = extractNotificationBranchId(data.dataJson);
+
+  if (data.userId) {
+    const allowed = await userMayReceiveBranchNotification(
+      data.userId as string,
+      branchId
+    );
+    if (!allowed) {
+      log("info", "Notification skipped — cabang di luar scope user", {
+        userId: data.userId,
+        branchId,
+        type: data.type,
       });
+      return null;
+    }
+  }
+
+  const notif = await prisma.notification.create(args);
+  if (data.userId && data.title && data.body) {
+    sendPushToUser(data.userId as string, {
+      title: data.title as string,
+      body: data.body as string,
+      data: data.dataJson
+        ? (data.dataJson as Record<string, unknown>)
+        : undefined,
+    }).catch((err) => {
+      log("error", "Failed to send push notification", {
+        error: err instanceof Error ? err.message : String(err),
+        userId: data.userId,
+      });
+    });
   }
   return notif;
 }
@@ -69,7 +74,7 @@ async function listBranchHeadRecipientsForBranch(
       employee: { branchId, isActive: true },
       employeeId: { not: null },
       userRoles: {
-        none: { role: { code: { in: ["owner", "developer", "manager"] } } },
+        none: { role: { code: { in: ["owner", "developer"] } } },
       },
     },
     select: { id: true, employeeId: true },
@@ -91,7 +96,14 @@ async function listBranchSupervisorRecipients(
     listManagerRecipientsForBranch(branchId),
     listBranchHeadRecipientsForBranch(branchId),
   ]);
-  return [...new Set([...managers, ...branchHeads])];
+  const candidateIds = [...new Set([...managers, ...branchHeads])];
+  const scoped: string[] = [];
+  for (const userId of candidateIds) {
+    if (await userMayReceiveBranchNotification(userId, branchId)) {
+      scoped.push(userId);
+    }
+  }
+  return scoped;
 }
 
 async function listOwnerRecipients(): Promise<string[]> {
