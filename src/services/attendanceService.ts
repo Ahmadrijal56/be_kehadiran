@@ -1,5 +1,5 @@
 import type { AttendanceType } from "@prisma/client";
-import { businessError } from "../lib/errors.js";
+import { offDayAttendanceError } from "../lib/errors.js";
 import { PendingScheduleError } from "../lib/pendingScheduleError.js";
 import { prisma } from "../lib/prisma.js";
 import { toDateOnly } from "../utils/time.js";
@@ -79,7 +79,7 @@ export async function processCheckIn(
   });
 
   if (await isExplicitOffDay(input.employeeId, workDate)) {
-    throw businessError("Hari ini jadwal libur — absensi tidak diharapkan");
+    throw offDayAttendanceError();
   }
 
   const dayState = (

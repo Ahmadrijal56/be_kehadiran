@@ -19,6 +19,7 @@ import {
   namesMatch,
 } from "./employeeMatching.js";
 import { invalidatePapanCaches } from "./papanCacheInvalidation.js";
+import { isOffDayAttendanceError } from "../lib/errors.js";
 import {
   isPendingScheduleError,
 } from "../lib/pendingScheduleError.js";
@@ -281,6 +282,28 @@ export async function processTelegramMessageById(
         },
       });
       log("debug", "Absensi duplikat dilewati", { messageId: telegramMessageDbId });
+      return;
+    }
+
+    if (isOffDayAttendanceError(err)) {
+      const parsed = correctBiofingerDateSkew(
+        parseTelegramMessageText(message.rawText),
+        message.receivedAt
+      );
+      await prisma.telegramMessage.update({
+        where: { id: message.id },
+        data: {
+          syncStatus: "processed",
+          processedAt: new Date(),
+          parsedJson: parsed as unknown as Prisma.InputJsonValue,
+          errorMessage: "skipped_off_day",
+        },
+      });
+      log("info", "Absensi BioFinger dilewati — jadwal libur", {
+        messageId: telegramMessageDbId,
+        nik: parsed.nik,
+        workDate: parsed.workDate.toISOString().slice(0, 10),
+      });
       return;
     }
 
