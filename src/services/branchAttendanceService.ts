@@ -57,6 +57,17 @@ export function attendanceIsLate(status: string, lateMinutes: number): boolean {
   return status === "late" || lateMinutes > 0;
 }
 
+/** Sudah check-in dan benar-benar terlambat (bukan tepat waktu / lebih awal). */
+export function attendanceRequiresLateExcuse(row: {
+  checkInAt?: Date | string | null;
+  status: string;
+  lateMinutes: number;
+}): boolean {
+  if (!row.checkInAt) return false;
+  if (row.status === "off" || row.status === "absent") return false;
+  return row.lateMinutes > 0;
+}
+
 export function rowHasCheckedIn(row: BranchEmployeeAttendance): boolean {
   return attendanceHasCheckedIn(row.status, row.check_in_at);
 }

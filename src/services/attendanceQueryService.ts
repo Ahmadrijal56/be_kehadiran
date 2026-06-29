@@ -20,6 +20,7 @@ import {
   isBeforeAttendanceKpiStart,
   resolveEligibleWorkDateMin,
 } from "./attendanceKpiWindowService.js";
+import { attendanceRequiresLateExcuse } from "./branchAttendanceService.js";
 
 export const LATE_EXCUSE_LOOKBACK_DAYS = 14;
 
@@ -970,16 +971,15 @@ export async function ensureAttendanceRecordForDate(
 }
 
 export function isLateExcuseEligibleRecord(
-  row: { status: string; lateMinutes: number; workDate: Date },
-  today: Date
+  row: {
+    status: string;
+    lateMinutes: number;
+    workDate: Date;
+    checkInAt?: Date | null;
+  },
+  _today: Date
 ): boolean {
-  const isToday =
-    row.workDate.toISOString().slice(0, 10) === today.toISOString().slice(0, 10);
-  return (
-    row.status === "late" ||
-    row.lateMinutes > 0 ||
-    (row.status === "absent" && isToday)
-  );
+  return attendanceRequiresLateExcuse(row);
 }
 
 export async function getAttendanceForLateExcuse(

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   attendanceHasCheckedIn,
   attendanceIsLate,
+  attendanceRequiresLateExcuse,
   computeBranchStatsFromRows,
   monitoringOverviewSortGroup,
   resolveMonitoringStatus,
@@ -173,6 +174,38 @@ describe("branch attendance stats", () => {
     expect(attendanceIsLate("left", 577)).toBe(true);
     expect(attendanceIsLate("present", 0)).toBe(false);
     expect(attendanceHasCheckedIn("left", new Date())).toBe(true);
+  });
+
+  it("attendanceRequiresLateExcuse — hanya check-in terlambat", () => {
+    const checkInAt = new Date("2026-06-03T02:05:00.000Z");
+    expect(
+      attendanceRequiresLateExcuse({
+        checkInAt,
+        status: "late",
+        lateMinutes: 5,
+      })
+    ).toBe(true);
+    expect(
+      attendanceRequiresLateExcuse({
+        checkInAt,
+        status: "present",
+        lateMinutes: 0,
+      })
+    ).toBe(false);
+    expect(
+      attendanceRequiresLateExcuse({
+        checkInAt: null,
+        status: "absent",
+        lateMinutes: 0,
+      })
+    ).toBe(false);
+    expect(
+      attendanceRequiresLateExcuse({
+        checkInAt,
+        status: "late",
+        lateMinutes: 0,
+      })
+    ).toBe(false);
   });
 
   it("urutan tab Semua — masuk, terlambat, belum absen, pulang, libur", () => {

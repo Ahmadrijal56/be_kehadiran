@@ -11,6 +11,7 @@ import {
 import type { KpiScoreResult } from "./kpiScoringService.js";
 import { invalidatePapanCaches } from "./papanCacheInvalidation.js";
 import { computeCheckInKpiFields } from "./attendanceKpiRecalcService.js";
+import { attendanceRequiresLateExcuse } from "./branchAttendanceService.js";
 import {
   notifyLateAttendanceForReview,
   notifyAttendanceLate,
@@ -182,7 +183,13 @@ export async function processCheckIn(
     update: {},
   });
 
-  if (status === "late" || lateMinutes > 0) {
+  if (
+    attendanceRequiresLateExcuse({
+      checkInAt: input.checkInAt,
+      status,
+      lateMinutes,
+    })
+  ) {
     const shiftWindow = await getBranchShiftWindow(employee.branchId, shiftId);
     const shift: AttendanceShiftContext = {
       shift_id: shiftId,

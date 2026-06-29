@@ -10,6 +10,7 @@ import {
   notifyAttendanceMissing,
   type AttendanceShiftContext,
 } from "./notificationService.js";
+import { attendanceRequiresLateExcuse } from "./branchAttendanceService.js";
 
 const TIMEZONE = "Asia/Jakarta";
 
@@ -213,8 +214,7 @@ export async function syncAttendanceRemindersForUser(
 
   if (
     attendance &&
-    (attendance.status === "late" || attendance.lateMinutes > 0) &&
-    attendance.checkInAt
+    attendanceRequiresLateExcuse(attendance)
   ) {
     const dup = await hasNotificationToday(
       userId,
