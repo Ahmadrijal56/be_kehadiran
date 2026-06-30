@@ -36,6 +36,11 @@ import {
 import { currentYearMonthWib } from "../../utils/format.js";
 import { prisma } from "../../lib/prisma.js";
 import {
+  markPwaInstalled,
+  reconcilePwaInstallStatus,
+  syncPwaClientState,
+} from "../../services/pwaTrackingService.js";
+import {
   getBranchLiveAttendanceBoard,
   getOrganizationLiveAttendanceBoard,
 } from "../../services/attendanceLiveBoardService.js";
@@ -346,17 +351,47 @@ meRouter.post(
 );
 
 meRouter.post(
-  "/pwa-install",
-  requirePermission("attendance.read.self"), // Basic permission required for any logged in user
+  "/pwa-sync",
+  requirePermission("attendance.read.self"),
   asyncHandler(async (req, res) => {
     const userId = req.user!.id;
-    await prisma.user.update({
-      where: { id: userId },
-      data: {
-        pwaInstalled: true,
-        pwaInstalledAt: new Date(),
-      },
+    const isStandalone = Boolean(req.body?.is_standalone);
+    const hasPushSubscription = Boolean(req.body?.has_push_subscription);
+
+    await syncPwaClientState(userId, {
+      isStandalone,
+      hasPushSubscription,
     });
+
+    const uninstalled = await reconcilePwaInstallStatus(userId, {
+      hasPushSubscription,
+    });
+
+    res.json({
+      message: uninstalled ? "PWA status updated (uninstall detected)" : "PWA status synced",
+      uninstalled_detected: uninstalled,
+    });
+  })
+);
+
+meRouter.post(
+  "/pwa-install",
+  requirePermission("attendance.read.self"),
+  asyncHandler(async (req, res) => {
+    await markPwaInstalled(req.user!.id);
     res.json({ message: "PWA install status updated" });
+  })
+);
+
+/** @deprecated Gunakan /pwa-sync */
+meRouter.post(
+  "/pwa-open",
+  requirePermission("attendance.read.self"),
+  asyncHandler(async (req, res) => {
+    await syncPwaClientState(req.user!.id, {
+      isStandalone: true,
+      hasPushSubscription: true,
+    });
+    res.json({ message: "PWA open recorded" });
   })
 );

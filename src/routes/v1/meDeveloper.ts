@@ -49,6 +49,11 @@ import {
 } from "../../services/developerSupportAttendanceService.js";
 import { handleDeveloperMonitorStream } from "./developerMonitorStream.js";
 import { notifyDeveloperTest } from "../../services/notificationService.js";
+import { verifyAndPrunePushSubscriptions } from "../../services/pushNotificationService.js";
+import {
+  reconcilePwaInstallStatus,
+  resolvePwaClientStatus,
+} from "../../services/pwaTrackingService.js";
 import {
   createDeveloperAnnouncement,
   listDeveloperAnnouncements,
@@ -287,26 +292,51 @@ meDeveloperRouter.get(
           },
         },
         userRoles: { include: { role: true } },
+        push_subscriptions: { select: { id: true } },
       },
       orderBy: [
+        { pwaOpenCount: "desc" },
+        { pwaLastOpenedAt: "desc" },
         { pwaInstalled: "desc" },
         { employee: { fullName: "asc" } },
       ],
     });
 
-    const mapped = users.map((u) => ({
-      userId: u.id,
-      nik: u.nik,
-      fullName: u.employee?.fullName ?? "No Employee Data",
-      role:
-        u.userRoles.map((ur) => ur.role.name).join(", ") || "Unknown",
-      branchName: u.employee?.branch?.name ?? "Unknown",
-      pwaInstalled: u.pwaInstalled,
-      pwaInstalledAt: u.pwaInstalledAt?.toISOString() ?? null,
-    }));
+    const mapped = users.map((u) => {
+      const pushSubscriptionCount = u.push_subscriptions.length;
+      const pwaStatus = resolvePwaClientStatus({
+        pwaInstalled: u.pwaInstalled,
+        pwaLastOpenedAt: u.pwaLastOpenedAt,
+        pwaUninstalledAt: u.pwaUninstalledAt,
+        pushSubscriptionCount,
+      });
+      return {
+        userId: u.id,
+        nik: u.nik,
+        fullName: u.employee?.fullName ?? "No Employee Data",
+        role:
+          u.userRoles.map((ur) => ur.role.name).join(", ") || "Unknown",
+        branchName: u.employee?.branch?.name ?? "Unknown",
+        pwaInstalled: u.pwaInstalled,
+        pwaInstalledAt: u.pwaInstalledAt?.toISOString() ?? null,
+        pwaUninstalledAt: u.pwaUninstalledAt?.toISOString() ?? null,
+        pwaOpenCount: u.pwaOpenCount,
+        pwaLastOpenedAt: u.pwaLastOpenedAt?.toISOString() ?? null,
+        pwaLastBrowserAt: u.pwaLastBrowserAt?.toISOString() ?? null,
+        pushSubscriptionCount,
+        pwaStatus,
+      };
+    });
 
     const totalUsers = users.length;
     const totalInstalled = users.filter((u) => u.pwaInstalled).length;
+    const totalUninstalled = users.filter((u) => u.pwaUninstalledAt).length;
+    const duplicatePushUsers = users.filter((u) => u.push_subscriptions.length > 1).length;
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const activeLast7Days = users.filter(
+      (u) => u.pwaLastOpenedAt && u.pwaLastOpenedAt >= sevenDaysAgo
+    ).length;
 
     res.json({
       data: {
@@ -314,6 +344,9 @@ meDeveloperRouter.get(
           totalUsers,
           totalInstalled,
           percentage: totalUsers > 0 ? Math.round((totalInstalled / totalUsers) * 100) : 0,
+          activeLast7Days,
+          totalUninstalled,
+          duplicatePushUsers,
         },
         users: mapped,
       },
@@ -579,10 +612,39 @@ meDeveloperRouter.post(
       throw validationError(`User tidak ditemukan untuk input: ${inputId}`);
     }
 
-    const count = await prisma.push_subscriptions.count({
-      where: { user_id: userRow.id }
+    const probe = await verifyAndPrunePushSubscriptions(userRow.id);
+    const uninstalled = await reconcilePwaInstallStatus(userRow.id);
+
+    const user = await prisma.user.findUnique({
+      where: { id: userRow.id },
+      select: {
+        pwaInstalled: true,
+        pwaLastOpenedAt: true,
+        pwaUninstalledAt: true,
+        pwaInstalledAt: true,
+      },
     });
 
-    res.json({ data: { user_id: userRow.id, active_subscriptions: count } });
+    const pwaStatus = resolvePwaClientStatus({
+      pwaInstalled: user?.pwaInstalled ?? false,
+      pwaLastOpenedAt: user?.pwaLastOpenedAt ?? null,
+      pwaUninstalledAt: user?.pwaUninstalledAt ?? null,
+      pushSubscriptionCount: probe.active,
+    });
+
+    res.json({
+      data: {
+        user_id: userRow.id,
+        active_subscriptions: probe.active,
+        had_duplicates: probe.initial > 1,
+        removed_stale_subscriptions: probe.removed,
+        endpoints: probe.endpoints,
+        pwa_installed: user?.pwaInstalled ?? false,
+        pwa_installed_at: user?.pwaInstalledAt?.toISOString() ?? null,
+        pwa_uninstalled_at: user?.pwaUninstalledAt?.toISOString() ?? null,
+        pwa_status: pwaStatus,
+        uninstalled_detected: uninstalled,
+      },
+    });
   })
 );
