@@ -7,6 +7,7 @@ import {
   attendanceHasCheckedIn,
   attendanceIsLate,
 } from "./branchAttendanceService.js";
+import { dedupeDailyScoresByWorkDate } from "./kpiQueryService.js";
 import {
   currentYearMonthWib,
   formatWibDateTimeLabel,
@@ -131,6 +132,54 @@ async function computeMonthlyAttendanceStats(
   }
 
   return stats;
+}
+
+/** Poin bulanan dijumlah dari skor harian sampai tanggal periode (tanpa tunggu akhir bulan). */
+async function computePeriodPointsFromDailyScores(
+  employeeIds: string[],
+  fromDate: Date,
+  toDate: Date
+): Promise<Map<string, number>> {
+  const points = new Map<string, number>();
+  if (employeeIds.length === 0) return points;
+
+  const scores = await prisma.kpiDailyScore.findMany({
+    where: {
+      employeeId: { in: employeeIds },
+      workDate: { gte: fromDate, lte: toDate },
+    },
+    select: {
+      employeeId: true,
+      workDate: true,
+      totalPoints: true,
+      lateMinutes: true,
+    },
+  });
+
+  const byEmployee = new Map<
+    string,
+    Array<{
+      workDate: Date;
+      totalPoints: number;
+      lateMinutes: number;
+      employeeId: string;
+    }>
+  >();
+  for (const row of scores) {
+    const list = byEmployee.get(row.employeeId) ?? [];
+    list.push(row);
+    byEmployee.set(row.employeeId, list);
+  }
+
+  for (const [employeeId, rows] of byEmployee) {
+    const deduped = dedupeDailyScoresByWorkDate(rows);
+    points.set(
+      employeeId,
+      deduped.reduce((sum, row) => sum + row.totalPoints, 0)
+    );
+  }
+
+  return points;
 }
 
 function resolveReportStatus(
@@ -315,7 +364,11 @@ export async function getDailyReport(
   };
 }
 
-export async function getMonthlyReport(yearMonth?: string, branchId?: string) {
+/** Rekap agregat per karyawan: poin, hadir, libur, telat (tab Ringkasan). */
+export async function getEmployeeSummaryReport(
+  yearMonth?: string,
+  branchId?: string
+) {
   const branch = await resolveBranchFilter(branchId);
   const ym = yearMonth ?? currentYearMonthWib();
   const { fromDate, toDate, is_partial_month } =
@@ -365,11 +418,10 @@ export async function getMonthlyReport(yearMonth?: string, branchId?: string) {
     aggregates.map((a) => [a.employeeId, a])
   );
 
-  const attendanceStats = await computeMonthlyAttendanceStats(
-    employeeIds,
-    fromDate,
-    toDate
-  );
+  const [attendanceStats, periodPoints] = await Promise.all([
+    computeMonthlyAttendanceStats(employeeIds, fromDate, toDate),
+    computePeriodPointsFromDailyScores(employeeIds, fromDate, toDate),
+  ]);
 
   const items = employees.map((emp) => {
     const agg = aggregateByEmployee.get(emp.id);
@@ -378,12 +430,12 @@ export async function getMonthlyReport(yearMonth?: string, branchId?: string) {
       nik: emp.nik,
       full_name: emp.fullName,
       branch_code: emp.branch.code,
-      total_points: agg?.totalPoints ?? 0,
+      total_points: periodPoints.get(emp.id) ?? 0,
       total_late_count: stats?.total_late_count ?? 0,
       total_present_days: stats?.total_present_days ?? 0,
       total_off_days: stats?.total_off_days ?? 0,
-      rank_branch: agg?.rankBranch ?? null,
-      rank_global: agg?.rankGlobal ?? null,
+      rank_branch: is_partial_month ? null : (agg?.rankBranch ?? null),
+      rank_global: is_partial_month ? null : (agg?.rankGlobal ?? null),
     };
   });
 
@@ -496,10 +548,26 @@ function thinBorder(): Partial<ExcelJS.Borders> {
   return { top: side, left: side, bottom: side, right: side };
 }
 
-function reportTypeTitle(type: "daily" | "monthly" | "late"): string {
+function reportTypeTitle(
+  type: "daily" | "monthly" | "late" | "summary"
+): string {
   if (type === "daily") return "LAPORAN KEHADIRAN HARIAN";
-  if (type === "monthly") return "LAPORAN KPI BULANAN";
+  if (type === "monthly") return "LAPORAN KEHADIRAN BULANAN";
+  if (type === "summary") return "RINGKASAN STATISTIK KARYAWAN";
   return "LAPORAN KETERLAMBATAN";
+}
+
+/** @deprecated Gunakan getEmployeeSummaryReport */
+export const getMonthlyReport = getEmployeeSummaryReport;
+
+export function yearMonthToDateRange(yearMonth: string) {
+  const { fromDate, toDate, is_partial_month } =
+    resolveMonthlyReportRange(yearMonth);
+  return {
+    from: fromDate.toISOString().slice(0, 10),
+    to: toDate.toISOString().slice(0, 10),
+    is_partial_month,
+  };
 }
 
 const EMPTY_TYPE_LABEL = "Belum diatur";
@@ -672,131 +740,6 @@ async function loadActiveBranches(branchId?: string) {
   });
 }
 
-function aggregateLateCounts(
-  items: Array<{
-    nik: string;
-    full_name: string;
-    branch_code: string;
-    status: string;
-    late_minutes: number;
-  }>
-) {
-  const counts = new Map<
-    string,
-    {
-      nik: string;
-      full_name: string;
-      branch_code: string;
-      total_late_count: number;
-    }
-  >();
-  for (const item of items) {
-    if (!attendanceIsLate(item.status, item.late_minutes)) continue;
-    const existing = counts.get(item.nik);
-    if (existing) {
-      existing.total_late_count += 1;
-    } else {
-      counts.set(item.nik, {
-        nik: item.nik,
-        full_name: item.full_name,
-        branch_code: item.branch_code,
-        total_late_count: 1,
-      });
-    }
-  }
-  return [...counts.values()].sort(
-    (a, b) =>
-      b.total_late_count - a.total_late_count ||
-      a.full_name.localeCompare(b.full_name, "id")
-  );
-}
-
-function aggregateLateEventCounts(
-  items: Array<{
-    nik: string;
-    full_name: string;
-    branch_code: string;
-  }>
-) {
-  const counts = new Map<
-    string,
-    {
-      nik: string;
-      full_name: string;
-      branch_code: string;
-      total_late_count: number;
-    }
-  >();
-  for (const item of items) {
-    const existing = counts.get(item.nik);
-    if (existing) {
-      existing.total_late_count += 1;
-    } else {
-      counts.set(item.nik, {
-        nik: item.nik,
-        full_name: item.full_name,
-        branch_code: item.branch_code,
-        total_late_count: 1,
-      });
-    }
-  }
-  return [...counts.values()].sort(
-    (a, b) =>
-      b.total_late_count - a.total_late_count ||
-      a.full_name.localeCompare(b.full_name, "id")
-  );
-}
-
-function addDailyLateSummarySheet(
-  workbook: ExcelJS.Workbook,
-  branch: { code: string; name: string },
-  items: Array<{
-    nik: string;
-    full_name: string;
-    branch_code: string;
-    status: string;
-    late_minutes: number;
-  }>,
-  periodLabel: string
-): void {
-  const summary = aggregateLateCounts(items);
-  const columns: ExcelColumnDef[] = [
-    { header: "ID Karyawan", key: "nik", width: 12, align: "center", text: true },
-    { header: "Nama Lengkap", key: "full_name", width: 28 },
-    { header: "Jumlah Telat", key: "total_late_count", width: 14, align: "center" },
-  ];
-
-  const sheet = workbook.addWorksheet(
-    sanitizeSheetName(`${branch.code}-Telat`)
-  );
-  const hasData = summary.length > 0;
-  writeTitleBlock(sheet, {
-    title: "RINGKASAN KETERLAMBATAN PER KARYAWAN",
-    meta: [
-      `Cabang: ${branch.name} (${branch.code})`,
-      `Periode: ${periodLabel}`,
-      `Dicetak: ${printedAtLabel()}`,
-      hasData
-        ? `Total karyawan terlambat: ${summary.length}`
-        : "Status: Tidak ada keterlambatan pada periode ini",
-    ],
-    colSpan: columns.length,
-  });
-  configureColumns(sheet, columns);
-
-  if (!hasData) {
-    writeEmptyBranchState(
-      sheet,
-      columns,
-      "Tidak ada absen masuk terlambat (menit telat > 0) untuk cabang ini pada periode yang dipilih."
-    );
-    return;
-  }
-
-  styleHeaderRow(sheet, columns);
-  writeDataRows(sheet, columns, summary as unknown as Record<string, unknown>[]);
-}
-
 function addDailyBranchSheet(
   workbook: ExcelJS.Workbook,
   branch: { code: string; name: string },
@@ -811,7 +754,8 @@ function addDailyBranchSheet(
     check_out_at: string | null;
     late_minutes: number;
   }>,
-  periodLabel: string
+  periodLabel: string,
+  reportKind: "daily" | "monthly" = "daily"
 ): void {
   const columns: ExcelColumnDef[] = [
     { header: "Tanggal", key: "work_date", width: 13, align: "center" },
@@ -828,7 +772,7 @@ function addDailyBranchSheet(
   const sheet = workbook.addWorksheet(sanitizeSheetName(branch.code));
   const hasData = items.length > 0;
   writeTitleBlock(sheet, {
-    title: reportTypeTitle("daily"),
+    title: reportTypeTitle(reportKind),
     meta: [
       `Cabang: ${branch.name} (${branch.code})`,
       `Periode: ${periodLabel}`,
@@ -868,7 +812,7 @@ function addDailyBranchSheet(
   writeDataRows(sheet, columns, rows, { statusKey: "status" });
 }
 
-function addMonthlyBranchSheet(
+function addEmployeeSummarySheet(
   workbook: ExcelJS.Workbook,
   branch: { code: string; name: string },
   items: Array<{
@@ -897,7 +841,7 @@ function addMonthlyBranchSheet(
   const sheet = workbook.addWorksheet(sanitizeSheetName(branch.code));
   const hasData = items.length > 0;
   writeTitleBlock(sheet, {
-    title: reportTypeTitle("monthly"),
+    title: reportTypeTitle("summary"),
     meta: [
       `Cabang: ${branch.name} (${branch.code})`,
       `Periode: ${periodLabel}`,
@@ -977,54 +921,6 @@ function addLateBranchSheet(
   writeDataRows(sheet, columns, rows as unknown as Record<string, unknown>[]);
 }
 
-function addLateSummarySheet(
-  workbook: ExcelJS.Workbook,
-  branch: { code: string; name: string },
-  items: Array<{
-    nik: string;
-    full_name: string;
-    branch_code: string;
-  }>,
-  periodLabel: string
-): void {
-  const summary = aggregateLateEventCounts(items);
-  const columns: ExcelColumnDef[] = [
-    { header: "ID Karyawan", key: "nik", width: 12, align: "center", text: true },
-    { header: "Nama Lengkap", key: "full_name", width: 28 },
-    { header: "Jumlah Telat", key: "total_late_count", width: 14, align: "center" },
-  ];
-
-  const sheet = workbook.addWorksheet(
-    sanitizeSheetName(`${branch.code}-Telat`)
-  );
-  const hasData = summary.length > 0;
-  writeTitleBlock(sheet, {
-    title: "RINGKASAN KETERLAMBATAN PER KARYAWAN",
-    meta: [
-      `Cabang: ${branch.name} (${branch.code})`,
-      `Periode: ${periodLabel}`,
-      `Dicetak: ${printedAtLabel()}`,
-      hasData
-        ? `Total kejadian telat: ${items.length} · ${summary.length} karyawan`
-        : "Status: Tidak ada keterlambatan pada periode ini",
-    ],
-    colSpan: columns.length,
-  });
-  configureColumns(sheet, columns);
-
-  if (!hasData) {
-    writeEmptyBranchState(
-      sheet,
-      columns,
-      "Tidak ada absen masuk terlambat untuk cabang ini pada periode yang dipilih."
-    );
-    return;
-  }
-
-  styleHeaderRow(sheet, columns);
-  writeDataRows(sheet, columns, summary as unknown as Record<string, unknown>[]);
-}
-
 function addEmptyInfoSheet(
   workbook: ExcelJS.Workbook,
   message: string
@@ -1040,7 +936,7 @@ function addEmptyInfoSheet(
 }
 
 export async function buildReportExcel(params: {
-  type: "daily" | "monthly" | "late";
+  type: "daily" | "monthly" | "late" | "summary";
   from?: string;
   to?: string;
   year_month?: string;
@@ -1072,11 +968,32 @@ export async function buildReportExcel(params: {
       for (const branch of branches) {
         const items = byBranch.get(branch.code) ?? [];
         addDailyBranchSheet(workbook, branch, items, periodLabel);
-        addDailyLateSummarySheet(workbook, branch, items, periodLabel);
       }
     }
   } else if (params.type === "monthly") {
-    const report = await getMonthlyReport(
+    const ym = params.year_month ?? currentYearMonthWib();
+    const range = yearMonthToDateRange(ym);
+    const report = await getDailyReport(range.from, range.to, params.branch_id);
+    const periodLabel = range.is_partial_month
+      ? `${range.from} s.d. ${range.to} (belum akhir bulan)`
+      : `${range.from} s.d. ${range.to}`;
+    const byBranch = new Map<string, typeof report.items>();
+    for (const item of report.items) {
+      const list = byBranch.get(item.branch_code) ?? [];
+      list.push(item);
+      byBranch.set(item.branch_code, list);
+    }
+
+    if (branches.length === 0) {
+      addEmptyInfoSheet(workbook, "Tidak ada cabang aktif untuk laporan ini.");
+    } else {
+      for (const branch of branches) {
+        const items = byBranch.get(branch.code) ?? [];
+        addDailyBranchSheet(workbook, branch, items, periodLabel, "monthly");
+      }
+    }
+  } else if (params.type === "summary") {
+    const report = await getEmployeeSummaryReport(
       params.year_month,
       params.branch_id
     );
@@ -1095,7 +1012,7 @@ export async function buildReportExcel(params: {
     } else {
       for (const branch of branches) {
         const items = byBranch.get(branch.code) ?? [];
-        addMonthlyBranchSheet(workbook, branch, items, periodLabel);
+        addEmployeeSummarySheet(workbook, branch, items, periodLabel);
       }
     }
   } else {
@@ -1118,7 +1035,6 @@ export async function buildReportExcel(params: {
       for (const branch of branches) {
         const items = byBranch.get(branch.code) ?? [];
         addLateBranchSheet(workbook, branch, items, periodLabel);
-        addLateSummarySheet(workbook, branch, items, periodLabel);
       }
     }
   }

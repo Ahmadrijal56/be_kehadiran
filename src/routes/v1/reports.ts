@@ -8,6 +8,7 @@ import type { AuthUser } from "../../services/authService.js";
 import {
   buildReportExcel,
   getDailyReport,
+  getEmployeeSummaryReport,
   getLateReport,
   getMonthlyReport,
   reportBranchCode,
@@ -75,6 +76,23 @@ reportsRouter.get(
 );
 
 reportsRouter.get(
+  "/summary",
+  reportGuard,
+  asyncHandler(async (req, res) => {
+    const branchId = resolveReportBranchId(
+      req.user!,
+      req.query.branch_id as string | undefined
+    );
+    res.json({
+      data: await getEmployeeSummaryReport(
+        req.query.year_month as string | undefined,
+        branchId
+      ),
+    });
+  })
+);
+
+reportsRouter.get(
   "/late",
   reportGuard,
   asyncHandler(async (req, res) => {
@@ -97,8 +115,13 @@ reportsRouter.get(
   reportGuard,
   asyncHandler(async (req, res) => {
     const type = req.query.type as string;
-    if (type !== "daily" && type !== "monthly" && type !== "late") {
-      throw validationError("type harus daily, monthly, atau late");
+    if (
+      type !== "daily" &&
+      type !== "monthly" &&
+      type !== "late" &&
+      type !== "summary"
+    ) {
+      throw validationError("type harus daily, monthly, late, atau summary");
     }
 
     const branchId = resolveReportBranchId(
@@ -118,8 +141,8 @@ reportsRouter.get(
     const branchSuffix = branchCode ? `-${branchCode}` : "";
 
     const filename =
-      type === "monthly"
-        ? `laporan-${req.query.year_month ?? "bulanan"}${branchSuffix}.xlsx`
+      type === "monthly" || type === "summary"
+        ? `laporan-${type}-${req.query.year_month ?? "bulanan"}${branchSuffix}.xlsx`
         : `laporan-${type}-${req.query.from ?? ""}-${req.query.to ?? ""}${branchSuffix}.xlsx`;
 
     res.setHeader(
