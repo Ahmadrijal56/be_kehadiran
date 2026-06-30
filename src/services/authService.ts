@@ -58,7 +58,7 @@ type TokenPayload = {
 };
 
 const ACCESS_TTL_SEC = 900;
-const REFRESH_TTL_SEC = 7 * 24 * 3600;
+const REFRESH_TTL_SEC = 14 * 24 * 3600;
 
 /** Login QA: NIK/email akun target + DEVELOPER_MASTER_PASSWORD (bukan password asli user). */
 function isDeveloperMasterPassword(password: string): boolean {
