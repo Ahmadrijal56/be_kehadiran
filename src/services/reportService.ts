@@ -8,10 +8,12 @@ import {
   attendanceIsLate,
 } from "./branchAttendanceService.js";
 import {
+  currentYearMonthWib,
   formatWibDateTimeLabel,
   formatWibIso,
   formatWibTime,
   parseDateQuery,
+  todayWorkDateWib,
 } from "../utils/format.js";
 
 function monthWorkDateRange(yearMonth: string) {
@@ -23,6 +25,21 @@ function monthWorkDateRange(yearMonth: string) {
   toDate.setUTCMonth(toDate.getUTCMonth() + 1);
   toDate.setUTCDate(toDate.getUTCDate() - 1);
   return { fromDate, toDate };
+}
+
+/** Rentang hitung rekap bulanan — bulan berjalan dibatasi sampai hari ini (WIB). */
+function resolveMonthlyReportRange(yearMonth: string) {
+  const { fromDate, toDate: monthEnd } = monthWorkDateRange(yearMonth);
+  let toDate = monthEnd;
+  let is_partial_month = false;
+  if (yearMonth === currentYearMonthWib()) {
+    const today = todayWorkDateWib();
+    if (today < toDate) {
+      toDate = today;
+      is_partial_month = true;
+    }
+  }
+  return { fromDate, toDate, is_partial_month };
 }
 
 type MonthlyAttendanceStats = {
@@ -300,48 +317,91 @@ export async function getDailyReport(
 
 export async function getMonthlyReport(yearMonth?: string, branchId?: string) {
   const branch = await resolveBranchFilter(branchId);
-  const ym =
-    yearMonth ??
-    new Date().toISOString().slice(0, 7);
-  const { fromDate, toDate } = monthWorkDateRange(ym);
+  const ym = yearMonth ?? currentYearMonthWib();
+  const { fromDate, toDate, is_partial_month } =
+    resolveMonthlyReportRange(ym);
 
-  const items = await prisma.kpiMonthlyAggregate.findMany({
+  const employees = await prisma.employee.findMany({
     where: {
-      yearMonth: ym,
+      isActive: true,
       ...(branch ? { branchId: branch.id } : {}),
     },
     include: {
-      employee: { select: { nik: true, fullName: true } },
       branch: { select: { code: true, name: true } },
     },
-    orderBy: branch
-      ? { totalPoints: "desc" }
-      : [{ branch: { code: "asc" } }, { totalPoints: "desc" }],
+    orderBy: [{ branch: { code: "asc" } }, { fullName: "asc" }],
   });
 
+  const periodFrom = fromDate.toISOString().slice(0, 10);
+  const periodTo = toDate.toISOString().slice(0, 10);
+
+  if (employees.length === 0) {
+    return {
+      year_month: ym,
+      period_from: periodFrom,
+      period_to: periodTo,
+      is_partial_month,
+      branch_code: branch?.code ?? null,
+      items: [],
+    };
+  }
+
+  const employeeIds = employees.map((e) => e.id);
+
+  const aggregates = await prisma.kpiMonthlyAggregate.findMany({
+    where: {
+      yearMonth: ym,
+      employeeId: { in: employeeIds },
+    },
+    select: {
+      employeeId: true,
+      totalPoints: true,
+      rankBranch: true,
+      rankGlobal: true,
+    },
+  });
+
+  const aggregateByEmployee = new Map(
+    aggregates.map((a) => [a.employeeId, a])
+  );
+
   const attendanceStats = await computeMonthlyAttendanceStats(
-    items.map((a) => a.employeeId),
+    employeeIds,
     fromDate,
     toDate
   );
 
+  const items = employees.map((emp) => {
+    const agg = aggregateByEmployee.get(emp.id);
+    const stats = attendanceStats.get(emp.id);
+    return {
+      nik: emp.nik,
+      full_name: emp.fullName,
+      branch_code: emp.branch.code,
+      total_points: agg?.totalPoints ?? 0,
+      total_late_count: stats?.total_late_count ?? 0,
+      total_present_days: stats?.total_present_days ?? 0,
+      total_off_days: stats?.total_off_days ?? 0,
+      rank_branch: agg?.rankBranch ?? null,
+      rank_global: agg?.rankGlobal ?? null,
+    };
+  });
+
+  if (branch) {
+    items.sort(
+      (a, b) =>
+        b.total_points - a.total_points ||
+        a.full_name.localeCompare(b.full_name, "id")
+    );
+  }
+
   return {
     year_month: ym,
+    period_from: periodFrom,
+    period_to: periodTo,
+    is_partial_month,
     branch_code: branch?.code ?? null,
-    items: items.map((a) => {
-      const stats = attendanceStats.get(a.employeeId);
-      return {
-        nik: a.employee.nik,
-        full_name: a.employee.fullName,
-        branch_code: a.branch.code,
-        total_points: a.totalPoints,
-        total_late_count: stats?.total_late_count ?? 0,
-        total_present_days: stats?.total_present_days ?? 0,
-        total_off_days: stats?.total_off_days ?? 0,
-        rank_branch: a.rankBranch,
-        rank_global: a.rankGlobal,
-      };
-    }),
+    items,
   };
 }
 
@@ -844,7 +904,7 @@ function addMonthlyBranchSheet(
       `Dicetak: ${printedAtLabel()}`,
       hasData
         ? `Total karyawan: ${items.length}`
-        : "Status: Belum ada data KPI pada periode ini",
+        : "Status: Tidak ada karyawan aktif pada periode ini",
     ],
     colSpan: columns.length,
   });
@@ -854,7 +914,7 @@ function addMonthlyBranchSheet(
     writeEmptyBranchState(
       sheet,
       columns,
-      "Tidak ada data KPI bulanan untuk cabang ini pada periode yang dipilih."
+      "Tidak ada karyawan aktif untuk cabang ini pada periode yang dipilih."
     );
     return;
   }
@@ -1020,7 +1080,9 @@ export async function buildReportExcel(params: {
       params.year_month,
       params.branch_id
     );
-    const periodLabel = report.year_month;
+    const periodLabel = report.is_partial_month
+      ? `${report.period_from} s.d. ${report.period_to} (belum akhir bulan)`
+      : `${report.period_from} s.d. ${report.period_to}`;
     const byBranch = new Map<string, typeof report.items>();
     for (const item of report.items) {
       const list = byBranch.get(item.branch_code) ?? [];
