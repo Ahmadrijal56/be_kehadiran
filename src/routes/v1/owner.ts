@@ -11,7 +11,6 @@ import {
   getOwnerBranchesComparison,
 } from "../../services/ownerDashboardService.js";
 import { getGlobalLeaderboard } from "../../services/leaderboardService.js";
-import { listBranchMissingLateExcuses } from "../../services/lateExcuseService.js";
 import { attachLeaderboardAvatars } from "../../services/avatarService.js";
 import { listAllUsers } from "../../services/branchUserService.js";
 import {
@@ -190,19 +189,12 @@ ownerRouter.get(
       countByBranch.set(branchId, (countByBranch.get(branchId) ?? 0) + g._count.id);
     }
 
-    const missingPromises = branches.map((b) => listBranchMissingLateExcuses(b.id));
-    const missingResults = await Promise.all(missingPromises);
-
-    const byBranch = branches.map((b, i) => {
-      const pendingCount = countByBranch.get(b.id) ?? 0;
-      const missingCount = missingResults[i].length;
-      return {
-        id: b.id,
-        code: b.code,
-        name: b.name,
-        pending_count: pendingCount + missingCount,
-      };
-    });
+    const byBranch = branches.map((b) => ({
+      id: b.id,
+      code: b.code,
+      name: b.name,
+      pending_count: countByBranch.get(b.id) ?? 0,
+    }));
 
     const total = byBranch.reduce((sum, b) => sum + b.pending_count, 0);
 

@@ -6,15 +6,23 @@ import { userHasBranchAccess } from "./branchMembershipService.js";
 import { assertBranchAccess } from "./branchAccess.js";
 import { todayWorkDateWib, formatWibIso } from "../utils/format.js";
 import { invalidatePapanCaches } from "./papanCacheInvalidation.js";
+import { employeeHasBranchManagerFeatures } from "./branchManagerFeaturesService.js";
+
+function assertMayAdjustKpi(actor: AuthUser): void {
+  if (!hasPermission(actor, "kpi.adjust")) {
+    throw forbidden();
+  }
+  if (actor.branchManagerEnabled) {
+    throw forbidden("Kepala toko tidak dapat menyesuaikan poin KPI");
+  }
+}
 
 export async function adjustEmployeeKpi(
   manager: AuthUser,
   employeeId: string,
   data: { bonus_points: number; note: string }
 ) {
-  if (!hasPermission(manager, "kpi.adjust")) {
-    throw forbidden();
-  }
+  assertMayAdjustKpi(manager);
 
   const bonus = Number(data.bonus_points);
   if (!Number.isInteger(bonus) || bonus < -5 || bonus > 5) {
@@ -104,9 +112,7 @@ export async function listBranchKpiEvaluations(
   branchId: string,
   options?: { employee_id?: string; limit?: number }
 ) {
-  if (!hasPermission(user, "kpi.adjust")) {
-    throw forbidden();
-  }
+  assertMayAdjustKpi(user);
   assertBranchAccess(user, branchId);
 
   const limit = Math.min(Math.max(options?.limit ?? 50, 1), 100);
