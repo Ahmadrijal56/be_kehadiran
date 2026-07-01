@@ -170,6 +170,63 @@ export function dedupeDailyScoresByWorkDate<T extends DailyScoreRow>(rows: T[]):
   return [...byDate.values()];
 }
 
+/** Agregat KPI bulanan seluruh karyawan aktif — live dari skor harian. */
+export async function sumOrgWideMonthlyKpiStats(yearMonth: string): Promise<{
+  total_present_days: number;
+  total_late_count: number;
+  employees_tracked: number;
+}> {
+  const { start, end } = monthRange(yearMonth);
+  const activeEmployees = await prisma.employee.findMany({
+    where: { isActive: true },
+    select: { id: true },
+  });
+  if (activeEmployees.length === 0) {
+    return { total_present_days: 0, total_late_count: 0, employees_tracked: 0 };
+  }
+
+  const activeIds = activeEmployees.map((e) => e.id);
+  const rawDaily = await prisma.kpiDailyScore.findMany({
+    where: {
+      employeeId: { in: activeIds },
+      workDate: { gte: start, lt: end },
+    },
+    select: {
+      workDate: true,
+      totalPoints: true,
+      lateMinutes: true,
+      employeeId: true,
+    },
+  });
+
+  const byEmployee = new Map<string, DailyScoreRow[]>();
+  for (const row of rawDaily) {
+    const mapped: DailyScoreRow = {
+      workDate: row.workDate,
+      totalPoints: row.totalPoints,
+      lateMinutes: row.lateMinutes,
+      employeeId: row.employeeId,
+    };
+    const list = byEmployee.get(row.employeeId);
+    if (list) list.push(mapped);
+    else byEmployee.set(row.employeeId, [mapped]);
+  }
+
+  let total_present_days = 0;
+  let total_late_count = 0;
+  let employees_tracked = 0;
+
+  for (const employeeId of activeIds) {
+    const deduped = dedupeDailyScoresByWorkDate(byEmployee.get(employeeId) ?? []);
+    if (deduped.length === 0) continue;
+    employees_tracked += 1;
+    total_present_days += deduped.length;
+    total_late_count += deduped.filter((row) => row.lateMinutes > 0).length;
+  }
+
+  return { total_present_days, total_late_count, employees_tracked };
+}
+
 export async function getKpiToday(employeeId: string) {
   const workDate = todayWorkDateWib();
   const score = await prisma.kpiDailyScore.findUnique({

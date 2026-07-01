@@ -1,12 +1,13 @@
 import { prisma } from "../lib/prisma.js";
 import { validationError } from "../lib/errors.js";
-import { todayWorkDateWib } from "../utils/format.js";
+import { currentYearMonthWib, todayWorkDateWib } from "../utils/format.js";
 import {
   attendanceHasCheckedIn,
   attendanceIsLate,
   reconcileBranchAttendanceLateForDate,
 } from "./branchAttendanceService.js";
-import { attachTypeShiftsToLeaderboardEntries } from "./leaderboardService.js";
+import { computeGlobalLeaderboard } from "./leaderboardService.js";
+import { sumOrgWideMonthlyKpiStats } from "./kpiQueryService.js";
 
 export async function getOwnerDashboardSummary() {
   const workDate = todayWorkDateWib();
@@ -134,61 +135,28 @@ export async function getOwnerMonthlyStats(yearMonth?: string) {
     throw validationError("year_month format YYYY-MM");
   }
 
-  const aggregates = await prisma.kpiMonthlyAggregate.findMany({
-    where: { yearMonth: ym },
-  });
-
-  const total_present_days = aggregates.reduce(
-    (sum, a) => sum + a.totalPresentDays,
-    0
-  );
-  const total_late_count = aggregates.reduce(
-    (sum, a) => sum + a.totalLateCount,
-    0
-  );
+  const stats = await sumOrgWideMonthlyKpiStats(ym);
+  const is_partial_month = ym === currentYearMonthWib();
 
   return {
     year_month: ym,
-    employees_tracked: aggregates.length,
-    total_present_days,
-    total_late_count,
+    is_partial_month,
+    through_date: is_partial_month
+      ? todayWorkDateWib().toISOString().slice(0, 10)
+      : null,
+    employees_tracked: stats.employees_tracked,
+    total_present_days: stats.total_present_days,
+    total_late_count: stats.total_late_count,
   };
 }
 
-export async function getOwnerTopEmployees(limit = 10) {
-  const ym = todayWorkDateWib().toISOString().slice(0, 7);
-  const aggregates = await prisma.kpiMonthlyAggregate.findMany({
-    where: { yearMonth: ym },
-    include: {
-      employee: {
-        select: {
-          id: true,
-          nik: true,
-          fullName: true,
-          employeeTypeCode: true,
-          employeeType: { select: { code: true, label: true } },
-        },
-      },
-      branch: { select: { id: true, code: true, name: true } },
-    },
-    orderBy: { totalPoints: "desc" },
-    take: limit,
-  });
+export async function getOwnerTopEmployees(limit = 10, yearMonth?: string) {
+  const ym =
+    yearMonth ?? todayWorkDateWib().toISOString().slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(ym)) {
+    throw validationError("year_month format YYYY-MM");
+  }
 
-  const base = aggregates.map((a, i) => ({
-    rank: i + 1,
-    employee_id: a.employeeId,
-    nik: a.employee.nik,
-    full_name: a.employee.fullName,
-    branch_id: a.branchId,
-    branch_code: a.branch.code,
-    branch_name: a.branch.name,
-    employee_type_code:
-      a.employee.employeeTypeCode ?? a.employee.employeeType?.code ?? null,
-    employee_type_label: a.employee.employeeType?.label ?? null,
-    total_points: a.totalPoints,
-    total_late_count: a.totalLateCount,
-  }));
-
-  return attachTypeShiftsToLeaderboardEntries(base);
+  const items = await computeGlobalLeaderboard(ym);
+  return items.slice(0, limit);
 }

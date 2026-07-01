@@ -439,6 +439,14 @@ export async function getBranchLeaderboard(
   return { year_month: ym, branch_id: branchId, items, cached: Boolean(cached) };
 }
 
+export async function computeGlobalLeaderboard(
+  yearMonth: string
+): Promise<LeaderboardEntryBase[]> {
+  const participants = await loadParticipantsGlobal();
+  const built = await buildLeaderboardEntries(participants, yearMonth);
+  return attachTypeShiftsToLeaderboardEntries(built);
+}
+
 export async function getGlobalLeaderboard(
   user: AuthUser,
   yearMonth?: string,
@@ -447,13 +455,7 @@ export async function getGlobalLeaderboard(
   const ym = yearMonth ?? currentYearMonthWib();
   const cacheKey = globalLeaderboardCacheKey(ym);
   const cached = await cacheGet<LeaderboardEntryBase[]>(cacheKey);
-  const baseItems =
-    cached ??
-    (await (async () => {
-      const participants = await loadParticipantsGlobal();
-      const built = await buildLeaderboardEntries(participants, ym);
-      return attachTypeShiftsToLeaderboardEntries(built);
-    })());
+  const baseItems = cached ?? (await computeGlobalLeaderboard(ym));
   if (!cached) {
     await cacheSet(cacheKey, baseItems, CACHE_TTL);
   }

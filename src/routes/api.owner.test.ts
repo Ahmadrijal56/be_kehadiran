@@ -39,6 +39,30 @@ describe("API v1 — owner module", () => {
     expect(res.body.data.total_employees).toBeGreaterThan(0);
   });
 
+  it("GET /owner/dashboard/monthly — live dari skor harian", async () => {
+    const res = await request(app)
+      .get("/api/v1/owner/dashboard/monthly")
+      .set("Authorization", `Bearer ${ownerToken}`);
+    expect(res.status).toBe(200);
+    const data = res.body.data as {
+      year_month: string;
+      is_partial_month: boolean;
+      through_date: string;
+      employees_tracked: number;
+      total_present_days: number;
+      total_late_count: number;
+    };
+    expect(data.year_month).toMatch(/^\d{4}-\d{2}$/);
+    expect(data.is_partial_month).toBe(true);
+    expect(data.through_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(data.total_present_days).toBeGreaterThanOrEqual(0);
+    expect(data.total_late_count).toBeGreaterThanOrEqual(0);
+    expect(data.employees_tracked).toBeGreaterThanOrEqual(0);
+    if (data.total_present_days > 0) {
+      expect(data.employees_tracked).toBeGreaterThan(0);
+    }
+  });
+
   it("TC-041: GET /owner/branches/comparison — persentase valid", async () => {
     const res = await request(app)
       .get("/api/v1/owner/branches/comparison")
