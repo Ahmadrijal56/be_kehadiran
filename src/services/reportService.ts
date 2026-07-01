@@ -353,7 +353,7 @@ export async function getDailyReport(
     (a, b) =>
       b.work_date.localeCompare(a.work_date) ||
       a.branch_code.localeCompare(b.branch_code) ||
-      a.full_name.localeCompare(b.full_name, "id")
+      a.nik.localeCompare(b.nik, "id", { numeric: true })
   );
 
   return {
@@ -439,13 +439,8 @@ export async function getEmployeeSummaryReport(
     };
   });
 
-  if (branch) {
-    items.sort(
-      (a, b) =>
-        b.total_points - a.total_points ||
-        a.full_name.localeCompare(b.full_name, "id")
-    );
-  }
+  // Sort by NIK (01-99) as requested by user
+  items.sort((a, b) => a.nik.localeCompare(b.nik, "id", { numeric: true }));
 
   return {
     year_month: ym,
