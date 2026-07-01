@@ -219,9 +219,10 @@ function buildCheckInOutEvents(row: AttendanceRecordForEvents): AttendanceEventR
     });
   }
 
-  if (row.checkOutAt) {
+  const isForgotCheckout = row.status === "forgot_checkout";
+  if (row.checkOutAt || isForgotCheckout) {
     const workMinutes =
-      row.checkInAt != null
+      row.checkInAt != null && row.checkOutAt != null
         ? computeWorkDurationMinutes(row.checkInAt, row.checkOutAt)
         : null;
     const overtime = resolveOvertimeFields(
@@ -234,13 +235,13 @@ function buildCheckInOutEvents(row: AttendanceRecordForEvents): AttendanceEventR
     events.push({
       id: `${row.id}:out`,
       ...base,
-      event_status: "PULANG",
-      waktu: formatWibDisplay(row.checkOutAt),
-      event_at: formatWibIso(row.checkOutAt)!,
+      event_status: isForgotCheckout ? "PULANG (Lupa absen)" : "PULANG",
+      waktu: row.checkOutAt ? formatWibDisplay(row.checkOutAt) : "-",
+      event_at: row.checkOutAt ? formatWibIso(row.checkOutAt)! : `${base.work_date}T23:59:59+07:00`,
       points: null,
       work_duration_minutes: workMinutes,
       work_duration_label:
-        workMinutes != null ? formatWorkDurationLabel(workMinutes) : null,
+        workMinutes != null ? formatWorkDurationLabel(workMinutes) : "-",
       ...overtime,
     });
   }
@@ -477,15 +478,15 @@ function buildTimelineEvents(
   }
 
   if (twoScan) {
-    if (row.checkOutAt) {
-      const forgot = row.status === "forgot_checkout";
+    const forgot = row.status === "forgot_checkout";
+    if (row.checkOutAt || forgot) {
       events.push({
         step: 2,
         step_label: "Absen 2 — Pulang",
         slot: "check_out",
         event_status: forgot ? "PULANG (Lupa absen)" : "PULANG",
-        waktu: formatWibDisplay(row.checkOutAt),
-        event_at: formatWibIso(row.checkOutAt)!,
+        waktu: row.checkOutAt ? formatWibDisplay(row.checkOutAt) : "-",
+        event_at: row.checkOutAt ? formatWibIso(row.checkOutAt)! : `${row.workDate.toISOString().slice(0, 10)}T23:59:59+07:00`,
         attendance_type: mode,
         points: null,
         break_duration_minutes: null,
@@ -521,15 +522,15 @@ function buildTimelineEvents(
     }
   }
 
-  if (row.checkOutAt) {
-    const forgot = row.status === "forgot_checkout";
+  const forgot = row.status === "forgot_checkout";
+  if (row.checkOutAt || forgot) {
     events.push({
       step: 4,
       step_label: "Absen 4 — Pulang",
       slot: "check_out",
       event_status: forgot ? "PULANG (Lupa absen)" : "PULANG",
-      waktu: formatWibDisplay(row.checkOutAt),
-      event_at: formatWibIso(row.checkOutAt)!,
+      waktu: row.checkOutAt ? formatWibDisplay(row.checkOutAt) : "-",
+      event_at: row.checkOutAt ? formatWibIso(row.checkOutAt)! : `${row.workDate.toISOString().slice(0, 10)}T23:59:59+07:00`,
       attendance_type: mode,
       points: null,
       break_duration_minutes: null,

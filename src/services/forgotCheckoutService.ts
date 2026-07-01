@@ -7,7 +7,6 @@ import { notifyForgotCheckout } from "./notificationService.js";
 /** Set pulang otomatis 23:59 WIB untuk yang lupa absen pulang. */
 export async function processForgotCheckoutsForDate(workDate: Date): Promise<number> {
   const dateOnly = toDateOnly(workDate);
-  const checkoutAt = combineDateAndTimeWib(dateOnly, "23:59");
 
   const openRecords = await prisma.attendanceRecord.findMany({
     where: {
@@ -24,7 +23,6 @@ export async function processForgotCheckoutsForDate(workDate: Date): Promise<num
     await prisma.attendanceRecord.update({
       where: { id: record.id },
       data: {
-        checkOutAt: checkoutAt,
         checkOutIsAuto: true,
         status: "forgot_checkout",
       },

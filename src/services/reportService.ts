@@ -805,7 +805,7 @@ function addDailyBranchSheet(
     status: item.status,
     status_label: attendanceStatusLabel(item.status),
     check_in_time: displayOptionalTime(item.check_in_at),
-    check_out_time: displayOptionalTime(item.check_out_at),
+    check_out_time: item.status === "forgot_checkout" && !item.check_out_at ? "-" : displayOptionalTime(item.check_out_at),
     late_minutes: displayLateMinutes(item.late_minutes),
   }));
 

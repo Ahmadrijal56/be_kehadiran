@@ -25,7 +25,7 @@ export function isOvertimeWorkDuration(
   return minutes != null && minutes >= OVERTIME_THRESHOLD_MINUTES;
 }
 
-/** Lembur hanya untuk pulang nyata (mesin/app), bukan auto 23:59 lupa absen. */
+/** Lembur hanya untuk pulang nyata (mesin/app), bukan auto lupa absen. */
 export function isOvertimeEligible(
   attendanceStatus?: string | null,
   checkOutIsAuto?: boolean

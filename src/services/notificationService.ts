@@ -342,7 +342,7 @@ export async function notifyForgotCheckout(
       userId,
       type: "forgot_checkout",
       title: "Lupa absen pulang",
-      body: `Absen pulang otomatis dicatat 23:59 untuk tanggal ${workDate}. Anda dapat mengajukan persetujuan ke manager.`,
+      body: `Status absen pulang dicatat sebagai lupa absen (-) untuk tanggal ${workDate}. Anda dapat mengajukan persetujuan ke manager.`,
       dataJson: { work_date: workDate, ...(branchId ? { branch_id: branchId } : {}) },
     },
   });
