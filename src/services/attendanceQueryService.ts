@@ -359,10 +359,11 @@ export async function getTodayAttendance(employeeId: string) {
   });
 
   if (!row) {
+    const scheduledOff = await isExplicitOffDay(employeeId, workDate);
     return {
       id: null,
       work_date: workDate.toISOString().slice(0, 10),
-      status: "absent",
+      status: scheduledOff ? "off" : "absent",
       check_in_at: null,
       check_out_at: null,
       break: null,
