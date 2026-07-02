@@ -21,6 +21,25 @@ export async function authenticate(
   }
 }
 
+export async function optionalAuthenticate(
+  req: Request,
+  _res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const header = req.header("authorization");
+    if (!header?.startsWith("Bearer ")) {
+      return next();
+    }
+    const token = header.slice(7);
+    const userId = await verifyAccessToken(token);
+    req.user = await resolveAuthUser(userId);
+    next();
+  } catch (err) {
+    next();
+  }
+}
+
 export function requireDeveloper(
   req: Request,
   _res: Response,

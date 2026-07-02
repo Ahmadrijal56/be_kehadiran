@@ -4,14 +4,19 @@ import { publicDisplayRateLimit } from "../../middleware/rateLimit.js";
 import { getRequestPublicBaseUrl } from "../../lib/requestBaseUrl.js";
 import { getPublicDisplay, getPublicDisplayBranch, getPublicDisplayBranches } from "../../services/publicDisplayService.js";
 import { assertOrgWideRankingEnabled, getPublicRulesCached } from "../../services/organizationConfigService.js";
+import { optionalAuthenticate } from "../../middleware/auth.js";
 
 export const publicRouter = Router();
 
 publicRouter.get(
   "/display/branches",
   publicDisplayRateLimit,
-  asyncHandler(async (_req, res) => {
-    await assertOrgWideRankingEnabled();
+  optionalAuthenticate,
+  asyncHandler(async (req, res) => {
+    const isPrivileged = req.user && (req.user.roles.includes("owner") || req.user.roles.includes("developer"));
+    if (!isPrivileged) {
+      await assertOrgWideRankingEnabled();
+    }
     res.set("Cache-Control", "public, max-age=30, stale-while-revalidate=60");
     const data = await getPublicDisplayBranches();
     res.json({ data });
@@ -21,6 +26,7 @@ publicRouter.get(
 publicRouter.get(
   "/display",
   publicDisplayRateLimit,
+  optionalAuthenticate,
   asyncHandler(async (req, res) => {
     const month = req.query.month as string | undefined;
     const branchId = req.query.branch_id as string | undefined;
@@ -40,7 +46,10 @@ publicRouter.get(
       return;
     }
 
-    await assertOrgWideRankingEnabled();
+    const isPrivileged = req.user && (req.user.roles.includes("owner") || req.user.roles.includes("developer"));
+    if (!isPrivileged) {
+      await assertOrgWideRankingEnabled();
+    }
     const data = await getPublicDisplay(month, publicBaseUrl);
     res.json({ data });
   })
