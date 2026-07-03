@@ -478,6 +478,12 @@ async function loadBranchRows(
           name: shiftById[effectiveShiftId]!.name,
           time_range: timeRange,
         };
+      } else if (att?.shift) {
+        scheduledShift = {
+          code: att.shift.code,
+          name: att.shift.name,
+          time_range: timeRange,
+        };
       } else {
         scheduledShift = { code: "?", name: "?", time_range: timeRange };
       }

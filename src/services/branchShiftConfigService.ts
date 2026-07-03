@@ -75,6 +75,92 @@ function resolveBranchShiftLabels(row: {
   };
 }
 
+function branchShiftLabelKey(branchId: string, shiftId: number): string {
+  return `${branchId}:${shiftId}`;
+}
+
+/** Hanya shift yang masih aktif di pengaturan cabang (bukan yang dihapus). */
+const activeBranchShiftWhere = { removedAt: null } as const;
+
+function branchShiftOptionFromRow(row: {
+  shiftId: number;
+  startTime: Date;
+  endTime: Date;
+  code: string | null;
+  name: string | null;
+  shift: { id: number; code: string; name: string };
+}): BranchShiftOption {
+  const labels = resolveBranchShiftLabels(row);
+  const isOff = isOffShift(row.shiftId);
+  return {
+    id: row.shiftId,
+    code: labels.code,
+    name: labels.name,
+    time_range: isOff ? null : formatTimeRange(row.startTime, row.endTime),
+    is_off: isOff,
+  };
+}
+
+export async function loadBranchShiftLabelMap(
+  branchIds: string[],
+  shiftIds: number[]
+): Promise<Map<string, { code: string; name: string }>> {
+  if (branchIds.length === 0 || shiftIds.length === 0) return new Map();
+  const rows = await prisma.branchShift.findMany({
+    where: { branchId: { in: branchIds }, shiftId: { in: shiftIds } },
+    include: { shift: true },
+  });
+  const map = new Map<string, { code: string; name: string }>();
+  for (const row of rows) {
+    map.set(
+      branchShiftLabelKey(row.branchId, row.shiftId),
+      resolveBranchShiftLabels(row)
+    );
+  }
+  return map;
+}
+
+export async function loadShiftMasterLabelMap(
+  shiftIds: number[]
+): Promise<Map<number, { code: string; name: string }>> {
+  if (shiftIds.length === 0) return new Map();
+  const rows = await prisma.shift.findMany({
+    where: { id: { in: shiftIds } },
+    select: { id: true, code: true, name: true },
+  });
+  return new Map(rows.map((row) => [row.id, { code: row.code, name: row.name }]));
+}
+
+export function resolveHistoricalShiftCode(
+  branchId: string,
+  shiftId: number,
+  branchLabels: Map<string, { code: string; name: string }>,
+  masterById: Map<number, { code: string; name: string }>,
+  attendanceShift?: { code: string } | null
+): string {
+  if (isOffShift(shiftId)) return "Libur";
+  const labels = branchLabels.get(branchShiftLabelKey(branchId, shiftId));
+  return (
+    labels?.code ??
+    masterById.get(shiftId)?.code ??
+    attendanceShift?.code ??
+    `S${shiftId}`
+  );
+}
+
+async function branchShiftHasBranchHistory(
+  branchId: string,
+  shiftId: number
+): Promise<boolean> {
+  const [attendanceInBranch, scheduleInBranch] = await Promise.all([
+    prisma.attendanceRecord.count({ where: { branchId, shiftId } }),
+    prisma.employeeShift.count({
+      where: { shiftId, employee: { branchId } },
+    }),
+  ]);
+  return attendanceInBranch > 0 || scheduleInBranch > 0;
+}
+
 function assertShiftCode(code: string, label = "Kode shift") {
   if (!/^[A-Z0-9]{1,10}$/.test(code)) {
     throw validationError(`${label}: 1–10 karakter huruf/angka (contoh S1, PAGI)`);
@@ -203,7 +289,7 @@ export async function getBranchShiftSettings(
       select: { id: true, code: true, name: true },
     }),
     prisma.branchShift.findMany({
-      where: { branchId },
+      where: { branchId, ...activeBranchShiftWhere },
       orderBy: { shiftId: "asc" },
       include: { shift: true },
     }),
@@ -240,7 +326,7 @@ export async function saveBranchShiftSettings(
   const branchShiftIds = new Set(
     (
       await prisma.branchShift.findMany({
-        where: { branchId },
+        where: { branchId, ...activeBranchShiftWhere },
         select: { shiftId: true },
       })
     ).map((r) => r.shiftId)
@@ -331,7 +417,7 @@ async function allocateNextShiftId(): Promise<number> {
 
 async function suggestNextShiftCodeForBranch(branchId: string): Promise<string> {
   const configs = await prisma.branchShift.findMany({
-    where: { branchId, shiftId: { not: OFF_SHIFT_ID } },
+    where: { branchId, shiftId: { not: OFF_SHIFT_ID }, ...activeBranchShiftWhere },
     include: { shift: true },
   });
   const codes = new Set(
@@ -378,7 +464,7 @@ export async function createBranchShift(
   const name = assertShiftName(input.name?.trim() || `Shift ${code.replace(/^S/i, "") || code}`);
 
   const existingInBranch = await prisma.branchShift.findMany({
-    where: { branchId, shiftId: { not: OFF_SHIFT_ID } },
+    where: { branchId, shiftId: { not: OFF_SHIFT_ID }, ...activeBranchShiftWhere },
     include: { shift: true },
   });
   if (
@@ -398,7 +484,7 @@ export async function createBranchShift(
     const linked = await prisma.branchShift.findUnique({
       where: { branchId_shiftId: { branchId, shiftId } },
     });
-    if (linked) {
+    if (linked && !linked.removedAt) {
       throw validationError(`Shift ${code} sudah ada di cabang ini`);
     }
   } else {
@@ -414,17 +500,35 @@ export async function createBranchShift(
     });
   }
 
-  await prisma.branchShift.create({
-    data: {
-      branchId,
-      shiftId,
-      isActive: true,
-      startTime: start,
-      endTime: end,
-      code,
-      name,
-    },
+  const restoreRemoved = await prisma.branchShift.findUnique({
+    where: { branchId_shiftId: { branchId, shiftId } },
   });
+
+  if (restoreRemoved?.removedAt) {
+    await prisma.branchShift.update({
+      where: { branchId_shiftId: { branchId, shiftId } },
+      data: {
+        removedAt: null,
+        isActive: true,
+        startTime: start,
+        endTime: end,
+        code,
+        name,
+      },
+    });
+  } else {
+    await prisma.branchShift.create({
+      data: {
+        branchId,
+        shiftId,
+        isActive: true,
+        startTime: start,
+        endTime: end,
+        code,
+        name,
+      },
+    });
+  }
 
   await writeAuditLog({
     userId: actor.id,
@@ -470,7 +574,7 @@ export async function deleteBranchShift(
   }
 
   const workShiftCount = await prisma.branchShift.count({
-    where: { branchId, shiftId: { not: OFF_SHIFT_ID } },
+    where: { branchId, shiftId: { not: OFF_SHIFT_ID }, ...activeBranchShiftWhere },
   });
   if (workShiftCount <= 1) {
     throw validationError("Tidak dapat menghapus shift kerja terakhir di cabang ini");
@@ -494,21 +598,33 @@ export async function deleteBranchShift(
     );
   }
 
-  await prisma.branchShift.delete({
-    where: { branchId_shiftId: { branchId, shiftId } },
-  });
+  const hasHistory = await branchShiftHasBranchHistory(branchId, shiftId);
 
-  const remainingLinks = await prisma.branchShift.count({ where: { shiftId } });
-  if (remainingLinks === 0) {
-    const [empCount, scheduleCount, attendanceCount] = await Promise.all([
-      prisma.employee.count({ where: { defaultShiftId: shiftId } }),
-      prisma.employeeShift.count({ where: { shiftId } }),
-      prisma.attendanceRecord.count({ where: { shiftId } }),
-    ]);
-    if (empCount === 0 && scheduleCount === 0 && attendanceCount === 0) {
-      await prisma.shift.delete({ where: { id: shiftId } });
-    }
+  if (hasHistory) {
+    await prisma.branchShift.update({
+      where: { branchId_shiftId: { branchId, shiftId } },
+      data: { removedAt: new Date(), isActive: false },
+    });
     await removeShiftIdFromEmployeeTypes(branchId, shiftId);
+  } else {
+    await prisma.branchShift.delete({
+      where: { branchId_shiftId: { branchId, shiftId } },
+    });
+
+    const remainingLinks = await prisma.branchShift.count({
+      where: { shiftId, ...activeBranchShiftWhere },
+    });
+    if (remainingLinks === 0) {
+      const [empCount, scheduleCount, attendanceCount] = await Promise.all([
+        prisma.employee.count({ where: { defaultShiftId: shiftId } }),
+        prisma.employeeShift.count({ where: { shiftId } }),
+        prisma.attendanceRecord.count({ where: { shiftId } }),
+      ]);
+      if (empCount === 0 && scheduleCount === 0 && attendanceCount === 0) {
+        await prisma.shift.delete({ where: { id: shiftId } });
+      }
+      await removeShiftIdFromEmployeeTypes(branchId, shiftId);
+    }
   }
 
   await writeAuditLog({
@@ -560,6 +676,27 @@ export async function listBranchShiftOptions(
       time_range: s.time_range,
       is_off: s.is_off,
     }));
+}
+
+/** Opsi shift aktif + shift historis yang masih direferensikan jadwal/absensi. */
+export async function listBranchShiftOptionsWithHistorical(
+  branchId: string,
+  historicalShiftIds: number[]
+): Promise<BranchShiftOption[]> {
+  const active = await listBranchShiftOptions(branchId);
+  const activeIds = new Set(active.map((s) => s.id));
+  const missingIds = [...new Set(historicalShiftIds)].filter(
+    (id) => !activeIds.has(id)
+  );
+  if (missingIds.length === 0) return active;
+
+  const rows = await prisma.branchShift.findMany({
+    where: { branchId, shiftId: { in: missingIds } },
+    include: { shift: true },
+    orderBy: { shiftId: "asc" },
+  });
+  const historical = rows.map(branchShiftOptionFromRow);
+  return [...active, ...historical].sort((a, b) => a.id - b.id);
 }
 
 export async function getBranchShiftWindow(

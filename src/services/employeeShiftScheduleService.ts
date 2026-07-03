@@ -223,10 +223,15 @@ function formatTimeRange(start: Date, end: Date): string {
   return `${pad2(s.hours)}:${pad2(s.minutes)} – ${pad2(e.hours)}:${pad2(e.minutes)}`;
 }
 
-export async function listShiftOptions(branchId?: string): Promise<ShiftOption[]> {
+export async function listShiftOptions(
+  branchId?: string,
+  historicalShiftIds: number[] = []
+): Promise<ShiftOption[]> {
   if (branchId) {
-    const { listBranchShiftOptions } = await import("./branchShiftConfigService.js");
-    return listBranchShiftOptions(branchId);
+    const { listBranchShiftOptionsWithHistorical } = await import(
+      "./branchShiftConfigService.js"
+    );
+    return listBranchShiftOptionsWithHistorical(branchId, historicalShiftIds);
   }
   const shifts = await prisma.shift.findMany({ orderBy: { id: "asc" } });
   return shifts.map((s) => ({
@@ -247,7 +252,7 @@ export async function getBranchShiftSchedule(branchId: string, yearMonth: string
     `${year}-${pad2(month)}-${pad2(days.length)}T00:00:00.000Z`
   );
 
-  const [employees, overrides, shiftOptions, typeByCode] = await Promise.all([
+  const [employees, overrides, typeByCode] = await Promise.all([
     prisma.employee.findMany({
       where: { branchId, isActive: true },
       orderBy: { fullName: "asc" },
@@ -266,9 +271,11 @@ export async function getBranchShiftSchedule(branchId: string, yearMonth: string
         workDate: { gte: rangeStart, lte: rangeEnd },
       },
     }),
-    listShiftOptions(branchId),
     loadBranchEmployeeTypeMap(branchId),
   ]);
+
+  const historicalShiftIds = overrides.map((o) => o.shiftId);
+  const shiftOptions = await listShiftOptions(branchId, historicalShiftIds);
 
   const overrideMap = new Map<string, number>();
   for (const o of overrides) {
@@ -706,15 +713,16 @@ export async function getEmployeeMonthlyShiftSchedule(
     },
   });
 
-  const [overrides, shiftOptions] = await Promise.all([
-    prisma.employeeShift.findMany({
-      where: {
-        employeeId,
-        workDate: { gte: rangeStart, lte: rangeEnd },
-      },
-    }),
-    listShiftOptions(employee.branchId),
-  ]);
+  const overrides = await prisma.employeeShift.findMany({
+    where: {
+      employeeId,
+      workDate: { gte: rangeStart, lte: rangeEnd },
+    },
+  });
+  const shiftOptions = await listShiftOptions(
+    employee.branchId,
+    overrides.map((o) => o.shiftId)
+  );
 
   const shiftById = new Map(shiftOptions.map((s) => [s.id, s]));
   const overrideByDay = new Map(

@@ -4,6 +4,11 @@ import { prisma } from "../lib/prisma.js";
 import { OFF_SHIFT_ID } from "../constants/shifts.js";
 import { validationError } from "../lib/errors.js";
 import {
+  loadBranchShiftLabelMap,
+  loadShiftMasterLabelMap,
+  resolveHistoricalShiftCode,
+} from "./branchShiftConfigService.js";
+import {
   attendanceHasCheckedIn,
   attendanceIsLate,
 } from "./branchAttendanceService.js";
@@ -269,8 +274,7 @@ export async function getDailyReport(
 
   const employeeIds = employees.map((e) => e.id);
 
-  const [shifts, records, overrides] = await Promise.all([
-    prisma.shift.findMany({ select: { id: true, code: true, name: true } }),
+  const [records, overrides] = await Promise.all([
     prisma.attendanceRecord.findMany({
       where: {
         workDate: { gte: fromDate, lte: toDate },
@@ -287,7 +291,15 @@ export async function getDailyReport(
     }),
   ]);
 
-  const shiftById = Object.fromEntries(shifts.map((s) => [s.id, s]));
+  const usedShiftIds = new Set<number>();
+  for (const record of records) usedShiftIds.add(record.shiftId);
+  for (const override of overrides) usedShiftIds.add(override.shiftId);
+
+  const branchIds = [...new Set(employees.map((e) => e.branchId))];
+  const [branchShiftLabels, shiftMasterLabels] = await Promise.all([
+    loadBranchShiftLabelMap(branchIds, [...usedShiftIds]),
+    loadShiftMasterLabelMap([...usedShiftIds]),
+  ]);
 
   const recordByKey = new Map<string, (typeof records)[number]>(
     records.map((r) => [
@@ -329,10 +341,13 @@ export async function getDailyReport(
 
       const effectiveShiftId = hasGridEntry ? override! : att!.shiftId;
 
-      const scheduledShift = shiftById[effectiveShiftId];
-      const shiftCode = scheduledOff
-        ? "Libur"
-        : scheduledShift?.code ?? att?.shift.code ?? "?";
+      const shiftCode = resolveHistoricalShiftCode(
+        emp.branchId,
+        effectiveShiftId,
+        branchShiftLabels,
+        shiftMasterLabels,
+        att?.shift
+      );
 
       items.push({
         work_date: dateStr,

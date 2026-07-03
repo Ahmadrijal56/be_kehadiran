@@ -56,6 +56,8 @@ model BranchShift {
   code      String?  @db.VarChar(10)
   /// Label nama per cabang (null = pakai shifts.name).
   name      String?  @db.VarChar(50)
+  /// Diisi saat shift dihapus dari cabang tetapi masih punya riwayat jadwal/absensi.
+  removedAt DateTime? @map("removed_at") @db.Timestamptz(6)
   branch    Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
   shift     Shift    @relation(fields: [shiftId], references: [id])
 
