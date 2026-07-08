@@ -121,13 +121,10 @@ export async function fillMissingDeveloperSupportAttendance(
     work_date: string;
     check_in_at?: string;
     check_out_at?: string;
-    reason: string;
+    reason?: string;
   }
 ): Promise<FillMissingAttendanceResult> {
-  const reason = input.reason?.trim();
-  if (!reason) {
-    throw validationError("reason wajib diisi");
-  }
+  const reason = input.reason?.trim() || null;
 
   const user = await resolveSupportEmployee(userId);
   const workDate = parseWorkDateInput(input.work_date);
@@ -304,13 +301,10 @@ export async function updateDeveloperSupportAttendance(
     work_date: string;
     check_in_at?: string;
     check_out_at?: string | null;
-    reason: string;
+    reason?: string;
   }
 ): Promise<UpdateSupportAttendanceResult> {
-  const reason = input.reason?.trim();
-  if (!reason) {
-    throw validationError("reason wajib diisi");
-  }
+  const reason = input.reason?.trim() || null;
   if (input.check_in_at === undefined && input.check_out_at === undefined) {
     throw validationError("Isi minimal jam masuk atau jam pulang untuk dikoreksi");
   }
@@ -465,5 +459,149 @@ export async function updateDeveloperSupportAttendance(
   return {
     message: "Jam absensi berhasil diperbarui.",
     attendance: mapAttendanceSnapshot(workDate, updated),
+  };
+}
+
+/** Recompute the monthly KPI aggregate for one employee from remaining daily scores. */
+async function recomputeMonthlyAggregate(
+  employeeId: string,
+  branchId: string,
+  workDate: Date
+): Promise<void> {
+  const yearMonth = workDate.toISOString().slice(0, 7);
+  const monthStart = new Date(`${yearMonth}-01T00:00:00.000Z`);
+  const monthEnd = new Date(monthStart);
+  monthEnd.setUTCMonth(monthEnd.getUTCMonth() + 1);
+
+  const dailyScores = await prisma.kpiDailyScore.findMany({
+    where: {
+      employeeId,
+      workDate: { gte: monthStart, lt: monthEnd },
+    },
+    select: { totalPoints: true, lateMinutes: true },
+  });
+
+  if (dailyScores.length === 0) {
+    await prisma.kpiMonthlyAggregate.deleteMany({
+      where: { employeeId, yearMonth },
+    });
+    return;
+  }
+
+  const totals = dailyScores.reduce(
+    (acc, row) => {
+      acc.points += row.totalPoints;
+      acc.presentDays += 1;
+      if (row.lateMinutes > 0) acc.lateCount += 1;
+      return acc;
+    },
+    { points: 0, presentDays: 0, lateCount: 0 }
+  );
+
+  await prisma.kpiMonthlyAggregate.upsert({
+    where: { employeeId_yearMonth: { employeeId, yearMonth } },
+    create: {
+      employeeId,
+      branchId,
+      yearMonth,
+      totalPoints: totals.points,
+      totalLateCount: totals.lateCount,
+      totalPresentDays: totals.presentDays,
+    },
+    update: {
+      totalPoints: totals.points,
+      totalLateCount: totals.lateCount,
+      totalPresentDays: totals.presentDays,
+    },
+  });
+}
+
+export type DeleteSupportAttendanceResult = {
+  message: string;
+  attendance: ReturnType<typeof mapAttendanceSnapshot>;
+};
+
+/** Hapus absensi (dan KPI harian) satu tanggal — termasuk tanggal lampau. */
+export async function deleteDeveloperSupportAttendance(
+  actor: AuthUser,
+  userId: string,
+  input: {
+    work_date: string;
+    reason?: string;
+  }
+): Promise<DeleteSupportAttendanceResult> {
+  const reason = input.reason?.trim() || null;
+
+  const user = await resolveSupportEmployee(userId);
+  const workDate = parseWorkDateInput(input.work_date);
+  const employeeId = user.employeeId!;
+  const branchId = user.employee!.branchId;
+
+  const existing = await prisma.attendanceRecord.findUnique({
+    where: {
+      employeeId_workDate: { employeeId, workDate },
+    },
+    select: {
+      id: true,
+      checkInAt: true,
+      checkOutAt: true,
+      status: true,
+      lateMinutes: true,
+    },
+  });
+
+  if (!existing) {
+    throw businessError("Tidak ada absensi di tanggal ini untuk dihapus");
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.attendanceApprovalRequest.updateMany({
+      where: { attendanceId: existing.id },
+      data: { attendanceId: null },
+    });
+    await tx.telegramMessage.updateMany({
+      where: { attendanceId: existing.id },
+      data: { attendanceId: null },
+    });
+    await tx.breakSession.deleteMany({
+      where: { attendanceId: existing.id },
+    });
+    await tx.lateExcuse.deleteMany({
+      where: { attendanceId: existing.id },
+    });
+    await tx.kpiDailyScore.deleteMany({
+      where: { employeeId, workDate },
+    });
+    await tx.attendanceRecord.delete({
+      where: { id: existing.id },
+    });
+  });
+
+  await recomputeMonthlyAggregate(employeeId, branchId, workDate);
+
+  await writeAuditLog({
+    userId: actor.id,
+    action: "attendance.support.delete",
+    entityType: "attendance",
+    entityId: existing.id,
+    oldValues: {
+      check_in_at: formatWibIso(existing.checkInAt),
+      check_out_at: formatWibIso(existing.checkOutAt),
+      status: existing.status,
+      late_minutes: existing.lateMinutes,
+    },
+    newValues: {
+      target_user_id: userId,
+      employee_id: employeeId,
+      work_date: workDate.toISOString().slice(0, 10),
+      reason,
+    },
+  });
+
+  await invalidatePapanCaches(branchId);
+
+  return {
+    message: "Absensi berhasil dihapus.",
+    attendance: mapAttendanceSnapshot(workDate, null),
   };
 }

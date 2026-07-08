@@ -43,10 +43,12 @@ import {
   unlockDeveloperSupportLogin,
 } from "../../services/branchUserService.js";
 import {
+  deleteDeveloperSupportAttendance,
   fillMissingDeveloperSupportAttendance,
   getDeveloperSupportAttendance,
   updateDeveloperSupportAttendance,
 } from "../../services/developerSupportAttendanceService.js";
+import { processBulkAttendance } from "../../services/developerBulkAttendanceService.js";
 import { handleDeveloperMonitorStream } from "./developerMonitorStream.js";
 import { notifyDeveloperTest } from "../../services/notificationService.js";
 import { verifyAndPrunePushSubscriptions } from "../../services/pushNotificationService.js";
@@ -212,6 +214,52 @@ meDeveloperRouter.patch(
           reason: body.reason ?? "",
         }
       ),
+    });
+  })
+);
+
+meDeveloperRouter.delete(
+  "/support/users/:userId/attendance",
+  asyncHandler(async (req, res) => {
+    const body = (req.body ?? {}) as {
+      work_date?: string;
+      reason?: string;
+    };
+    const workDate = body.work_date ?? (req.query.work_date ? String(req.query.work_date) : undefined);
+    if (!workDate) {
+      throw validationError("work_date wajib (YYYY-MM-DD)");
+    }
+    res.json({
+      data: await deleteDeveloperSupportAttendance(
+        req.user!,
+        String(req.params.userId),
+        {
+          work_date: workDate,
+          reason: body.reason ?? "",
+        }
+      ),
+    });
+  })
+);
+
+meDeveloperRouter.post(
+  "/support/bulk-attendance",
+  asyncHandler(async (req, res) => {
+    const body = (req.body ?? {}) as {
+      branch_id?: string;
+      work_date?: string;
+      text?: string;
+      dry_run?: boolean;
+    };
+    if (!body.branch_id) throw validationError("branch_id wajib");
+    if (!body.work_date) throw validationError("work_date wajib (YYYY-MM-DD)");
+    res.json({
+      data: await processBulkAttendance(req.user!, {
+        branch_id: body.branch_id,
+        work_date: body.work_date,
+        text: body.text ?? "",
+        dry_run: body.dry_run,
+      }),
     });
   })
 );
