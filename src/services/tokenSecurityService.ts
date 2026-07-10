@@ -206,6 +206,39 @@ export async function isUserSessionActive(userId: string): Promise<boolean> {
   return jti != null;
 }
 
+const MASTER_SESSION_KEY_PREFIX = "session:master:";
+
+export async function markMasterSession(
+  userId: string,
+  ttlSeconds: number
+): Promise<void> {
+  const redis = await redisReady();
+  if (!redis || ttlSeconds <= 0) return;
+  await redis.set(`${MASTER_SESSION_KEY_PREFIX}${userId}`, "1", "EX", ttlSeconds);
+}
+
+export async function clearMasterSessionMark(userId: string): Promise<void> {
+  const redis = await redisReady();
+  if (!redis) return;
+  await redis.del(`${MASTER_SESSION_KEY_PREFIX}${userId}`);
+}
+
+export async function isMasterSession(userId: string): Promise<boolean> {
+  const redis = await redisReady();
+  if (!redis) return false;
+  const hit = await redis.get(`${MASTER_SESSION_KEY_PREFIX}${userId}`);
+  return hit === "1";
+}
+
+export async function listMasterSessionUserIds(): Promise<Set<string>> {
+  const redis = await redisReady();
+  if (!redis) return new Set();
+  const keys = await redis.keys(`${MASTER_SESSION_KEY_PREFIX}*`);
+  return new Set(
+    keys.map((key) => key.slice(MASTER_SESSION_KEY_PREFIX.length)).filter(Boolean)
+  );
+}
+
 export async function revokeAccessToken(token: string): Promise<void> {
   try {
     const payload = jwt.verify(token, env.jwtSecret) as jwt.JwtPayload & {

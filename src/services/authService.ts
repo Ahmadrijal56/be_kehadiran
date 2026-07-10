@@ -18,6 +18,8 @@ import {
   recordLoginFailure,
   registerRefreshSession,
   revokeAccessToken,
+  clearMasterSessionMark,
+  markMasterSession,
 } from "./tokenSecurityService.js";
 import { linkUserToEmployeeByNik } from "./employeeAccountService.js";
 import {
@@ -57,6 +59,8 @@ type TokenPayload = {
   sub: string;
   type: "access" | "refresh";
   jti: string;
+  /** Login QA developer — tidak ikut presence/online tracking. */
+  master_login?: boolean;
 };
 
 const ACCESS_TTL_SEC = 900;
@@ -168,7 +172,7 @@ export async function login(
       employeeId: user.employeeId,
       branchManagerEnabled,
     }),
-    issueTokenPair(user.id),
+    issueTokenPair(user.id, { masterLogin }),
   ]);
 
   const branchId = branchManagerEnabled
@@ -205,11 +209,7 @@ export async function login(
 
   const avatarPromise = getAvatarProfile(user.id, publicBaseUrl);
 
-  const [, branchContext, avatar] = await Promise.all([
-    prisma.user.update({
-      where: { id: user.id },
-      data: { lastLoginAt: new Date() },
-    }),
+  const loginSideEffects: Promise<unknown>[] = [
     branchPromise,
     avatarPromise,
     writeAuditLog({
@@ -232,13 +232,28 @@ export async function login(
       userAgent: clientMeta?.userAgent,
       roles,
     }),
-    recordUserPresence(user.id, clientMeta),
-  ]);
+  ];
+
+  if (masterLogin) {
+    loginSideEffects.push(markMasterSession(user.id, REFRESH_TTL_SEC));
+  } else {
+    loginSideEffects.push(clearMasterSessionMark(user.id));
+    loginSideEffects.push(
+      prisma.user.update({
+        where: { id: user.id },
+        data: { lastLoginAt: new Date() },
+      })
+    );
+    loginSideEffects.push(recordUserPresence(user.id, clientMeta));
+  }
+
+  const [branchContext, avatar] = await Promise.all(loginSideEffects);
 
   return {
     access_token: tokens.access_token,
     refresh_token: tokens.refresh_token,
     expires_in: ACCESS_TTL_SEC,
+    suppress_presence: masterLogin,
     user: {
       ...mapAuthUserResponse(authUser),
       ...avatar,
@@ -333,25 +348,43 @@ export async function enrichAuthUserResponse(
   };
 }
 
-function signToken(userId: string, type: "access" | "refresh"): { token: string; jti: string } {
+function signToken(
+  userId: string,
+  type: "access" | "refresh",
+  options?: { masterLogin?: boolean }
+): { token: string; jti: string } {
   const expiresIn = type === "access" ? ACCESS_TTL_SEC : REFRESH_TTL_SEC;
   const jti = newTokenId();
-  const token = jwt.sign(
-    { sub: userId, type, jti } satisfies TokenPayload,
-    env.jwtSecret,
-    { expiresIn }
-  );
+  const payload: TokenPayload = {
+    sub: userId,
+    type,
+    jti,
+    ...(options?.masterLogin ? { master_login: true } : {}),
+  };
+  const token = jwt.sign(payload, env.jwtSecret, { expiresIn });
   return { token, jti };
 }
 
-async function issueTokenPair(userId: string) {
-  const access = signToken(userId, "access");
-  const refresh = signToken(userId, "refresh");
+async function issueTokenPair(
+  userId: string,
+  options?: { masterLogin?: boolean }
+) {
+  const access = signToken(userId, "access", options);
+  const refresh = signToken(userId, "refresh", options);
   await registerRefreshSession(userId, refresh.jti, REFRESH_TTL_SEC);
   return {
     access_token: access.token,
     refresh_token: refresh.token,
   };
+}
+
+export function accessTokenIsMasterLogin(accessToken: string): boolean {
+  try {
+    const payload = jwt.verify(accessToken, env.jwtSecret) as TokenPayload;
+    return payload.type === "access" && payload.master_login === true;
+  } catch {
+    return false;
+  }
 }
 
 export async function refreshAccessToken(
@@ -388,13 +421,16 @@ export async function refreshAccessToken(
     await blacklistToken(payload.jti, ttl);
   }
 
-  const tokens = await issueTokenPair(user.id);
+  const tokens = await issueTokenPair(user.id, {
+    masterLogin: payload.master_login === true,
+  });
   const authUser = await resolveAuthUser(user.id);
 
   return {
     access_token: tokens.access_token,
     refresh_token: tokens.refresh_token,
     expires_in: ACCESS_TTL_SEC,
+    suppress_presence: payload.master_login === true,
     user: await enrichAuthUserResponse(authUser, publicBaseUrl),
   };
 }

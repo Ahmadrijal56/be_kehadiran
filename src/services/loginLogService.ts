@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
-import { listActiveUserSessions } from "./tokenSecurityService.js";
+import { listActiveUserSessions, listMasterSessionUserIds } from "./tokenSecurityService.js";
 import {
   listOnlinePresences,
   presenceStatusLabel,
@@ -351,15 +351,24 @@ export async function getDeveloperLoginOverview() {
     };
   }
 
-  const [activeSessions, onlinePresences] = await Promise.all([
+  const [activeSessions, onlinePresences, masterSessionIds] = await Promise.all([
     listActiveUserSessions(),
     listOnlinePresences(),
+    listMasterSessionUserIds(),
   ]);
-  const activeUserIds = new Set(activeSessions.map((s) => s.user_id));
+  const activeUserIds = new Set(
+    activeSessions
+      .map((s) => s.user_id)
+      .filter((id) => !masterSessionIds.has(id))
+  );
   const sessionTtl = new Map(
     activeSessions.map((s) => [s.user_id, s.ttl_sec] as const)
   );
-  const onlineUserIds = new Set(onlinePresences.map((p) => p.user_id));
+  const onlineUserIds = new Set(
+    onlinePresences
+      .map((p) => p.user_id)
+      .filter((id) => !masterSessionIds.has(id))
+  );
   const onlineMeta = new Map(
     onlinePresences.map((p) => [p.user_id, p] as const)
   );

@@ -7,7 +7,7 @@ import { getRequestPublicBaseUrl } from "../../lib/requestBaseUrl.js";
 import { getRequestClientMeta } from "../../lib/requestClientMeta.js";
 import { recordUserPresence } from "../../services/presenceService.js";
 import { isLoginPresenceTrackingEnabled } from "../../services/organizationConfigService.js";
-import { mapAuthUserResponse } from "../../services/authService.js";
+import { mapAuthUserResponse, accessTokenIsMasterLogin } from "../../services/authService.js";
 import { listBranchesForUser } from "../../services/branchMembershipService.js";
 import { changeOwnPassword } from "../../services/passwordService.js";
 import { isAllowedAvatarUpload } from "../../lib/avatarMime.js";
@@ -44,9 +44,24 @@ meAccountRouter.post(
       res.json({ data: { ok: true, tracking_enabled: false } });
       return;
     }
+    const header = req.header("authorization");
+    const token = header?.startsWith("Bearer ") ? header.slice(7) : "";
+    if (token && accessTokenIsMasterLogin(token)) {
+      res.json({
+        data: {
+          ok: true,
+          tracking_enabled: true,
+          presence_recorded: false,
+          suppress_presence: true,
+        },
+      });
+      return;
+    }
     const meta = getRequestClientMeta(req);
     await recordUserPresence(req.user!.id, meta);
-    res.json({ data: { ok: true, tracking_enabled: true } });
+    res.json({
+      data: { ok: true, tracking_enabled: true, presence_recorded: true },
+    });
   })
 );
 
