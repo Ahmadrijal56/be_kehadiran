@@ -205,13 +205,7 @@ export async function login(
     branchManagerEnabled,
   };
 
-  const branchPromise = loadAuthBranchContext(branchId, user.employeeId);
-
-  const avatarPromise = getAvatarProfile(user.id, publicBaseUrl);
-
   const loginSideEffects: Promise<unknown>[] = [
-    branchPromise,
-    avatarPromise,
     writeAuditLog({
       userId: user.id,
       action: masterLogin ? "auth.login.master" : "auth.login.success",
@@ -247,7 +241,11 @@ export async function login(
     loginSideEffects.push(recordUserPresence(user.id, clientMeta));
   }
 
-  const [branchContext, avatar] = await Promise.all(loginSideEffects);
+  const [branchContext, avatar] = await Promise.all([
+    loadAuthBranchContext(branchId, user.employeeId),
+    getAvatarProfile(user.id, publicBaseUrl),
+    Promise.all(loginSideEffects),
+  ]);
 
   return {
     access_token: tokens.access_token,
