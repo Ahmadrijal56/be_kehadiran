@@ -4,6 +4,9 @@ import { authenticate } from "../../middleware/auth.js";
 import { asyncHandler } from "../../middleware/asyncHandler.js";
 import { validationError } from "../../lib/errors.js";
 import { getRequestPublicBaseUrl } from "../../lib/requestBaseUrl.js";
+import { getRequestClientMeta } from "../../lib/requestClientMeta.js";
+import { recordUserPresence } from "../../services/presenceService.js";
+import { isLoginPresenceTrackingEnabled } from "../../services/organizationConfigService.js";
 import { mapAuthUserResponse } from "../../services/authService.js";
 import { listBranchesForUser } from "../../services/branchMembershipService.js";
 import { changeOwnPassword } from "../../services/passwordService.js";
@@ -32,6 +35,20 @@ const avatarUpload = multer({
 
 export const meAccountRouter = Router();
 meAccountRouter.use(authenticate);
+
+meAccountRouter.post(
+  "/presence",
+  asyncHandler(async (req, res) => {
+    const trackingEnabled = await isLoginPresenceTrackingEnabled();
+    if (!trackingEnabled) {
+      res.json({ data: { ok: true, tracking_enabled: false } });
+      return;
+    }
+    const meta = getRequestClientMeta(req);
+    await recordUserPresence(req.user!.id, meta);
+    res.json({ data: { ok: true, tracking_enabled: true } });
+  })
+);
 
 /** Info akun login terbaru (cabang, role, foto profil) — untuk refresh session di frontend. */
 meAccountRouter.get(

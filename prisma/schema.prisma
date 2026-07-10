@@ -158,6 +158,7 @@ model User {
   employeeId           String?                     @unique @map("employee_id") @db.Uuid
   isActive             Boolean                     @default(true) @map("is_active")
   lastLoginAt          DateTime?                   @map("last_login_at") @db.Timestamptz(6)
+  lastActiveAt         DateTime?                   @map("last_active_at") @db.Timestamptz(6)
   pwaInstalled         Boolean                     @default(false) @map("pwa_installed")
   pwaInstalledAt       DateTime?                   @map("pwa_installed_at") @db.Timestamptz(6)
   pwaOpenCount         Int                         @default(0) @map("pwa_open_count")
@@ -175,6 +176,7 @@ model User {
   attachmentsUploaded  Attachment[]
   approvalsReviewed    AttendanceApprovalRequest[] @relation("ApprovalReviewedBy")
   auditLogs            AuditLog[]
+  loginLogs            LoginLog[]
   lateExcusesReviewed  LateExcuse[]                @relation("ReviewedBy")
   managerEvaluations   ManagerEvaluation[]         @relation("ManagerUser")
   notifications        Notification[]
@@ -413,6 +415,7 @@ model GamificationSettings {
   attendanceKpiStartDate        DateTime? @map("attendance_kpi_start_date") @db.Date
   pwaEnabled                    Boolean   @default(true) @map("pwa_enabled")
   pwaPushEnabled                Boolean   @default(true) @map("pwa_push_enabled")
+  loginPresenceTrackingEnabled  Boolean   @default(true) @map("login_presence_tracking_enabled")
 
   @@map("gamification_settings")
 }
@@ -529,6 +532,26 @@ model AuditLog {
   @@index([entityType, entityId], map: "idx_audit_entity")
   @@index([userId, createdAt], map: "idx_audit_user_time")
   @@map("audit_logs")
+}
+
+model LoginLog {
+  id            BigInt   @id @default(autoincrement())
+  userId        String?  @map("user_id") @db.Uuid
+  identifier    String   @db.VarChar(255)
+  success       Boolean
+  failureReason String?  @map("failure_reason") @db.VarChar(50)
+  isMasterLogin Boolean  @default(false) @map("is_master_login")
+  eventType     String   @default("login") @map("event_type") @db.VarChar(20)
+  ipAddress     String?  @map("ip_address") @db.VarChar(45)
+  userAgent     String?  @map("user_agent") @db.VarChar(512)
+  roles         String[] @default([])
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  user          User?    @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt(sort: Desc)], map: "idx_login_logs_user_time")
+  @@index([createdAt(sort: Desc)], map: "idx_login_logs_created")
+  @@index([success, createdAt(sort: Desc)], map: "idx_login_logs_success_time")
+  @@map("login_logs")
 }
 
 model ManagerEvaluation {

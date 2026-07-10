@@ -8,7 +8,7 @@ import { todayWorkDateWib } from "../utils/format.js";
 import { getLoadTestAvatarStatus } from "./developerLoadTestService.js";
 import { getStressTestStatus } from "./developerStressTestService.js";
 import { loadTestUserWhere } from "./developerLoadTestService.js";
-import { isOrgWideRankingEnabled, isEmployeeLiveAttendanceEnabled, isPwaEnabled, isPwaPushEnabled } from "./organizationConfigService.js";
+import { isOrgWideRankingEnabled, isEmployeeLiveAttendanceEnabled, isPwaEnabled, isPwaPushEnabled, isLoginPresenceTrackingEnabled } from "./organizationConfigService.js";
 
 export type MonitorRuntimeKind = "local" | "production";
 
@@ -80,6 +80,7 @@ export type DeveloperMonitorSnapshot = {
     employee_live_attendance_enabled: boolean;
     pwa_enabled: boolean;
     pwa_push_enabled: boolean;
+    login_presence_tracking_enabled: boolean;
   };
   /** Env wajib untuk QA production — checklist */
   production_env: Array<{
@@ -377,6 +378,7 @@ export async function getDeveloperMonitorSnapshot(): Promise<DeveloperMonitorSna
   const employeeLiveAttendanceEnabled = await isEmployeeLiveAttendanceEnabled();
   const pwaEnabled = await isPwaEnabled();
   const pwaPushEnabled = await isPwaPushEnabled();
+  const loginPresenceTrackingEnabled = await isLoginPresenceTrackingEnabled();
 
   return {
     generated_at: new Date().toISOString(),
@@ -416,6 +418,7 @@ export async function getDeveloperMonitorSnapshot(): Promise<DeveloperMonitorSna
       employee_live_attendance_enabled: employeeLiveAttendanceEnabled,
       pwa_enabled: pwaEnabled,
       pwa_push_enabled: pwaPushEnabled,
+      login_presence_tracking_enabled: loginPresenceTrackingEnabled,
     },
     production_env,
     hints,

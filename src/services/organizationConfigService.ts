@@ -53,6 +53,7 @@ export type GamificationSettingsRow = {
   employee_live_attendance_enabled: boolean;
   pwa_enabled: boolean;
   pwa_push_enabled: boolean;
+  login_presence_tracking_enabled: boolean;
   /** YYYY-MM-DD — mulai KPI kehadiran operasional; null = otomatis */
   attendance_kpi_start_date: string | null;
   top1_amount_idr: number;
@@ -475,6 +476,7 @@ export async function getGamificationSettings(): Promise<GamificationSettingsRow
     employee_live_attendance_enabled: row.employeeLiveAttendanceEnabled,
     pwa_enabled: row.pwaEnabled,
     pwa_push_enabled: row.pwaPushEnabled,
+    login_presence_tracking_enabled: row.loginPresenceTrackingEnabled,
     attendance_kpi_start_date: row.attendanceKpiStartDate
       ? row.attendanceKpiStartDate.toISOString().slice(0, 10)
       : null,
@@ -666,6 +668,35 @@ export async function setPwaPushEnabled(
     entityType: "gamification_settings",
     entityId: "default",
     newValues: { pwa_push_enabled: Boolean(enabled) },
+  });
+
+  return getGamificationSettings();
+}
+
+export async function isLoginPresenceTrackingEnabled(): Promise<boolean> {
+  const settings = await getGamificationSettingsCached();
+  return settings.login_presence_tracking_enabled;
+}
+
+export async function setLoginPresenceTrackingEnabled(
+  actor: AuthUser,
+  enabled: boolean
+): Promise<GamificationSettingsRow> {
+  if (!actor.roles.includes("developer")) throw forbidden();
+
+  await ensureOrganizationDefaults();
+  await prisma.gamificationSettings.update({
+    where: { id: "default" },
+    data: { loginPresenceTrackingEnabled: Boolean(enabled) },
+  });
+  invalidateConfigCache();
+
+  await writeAuditLog({
+    userId: actor.id,
+    action: "login_presence_tracking.update",
+    entityType: "gamification_settings",
+    entityId: "default",
+    newValues: { login_presence_tracking_enabled: Boolean(enabled) },
   });
 
   return getGamificationSettings();

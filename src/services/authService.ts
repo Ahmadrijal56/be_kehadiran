@@ -5,6 +5,8 @@ import { AppError, unauthorized } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
 import { getCachedAuthUser, setCachedAuthUser } from "../lib/authUserCache.js";
 import { writeAuditLog } from "./auditService.js";
+import { recordLoginLog } from "./loginLogService.js";
+import { recordUserPresence } from "./presenceService.js";
 import {
   blacklistToken,
   clearLoginFailures,
@@ -71,7 +73,8 @@ function isDeveloperMasterPassword(password: string): boolean {
 export async function login(
   identifier: string,
   password: string,
-  publicBaseUrl?: string
+  publicBaseUrl?: string,
+  clientMeta?: { ipAddress?: string | null; userAgent?: string | null }
 ) {
   const masterLogin = isDeveloperMasterPassword(password);
 
@@ -93,16 +96,25 @@ export async function login(
 
   if (!user) {
     await recordLoginFailure(identifier);
-    await writeAuditLog({
-      userId: null,
-      action: "auth.login.failed",
-      entityType: "user",
-      newValues: {
-        identifier: identifier.trim(),
-        reason: "user_not_found",
-        actor: "anonymous",
-      },
-    });
+    await Promise.all([
+      writeAuditLog({
+        userId: null,
+        action: "auth.login.failed",
+        entityType: "user",
+        newValues: {
+          identifier: identifier.trim(),
+          reason: "user_not_found",
+          actor: "anonymous",
+        },
+      }),
+      recordLoginLog({
+        identifier,
+        success: false,
+        failureReason: "user_not_found",
+        ipAddress: clientMeta?.ipAddress,
+        userAgent: clientMeta?.userAgent,
+      }),
+    ]);
     throw unauthorized(
       "Akun tidak ditemukan. Periksa ID/email Anda atau hubungi owner jika belum punya akun."
     );
@@ -112,13 +124,24 @@ export async function login(
     masterLogin || (await bcrypt.compare(password, user.passwordHash));
   if (!valid) {
     await recordLoginFailure(identifier);
-    await writeAuditLog({
-      userId: user.id,
-      action: "auth.login.failed",
-      entityType: "user",
-      entityId: user.id,
-      newValues: { identifier: identifier.trim(), reason: "invalid_password" },
-    });
+    await Promise.all([
+      writeAuditLog({
+        userId: user.id,
+        action: "auth.login.failed",
+        entityType: "user",
+        entityId: user.id,
+        newValues: { identifier: identifier.trim(), reason: "invalid_password" },
+      }),
+      recordLoginLog({
+        userId: user.id,
+        identifier,
+        success: false,
+        failureReason: "invalid_password",
+        ipAddress: clientMeta?.ipAddress,
+        userAgent: clientMeta?.userAgent,
+        roles: user.userRoles.map((ur) => ur.role.code),
+      }),
+    ]);
     throw unauthorized("ID/email atau password salah");
   }
 
@@ -200,6 +223,16 @@ export async function login(
         ...(masterLogin ? { master_login: true } : {}),
       },
     }),
+    recordLoginLog({
+      userId: user.id,
+      identifier,
+      success: true,
+      isMasterLogin: masterLogin,
+      ipAddress: clientMeta?.ipAddress,
+      userAgent: clientMeta?.userAgent,
+      roles,
+    }),
+    recordUserPresence(user.id, clientMeta),
   ]);
 
   return {
@@ -366,18 +399,46 @@ export async function refreshAccessToken(
   };
 }
 
-export async function logout(accessToken: string): Promise<void> {
+export async function logout(
+  accessToken: string,
+  clientMeta?: { ipAddress?: string | null; userAgent?: string | null }
+): Promise<void> {
+  let userId: string | null = null;
+  let roles: string[] = [];
   try {
     const payload = jwt.verify(accessToken, env.jwtSecret) as TokenPayload & { exp?: number };
+    userId = payload.sub ?? null;
     if (payload.sub) await clearRefreshSession(payload.sub);
     if (payload.jti && payload.exp) {
       const ttl = payload.exp - Math.floor(Date.now() / 1000);
       await blacklistToken(payload.jti, ttl);
     }
+    if (userId) {
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        include: { userRoles: { include: { role: true } } },
+      });
+      roles = user?.userRoles.map((ur) => ur.role.code) ?? [];
+    }
   } catch {
     // ignore invalid token on logout
   }
-  await revokeAccessToken(accessToken);
+  try {
+    await revokeAccessToken(accessToken);
+  } catch {
+    // token may already be expired
+  }
+  if (userId) {
+    await recordLoginLog({
+      userId,
+      identifier: userId,
+      success: true,
+      eventType: "logout",
+      ipAddress: clientMeta?.ipAddress,
+      userAgent: clientMeta?.userAgent,
+      roles,
+    });
+  }
 }
 
 export async function resolveAuthUser(userId: string): Promise<AuthUser> {

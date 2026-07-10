@@ -35,7 +35,7 @@ import {
 } from "../../services/developerScenarioService.js";
 import { setDeveloperKpiBatch } from "../../services/developerToolsService.js";
 import { getDeveloperMonitorSnapshot } from "../../services/developerMonitorService.js";
-import { setOrgWideRankingEnabled, setEmployeeLiveAttendanceEnabled, setPwaEnabled, setPwaPushEnabled } from "../../services/organizationConfigService.js";
+import { setOrgWideRankingEnabled, setEmployeeLiveAttendanceEnabled, setPwaEnabled, setPwaPushEnabled, setLoginPresenceTrackingEnabled } from "../../services/organizationConfigService.js";
 import { executeFactoryReset } from "../../services/factoryResetService.js";
 import {
   getDeveloperSupportLoginLock,
@@ -60,6 +60,11 @@ import {
   createDeveloperAnnouncement,
   listDeveloperAnnouncements,
 } from "../../services/announcementService.js";
+import {
+  getDeveloperLoginOverview,
+  listDeveloperLoginLogs,
+  listUserLoginLogs,
+} from "../../services/loginLogService.js";
 
 const avatarUpload = multer({
   storage: multer.memoryStorage(),
@@ -131,6 +136,78 @@ meDeveloperRouter.get(
   asyncHandler(async (req, res) => {
     res.json({
       data: await getDeveloperSupportLoginLock(String(req.params.userId)),
+    });
+  })
+);
+
+meDeveloperRouter.put(
+  "/features/login-presence-tracking",
+  asyncHandler(async (req, res) => {
+    const enabled = Boolean((req.body as { enabled?: boolean })?.enabled);
+    res.json({
+      data: await setLoginPresenceTrackingEnabled(req.user!, enabled),
+    });
+  })
+);
+
+meDeveloperRouter.get(
+  "/login-logs/overview",
+  asyncHandler(async (_req, res) => {
+    res.json({ data: await getDeveloperLoginOverview() });
+  })
+);
+
+meDeveloperRouter.get(
+  "/login-logs",
+  asyncHandler(async (req, res) => {
+    const q = req.query.q ? String(req.query.q) : undefined;
+    const role = req.query.role ? String(req.query.role) : undefined;
+    const user_id = req.query.user_id ? String(req.query.user_id) : undefined;
+    const event_type = req.query.event_type
+      ? (String(req.query.event_type) as "login" | "logout")
+      : undefined;
+    const from = req.query.from ? String(req.query.from) : undefined;
+    const to = req.query.to ? String(req.query.to) : undefined;
+    const pageRaw = req.query.page;
+    const limitRaw = req.query.limit;
+    const successRaw = req.query.success;
+
+    let success: boolean | undefined;
+    if (successRaw === "1" || successRaw === "true") success = true;
+    if (successRaw === "0" || successRaw === "false") success = false;
+
+    const page =
+      pageRaw != null && pageRaw !== "" ? Number(pageRaw) : undefined;
+    const limit =
+      limitRaw != null && limitRaw !== "" ? Number(limitRaw) : undefined;
+
+    res.json({
+      data: await listDeveloperLoginLogs({
+        q,
+        role,
+        user_id,
+        event_type,
+        from,
+        to,
+        success,
+        page: Number.isFinite(page) ? page : undefined,
+        limit: Number.isFinite(limit) ? limit : undefined,
+      }),
+    });
+  })
+);
+
+meDeveloperRouter.get(
+  "/support/users/:userId/login-logs",
+  asyncHandler(async (req, res) => {
+    const limitRaw = req.query.limit;
+    const limit =
+      limitRaw != null && limitRaw !== "" ? Number(limitRaw) : undefined;
+    res.json({
+      data: await listUserLoginLogs(
+        String(req.params.userId),
+        Number.isFinite(limit) ? limit : undefined
+      ),
     });
   })
 );

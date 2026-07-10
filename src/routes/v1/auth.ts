@@ -4,6 +4,7 @@ import { validationError } from "../../lib/errors.js";
 import { authenticate } from "../../middleware/auth.js";
 import { loginRateLimit } from "../../middleware/rateLimit.js";
 import { getRequestPublicBaseUrl } from "../../lib/requestBaseUrl.js";
+import { getRequestClientMeta } from "../../lib/requestClientMeta.js";
 import { login, logout, refreshAccessToken } from "../../services/authService.js";
 import {
   getBootstrapStatus,
@@ -49,7 +50,8 @@ authRouter.post(
     const result = await login(
       String(identifier),
       String(password),
-      getRequestPublicBaseUrl(req)
+      getRequestPublicBaseUrl(req),
+      getRequestClientMeta(req)
     );
     res.json(result);
   })
@@ -76,7 +78,7 @@ authRouter.post(
   asyncHandler(async (req, res) => {
     const header = req.header("authorization");
     const token = header?.startsWith("Bearer ") ? header.slice(7) : "";
-    if (token) await logout(token);
+    if (token) await logout(token, getRequestClientMeta(req));
     res.json({ data: { logged_out: true } });
   })
 );

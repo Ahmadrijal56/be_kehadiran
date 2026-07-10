@@ -179,6 +179,33 @@ export async function clearAllLoginLocks(): Promise<number> {
   return redis.del(...keys);
 }
 
+export type ActiveUserSession = {
+  user_id: string;
+  ttl_sec: number;
+};
+
+export async function listActiveUserSessions(): Promise<ActiveUserSession[]> {
+  const redis = await redisReady();
+  if (!redis) return [];
+  const keys = await redis.keys("refresh:active:*");
+  const results: ActiveUserSession[] = [];
+  for (const key of keys) {
+    const userId = key.replace("refresh:active:", "");
+    const ttl = await redis.ttl(key);
+    if (ttl > 0) {
+      results.push({ user_id: userId, ttl_sec: ttl });
+    }
+  }
+  return results;
+}
+
+export async function isUserSessionActive(userId: string): Promise<boolean> {
+  const redis = await redisReady();
+  if (!redis) return false;
+  const jti = await redis.get(`refresh:active:${userId}`);
+  return jti != null;
+}
+
 export async function revokeAccessToken(token: string): Promise<void> {
   try {
     const payload = jwt.verify(token, env.jwtSecret) as jwt.JwtPayload & {
