@@ -29,6 +29,8 @@ export type BranchEmployeeAttendance = {
   late_minutes: number;
   break_start_at: string | null;
   break_end_at: string | null;
+  break_duration_minutes: number | null;
+  break_duration_label: string | null;
   work_duration_minutes: number | null;
   work_duration_label: string | null;
   is_overtime: boolean;
@@ -240,9 +242,19 @@ function mapRow(
     break_end_at: latestBreak?.breakEndAt
       ? formatWibIso(latestBreak.breakEndAt)
       : null,
-    work_duration_minutes: att?.checkOutAt ? workMinutes : null,
+    break_duration_minutes:
+      latestBreak && latestBreak.breakStartAt
+        ? computeWorkDurationMinutes(latestBreak.breakStartAt, latestBreak.breakEndAt ?? new Date())
+        : null,
+    break_duration_label:
+      latestBreak && latestBreak.breakStartAt
+        ? formatWorkDurationLabel(
+            computeWorkDurationMinutes(latestBreak.breakStartAt, latestBreak.breakEndAt ?? new Date())
+          )
+        : null,
+    work_duration_minutes: att?.checkInAt ? workMinutes : null,
     work_duration_label:
-      att?.checkOutAt && workMinutes != null
+      att?.checkInAt && workMinutes != null
         ? formatWorkDurationLabel(workMinutes)
         : null,
     ...overtime,
