@@ -28,6 +28,7 @@ export type BranchEmployeeAttendance = {
   check_out_at: string | null;
   late_minutes: number;
   break_start_at: string | null;
+  break_end_at: string | null;
   work_duration_minutes: number | null;
   work_duration_label: string | null;
   is_overtime: boolean;
@@ -193,7 +194,7 @@ function mapRow(
     shift_scheduled_today: boolean;
   }
 ): BranchEmployeeAttendance {
-  const activeBreak = att?.breakSessions.find((b) => !b.breakEndAt);
+  const latestBreak = att?.breakSessions[0];
   const workMinutes =
     att?.checkInAt && att?.checkOutAt
       ? computeWorkDurationMinutes(att.checkInAt, att.checkOutAt)
@@ -233,8 +234,11 @@ function mapRow(
     check_in_at: formatWibIso(att?.checkInAt ?? null),
     check_out_at: formatWibIso(att?.checkOutAt ?? null),
     late_minutes: att?.lateMinutes ?? 0,
-    break_start_at: activeBreak
-      ? formatWibIso(activeBreak.breakStartAt)
+    break_start_at: latestBreak
+      ? formatWibIso(latestBreak.breakStartAt)
+      : null,
+    break_end_at: latestBreak?.breakEndAt
+      ? formatWibIso(latestBreak.breakEndAt)
       : null,
     work_duration_minutes: att?.checkOutAt ? workMinutes : null,
     work_duration_label:

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { needsScanResolution } from "./telegramIngestService.js";
 import { parseTelegramMessageText } from "./telegramMessageParser.js";
 
 const SAMPLE = `Nama: Budi Santoso
@@ -102,5 +103,47 @@ Waktu: 03/06/2026 19:33:39`;
     const p = parseTelegramMessageText(text);
     expect(p.jamPulang).toBeDefined();
     expect(p.jamMasuk).toBeUndefined();
+  });
+
+  it("parses VT490 status ISTIRAHAT MULAI ke istirahatMulai (bukan jamMasuk)", () => {
+    const text = `Perusahaan: AP MANJUR SEHAT, SHT
+ID: 212
+Nama: Raju
+Dept.: Frontliner
+Mode Verifikasi: face
+Status: ISTIRAHAT MULAI
+Waktu: 13/07/2026 12:46:14`;
+
+    const p = parseTelegramMessageText(text);
+    expect(p.format).toBe("biofinger_vt490");
+    expect(p.istirahatMulai).toBeDefined();
+    expect(p.jamMasuk).toBeUndefined();
+    expect(p.jamPulang).toBeUndefined();
+    expect(p.istirahatSelesai).toBeUndefined();
+    // Tanpa jamMasuk, reconcile tidak memaksa slot check_in → tidak dianggap terlambat.
+    expect(needsScanResolution(p)).toBe(false);
+  });
+
+  it("parses VT490 status ISTIRAHAT SELESAI / KEMBALI ke istirahatSelesai", () => {
+    const selesai = parseTelegramMessageText(`Perusahaan: AP MANJUR SEHAT, SHT
+ID: 212
+Nama: Raju
+Dept.: Frontliner
+Mode Verifikasi: face
+Status: ISTIRAHAT SELESAI
+Waktu: 13/07/2026 13:30:00`);
+    expect(selesai.istirahatSelesai).toBeDefined();
+    expect(selesai.jamMasuk).toBeUndefined();
+    expect(needsScanResolution(selesai)).toBe(false);
+
+    const kembali = parseTelegramMessageText(`Perusahaan: AP MANJUR SEHAT, SHT
+ID: 212
+Nama: Raju
+Dept.: Frontliner
+Mode Verifikasi: face
+Status: ISTIRAHAT KEMBALI
+Waktu: 13/07/2026 13:35:00`);
+    expect(kembali.istirahatSelesai).toBeDefined();
+    expect(kembali.jamMasuk).toBeUndefined();
   });
 });

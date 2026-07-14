@@ -30,6 +30,7 @@ function row(
     check_out_at: null,
     late_minutes: 0,
     break_start_at: null,
+    break_end_at: null,
     work_duration_minutes: null,
     work_duration_label: null,
     is_overtime: false,

@@ -108,10 +108,25 @@ function normalizeTime(value: string): string {
   throw new Error(`PARSER_INVALID_TIME:${trimmed}`);
 }
 
-function parseVt490Status(value: string): "masuk" | "pulang" | undefined {
+function parseVt490Status(
+  value: string
+): "masuk" | "pulang" | "break_start" | "break_end" | undefined {
   const v = value.trim().toUpperCase();
-  if (v.includes("MASUK")) return "masuk";
+  // Cek istirahat dulu — "ISTIRAHAT MULAI" tidak boleh jatuh ke MASUK.
+  if (
+    v.includes("ISTIRAHAT") &&
+    (v.includes("SELESAI") || v.includes("KEMBALI") || v.includes("END"))
+  ) {
+    return "break_end";
+  }
+  if (
+    v.includes("ISTIRAHAT") &&
+    (v.includes("MULAI") || v.includes("START") || v.includes("BEGIN"))
+  ) {
+    return "break_start";
+  }
   if (v.includes("PULANG")) return "pulang";
+  if (v.includes("MASUK")) return "masuk";
   return undefined;
 }
 
@@ -163,6 +178,10 @@ function parseVt490Format(fields: Partial<Record<FieldKey, string>>): ParsedTele
     result.jamMasuk = eventAt;
   } else if (eventType === "pulang") {
     result.jamPulang = eventAt;
+  } else if (eventType === "break_start") {
+    result.istirahatMulai = eventAt;
+  } else if (eventType === "break_end") {
+    result.istirahatSelesai = eventAt;
   } else if (fields.masuk && !isEmptyValue(fields.masuk)) {
     result.jamMasuk = combineDateAndTimeWib(workDate, normalizeTime(fields.masuk));
   } else if (fields.pulang && !isEmptyValue(fields.pulang)) {
