@@ -22,6 +22,7 @@ import { devAttendanceRouter } from "./devAttendance.js";
 import { settingsRouter } from "./settings.js";
 import { approvalRequestsRouter } from "./approvalRequests.js";
 import pushRouter from "./push.js";
+import { integrationsOdooRouter } from "./integrationsOdoo.js";
 
 export const v1Router = Router();
 
@@ -48,3 +49,4 @@ v1Router.use("/reports", reportsRouter);
 v1Router.use("/achievements", achievementsRouter);
 v1Router.use("/", lateExcusesRouter);
 v1Router.use("/push", pushRouter);
+v1Router.use("/integrations/odoo", integrationsOdooRouter);

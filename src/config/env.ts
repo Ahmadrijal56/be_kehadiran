@@ -117,6 +117,9 @@ export const env = {
     process.env.LOAD_TEST_ACCOUNT_PASSWORD ??
     process.env.DEFAULT_EMPLOYEE_PASSWORD ??
     "password123",
+
+  /** API key server-to-server untuk integrasi Odoo (header X-API-Key). Kosong = endpoint dinonaktifkan. */
+  odooIntegrationApiKey: process.env.ODOO_INTEGRATION_API_KEY ?? "",
 } as const;
 
 if (env.nodeEnv === "production" && env.jwtSecret === "dev-only-change-in-production") {
