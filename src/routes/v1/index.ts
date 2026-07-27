@@ -37,6 +37,11 @@ v1Router.use("/me", notificationsRouter);
 v1Router.use("/me", announcementsRouter);
 v1Router.use("/leaderboard", leaderboardRouter);
 v1Router.use("/branches", branchesRouter);
+// Harus didaftarkan sebelum router yang mount di "/" (mis. announcementAdminRouter,
+// approvalRequestsRouter, lateExcusesRouter) karena router-router itu menjalankan
+// authenticate() tanpa prefix path, sehingga mencegat semua request yang lolos
+// sebelum sempat mencapai route ini jika didaftarkan belakangan.
+v1Router.use("/integrations/odoo", integrationsOdooRouter);
 v1Router.use("/", announcementAdminRouter);
 v1Router.use("/employees", employeesRouter);
 v1Router.use("/users", usersRouter);
@@ -49,4 +54,3 @@ v1Router.use("/reports", reportsRouter);
 v1Router.use("/achievements", achievementsRouter);
 v1Router.use("/", lateExcusesRouter);
 v1Router.use("/push", pushRouter);
-v1Router.use("/integrations/odoo", integrationsOdooRouter);
