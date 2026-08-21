@@ -60,15 +60,14 @@ export function attendanceIsLate(status: string, lateMinutes: number): boolean {
   return status === "late" || lateMinutes > 0;
 }
 
-/** Sudah check-in dan benar-benar terlambat (bukan tepat waktu / lebih awal). */
+/** Sudah check-in dan terlambat — samakan dengan tampilan monitoring (`attendanceIsLate`). */
 export function attendanceRequiresLateExcuse(row: {
   checkInAt?: Date | string | null;
   status: string;
   lateMinutes: number;
 }): boolean {
   if (!row.checkInAt) return false;
-  if (row.status === "off" || row.status === "absent") return false;
-  return row.lateMinutes > 0;
+  return attendanceIsLate(row.status, row.lateMinutes);
 }
 
 export function rowHasCheckedIn(row: BranchEmployeeAttendance): boolean {
@@ -310,19 +309,57 @@ export async function reconcileBranchAttendanceLateForDate(
     const dayState = dayStates.get(att.employeeId);
     if (dayState?.isExplicitOff) continue;
 
-    if (att.checkOutAt) {
-      if (att.status !== "left" && att.status !== "forgot_checkout") {
-        await prisma.attendanceRecord.update({
-          where: { id: att.id },
-          data: { status: "left" },
-        });
-        updated += 1;
+    const shiftId = shiftMap.get(att.employeeId) ?? att.shiftId;
+    if (isOffShift(shiftId)) {
+      if (att.checkOutAt) {
+        if (att.status !== "left" && att.status !== "forgot_checkout") {
+          await prisma.attendanceRecord.update({
+            where: { id: att.id },
+            data: { status: "left" },
+          });
+          updated += 1;
+        }
       }
       continue;
     }
 
-    const shiftId = shiftMap.get(att.employeeId) ?? att.shiftId;
-    if (isOffShift(shiftId)) continue;
+    // Sudah pulang: cukup rapikan status + late_minutes bila masih 0 padahal telat.
+    if (att.checkOutAt) {
+      const needsLeftStatus =
+        att.status !== "left" && att.status !== "forgot_checkout";
+      const needsLateMinutesFix = att.lateMinutes === 0;
+
+      if (!needsLeftStatus && !needsLateMinutesFix) continue;
+
+      let lateMinutes = att.lateMinutes;
+      if (needsLateMinutesFix) {
+        const scored = await computeCheckInKpiFields(
+          branchId,
+          shiftId,
+          workDate,
+          att.checkInAt!
+        );
+        lateMinutes = scored.lateMinutesAttendance;
+      }
+
+      if (
+        !needsLeftStatus &&
+        lateMinutes === att.lateMinutes
+      ) {
+        continue;
+      }
+
+      await prisma.attendanceRecord.update({
+        where: { id: att.id },
+        data: {
+          ...(needsLeftStatus ? { status: "left" as const } : {}),
+          ...(lateMinutes !== att.lateMinutes ? { lateMinutes } : {}),
+        },
+      });
+      updated += 1;
+      continue;
+    }
+
     if (att.status === "late" && att.lateMinutes > 0) continue;
 
     const scored = await computeCheckInKpiFields(

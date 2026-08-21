@@ -53,9 +53,14 @@ export async function computeCheckInKpiFields(
   const status: AttendanceStatus =
     deltaSeconds > settings.late_threshold_seconds ? "late" : "present";
 
+  // Status late bisa terjadi di bawah 1 menit (threshold detik); simpan minimal 1
+  // supaya alasan keterlambatan & review tetap muncul.
+  const lateMinutesAttendance =
+    status === "late" ? Math.max(1, deltaMinutes) : Math.max(0, deltaMinutes);
+
   return {
     deltaMinutes,
-    lateMinutesAttendance: Math.max(0, deltaMinutes),
+    lateMinutesAttendance,
     kpi,
     status,
   };

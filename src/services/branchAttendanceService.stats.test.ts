@@ -179,7 +179,7 @@ describe("branch attendance stats", () => {
     expect(attendanceHasCheckedIn("left", new Date())).toBe(true);
   });
 
-  it("attendanceRequiresLateExcuse — hanya check-in terlambat", () => {
+  it("attendanceRequiresLateExcuse — check-in terlambat (termasuk status late)", () => {
     const checkInAt = new Date("2026-06-03T02:05:00.000Z");
     expect(
       attendanceRequiresLateExcuse({
@@ -202,13 +202,21 @@ describe("branch attendance stats", () => {
         lateMinutes: 0,
       })
     ).toBe(false);
+    // Status late dengan late_minutes 0 (telat < 1 menit) tetap wajib isi alasan
     expect(
       attendanceRequiresLateExcuse({
         checkInAt,
         status: "late",
         lateMinutes: 0,
       })
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      attendanceRequiresLateExcuse({
+        checkInAt,
+        status: "left",
+        lateMinutes: 1,
+      })
+    ).toBe(true);
   });
 
   it("urutan tab Semua — masuk, terlambat, belum absen, pulang, libur", () => {
