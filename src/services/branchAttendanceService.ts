@@ -369,9 +369,13 @@ export async function reconcileBranchAttendanceLateForDate(
       att.checkInAt!
     );
 
+    // Jangan timpa on_break — cukup sync late_minutes / status present↔late.
+    const nextStatus =
+      att.status === "on_break" ? att.status : scored.status;
+
     if (
       scored.lateMinutesAttendance === att.lateMinutes &&
-      scored.status === att.status
+      nextStatus === att.status
     ) {
       continue;
     }
@@ -384,7 +388,7 @@ export async function reconcileBranchAttendanceLateForDate(
         data: {
           shiftId,
           lateMinutes: scored.lateMinutesAttendance,
-          status: scored.status,
+          status: nextStatus,
         },
       });
 

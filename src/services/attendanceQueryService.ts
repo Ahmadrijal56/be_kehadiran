@@ -26,10 +26,9 @@ import { computeCheckInKpiFields } from "./attendanceKpiRecalcService.js";
 export const LATE_EXCUSE_LOOKBACK_DAYS = 14;
 
 /**
- * Data lama: status late / sudah pulang tapi late_minutes masih 0 (telat < 1 menit).
- * Perbaiki supaya pengajuan alasan keterlambatan tetap muncul.
+ * Perbaiki late_minutes=0 pada absensi yang sebenarnya telat (data lama).
+ * Tidak mengubah status istirahat / pulang — hanya melengkapi late_minutes.
  */
-/** Perbaiki late_minutes=0 pada absensi yang sebenarnya telat (data lama). */
 export async function healStaleZeroLateMinutes<
   T extends {
     id: string;
@@ -44,7 +43,33 @@ export async function healStaleZeroLateMinutes<
 >(records: T[]): Promise<T[]> {
   for (const row of records) {
     if (!row.checkInAt || row.lateMinutes > 0) continue;
-    if (row.status === "off" || row.status === "absent") continue;
+    // Tepat waktu / belum absen / libur: tidak perlu di-heal.
+    if (
+      row.status === "off" ||
+      row.status === "absent" ||
+      row.status === "present"
+    ) {
+      continue;
+    }
+
+    // Status masih "late" tapi menit 0 (telat < 1 menit) — cukup set minimal 1.
+    if (row.status === "late") {
+      await prisma.attendanceRecord.update({
+        where: { id: row.id },
+        data: { lateMinutes: 1 },
+      });
+      row.lateMinutes = 1;
+      continue;
+    }
+
+    // Sudah pulang / sedang istirahat: hitung ulang, jangan timpa status aktif.
+    if (
+      row.status !== "left" &&
+      row.status !== "forgot_checkout" &&
+      row.status !== "on_break"
+    ) {
+      continue;
+    }
 
     const scored = await computeCheckInKpiFields(
       row.branchId,
@@ -54,31 +79,24 @@ export async function healStaleZeroLateMinutes<
     );
     if (scored.lateMinutesAttendance <= 0) continue;
 
-    if (row.checkOutAt) {
-      const patch: { lateMinutes: number; status?: "left" } = {
-        lateMinutes: scored.lateMinutesAttendance,
-      };
-      if (row.status !== "left" && row.status !== "forgot_checkout") {
-        patch.status = "left";
-        row.status = "left";
-      }
-      await prisma.attendanceRecord.update({
-        where: { id: row.id },
-        data: patch,
-      });
-      row.lateMinutes = scored.lateMinutesAttendance;
-      continue;
+    const patch: { lateMinutes: number; status?: "left" } = {
+      lateMinutes: scored.lateMinutesAttendance,
+    };
+    if (
+      row.checkOutAt &&
+      row.status !== "left" &&
+      row.status !== "forgot_checkout"
+    ) {
+      // checkOutAt ada tapi status belum left/forgot — rapikan ke left
+      patch.status = "left";
+      row.status = "left";
     }
 
     await prisma.attendanceRecord.update({
       where: { id: row.id },
-      data: {
-        lateMinutes: scored.lateMinutesAttendance,
-        status: scored.status,
-      },
+      data: patch,
     });
     row.lateMinutes = scored.lateMinutesAttendance;
-    row.status = scored.status;
   }
   return records;
 }

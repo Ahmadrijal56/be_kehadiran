@@ -217,6 +217,20 @@ describe("branch attendance stats", () => {
         lateMinutes: 1,
       })
     ).toBe(true);
+    expect(
+      attendanceRequiresLateExcuse({
+        checkInAt,
+        status: "on_break",
+        lateMinutes: 0,
+      })
+    ).toBe(false);
+    expect(
+      attendanceRequiresLateExcuse({
+        checkInAt,
+        status: "on_break",
+        lateMinutes: 1,
+      })
+    ).toBe(true);
   });
 
   it("urutan tab Semua — masuk, terlambat, belum absen, pulang, libur", () => {
