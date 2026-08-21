@@ -11,6 +11,7 @@ import { formatWibIso, todayWorkDateWib } from "../utils/format.js";
 import {
   isLateExcuseEligibleRecord,
   LATE_EXCUSE_LOOKBACK_DAYS,
+  healStaleZeroLateMinutes,
 } from "./attendanceQueryService.js";
 import { resolveEligibleWorkDateMin } from "./attendanceKpiWindowService.js";
 export async function createLateExcuse(
@@ -96,6 +97,8 @@ export async function listBranchMissingLateExcuses(branchId: string) {
     },
     orderBy: [{ workDate: "desc" }, { checkInAt: "desc" }]
   });
+
+  await healStaleZeroLateMinutes(records);
 
   const eligible = records.filter(r => isLateExcuseEligibleRecord(r, today));
 

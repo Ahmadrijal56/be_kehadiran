@@ -21,8 +21,67 @@ import {
   resolveEligibleWorkDateMin,
 } from "./attendanceKpiWindowService.js";
 import { attendanceRequiresLateExcuse } from "./branchAttendanceService.js";
+import { computeCheckInKpiFields } from "./attendanceKpiRecalcService.js";
 
 export const LATE_EXCUSE_LOOKBACK_DAYS = 14;
+
+/**
+ * Data lama: status late / sudah pulang tapi late_minutes masih 0 (telat < 1 menit).
+ * Perbaiki supaya pengajuan alasan keterlambatan tetap muncul.
+ */
+/** Perbaiki late_minutes=0 pada absensi yang sebenarnya telat (data lama). */
+export async function healStaleZeroLateMinutes<
+  T extends {
+    id: string;
+    branchId: string;
+    shiftId: number;
+    workDate: Date;
+    checkInAt: Date | null;
+    checkOutAt: Date | null;
+    lateMinutes: number;
+    status: string;
+  },
+>(records: T[]): Promise<T[]> {
+  for (const row of records) {
+    if (!row.checkInAt || row.lateMinutes > 0) continue;
+    if (row.status === "off" || row.status === "absent") continue;
+
+    const scored = await computeCheckInKpiFields(
+      row.branchId,
+      row.shiftId,
+      row.workDate,
+      row.checkInAt
+    );
+    if (scored.lateMinutesAttendance <= 0) continue;
+
+    if (row.checkOutAt) {
+      const patch: { lateMinutes: number; status?: "left" } = {
+        lateMinutes: scored.lateMinutesAttendance,
+      };
+      if (row.status !== "left" && row.status !== "forgot_checkout") {
+        patch.status = "left";
+        row.status = "left";
+      }
+      await prisma.attendanceRecord.update({
+        where: { id: row.id },
+        data: patch,
+      });
+      row.lateMinutes = scored.lateMinutesAttendance;
+      continue;
+    }
+
+    await prisma.attendanceRecord.update({
+      where: { id: row.id },
+      data: {
+        lateMinutes: scored.lateMinutesAttendance,
+        status: scored.status,
+      },
+    });
+    row.lateMinutes = scored.lateMinutesAttendance;
+    row.status = scored.status;
+  }
+  return records;
+}
 
 function historyDefaultFrom(): Date {
   const d = todayWorkDateWib();
@@ -1010,13 +1069,14 @@ export async function getAttendanceForLateExcuse(
     );
   }
 
-  if (!isLateExcuseEligibleRecord(row, today)) {
+  const [healed] = await healStaleZeroLateMinutes([row]);
+  if (!isLateExcuseEligibleRecord(healed, today)) {
     throw validationError(
       "Absensi ini tidak memenuhi syarat pengajuan keterlambatan"
     );
   }
 
-  return row;
+  return healed;
 }
 
 export async function listLateExcuseEligibleAttendances(
@@ -1049,6 +1109,8 @@ export async function listLateExcuseEligibleAttendances(
     },
     orderBy: { workDate: "desc" },
   });
+
+  await healStaleZeroLateMinutes(records);
 
   return records
     .map((row) => {
